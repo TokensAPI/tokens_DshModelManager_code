@@ -7,10 +7,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
         # node:sqlite (used by the OpenCode paste-recovery tests) ships unflagged
         # on Node 22.13+, so those tests skip on 18 and 20 and run on 22 (setup-node
         # installs the latest 22.x) while the rest of the suite runs everywhere.
