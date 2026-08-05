@@ -20,6 +20,8 @@ ModLens invokes `agy` with `--dangerously-skip-permissions` because prompt mode 
 
 The `claude-cli` provider runs with `--allowedTools Read` only, so it can read local files and nothing else.
 
+Both subprocess providers also run in a throwaway directory containing only the one image, created fresh per call and removed afterward. Text inside an image is untrusted, so an injection could otherwise steer a broadly-permissioned agent into reading files that sit next to the original. A directory of one removes that reach. Passing `--workdir` opts out and runs where you point it.
+
 ## Image content is untrusted input
 
 Text inside an image is untrusted, the same as a web page. A screenshot can contain instructions aimed at whatever reads it. The prompt says so explicitly, but that is mitigation, not a guarantee: analyze images you are willing to open, and prefer a sandboxed working directory when they came from elsewhere.

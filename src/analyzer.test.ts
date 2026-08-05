@@ -106,6 +106,33 @@ describe('provider subprocess handling', () => {
         );
     }, 30_000);
 
+    it('runs a subprocess provider in an isolated workdir holding only the image', async () => {
+        // An injection in the image should not be able to read siblings of the
+        // original file, so the agent runs in a throwaway dir of one image.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-iso-'));
+        cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+        const image = path.join(dir, 'shot.png');
+        fs.writeFileSync(image, 'not-a-real-png');
+        fs.writeFileSync(path.join(dir, 'secret.txt'), 'do not read me');
+        const record = path.join(dir, 'record.txt');
+        const bin = path.join(dir, 'fake-agy');
+        // Record the cwd and its listing, then emit a valid envelope.
+        fs.writeFileSync(
+            bin,
+            `#!/bin/sh\npwd > "${record}"\nls >> "${record}"\necho '${SUCCESS_ENVELOPE}'\n`,
+            { mode: 0o755 },
+        );
+
+        await analyzeImage({ input: image, providerBin: bin, timeoutMs: 20_000, config: {} });
+
+        const recorded = fs.readFileSync(record, 'utf-8');
+        const cwd = recorded.trim().split('\n')[0];
+        expect(cwd).not.toBe(dir); // not the original directory
+        expect(recorded).toContain('shot.png'); // the image came along
+        expect(recorded).not.toContain('secret.txt'); // the sibling did not
+        expect(fs.existsSync(cwd)).toBe(false); // cleaned up after the run
+    }, 30_000);
+
     it('reports a timeout when the provider never exits', async () => {
         // Straight at runCommand: analyzeImage adds a 30s kill backstop on top
         // of the caller's timeout, which would make this test crawl.
