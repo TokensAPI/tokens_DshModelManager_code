@@ -112,9 +112,9 @@ Codex 桌面 App 里丢一张推文截图。配文、互动数据（2.9K 回复�
 
 ![128 个模型的散点图，精确读出高亮点的坐标](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.png)
 
-粘贴链路的端到端实录：DeepSeek 网关版 Claude Code，两张图直接粘进对话。界面里只剩占位符，skill 从会话存储把两张图都捞回来读了，连 PPT 封面的配色色值都读出来了。
+粘贴链路的端到端实录：接了 DeepSeek 的 Claude Code，两张图直接粘进对话。界面里只剩占位符，skill 从会话存储把两张图都捞回来读了，连 PPT 封面的配色色值都读出来了。
 
-![网关版 Claude Code 里粘贴的两张图被捞回并逐张读出](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.png)
+![接了 DeepSeek 的 Claude Code 里粘贴的两张图被捞回并逐张读出](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.png)
 
 ## 它是怎么干活的
 
