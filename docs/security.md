@@ -10,7 +10,7 @@ read_when:
 
 ## Recovered images are private
 
-Images pulled out of session storage are written 0600 into a 0700 directory. On a shared machine with a common umask they would otherwise land world-readable, and a pasted screenshot can hold anything.
+Images pulled out of session storage are written 0600 into a 0700 directory. By default that directory is a fresh, unpredictable `<tmpdir>/modlens-paste-*` minted per run, so nobody on a shared machine can pre-create a known path (`recursive` mkdir leaves an existing directory's mode alone) and read the bytes. A pasted screenshot can hold anything. An explicit `--out-dir` is honoured but refused when unsafe: it must be a real directory, not a symlink, owned by you, with no group or world access.
 
 Recovery is also scoped to one project: the working directory recorded inside the transcript is checked, not just the directory name, because directory slugs collide (`/tmp/a.b` and `/tmp/a-b` produce the same one). A neighbouring project's images are never handed over.
 

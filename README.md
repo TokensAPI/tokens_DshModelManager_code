@@ -169,7 +169,7 @@ The default `-m` model depends on the provider:
 | Flag | Meaning | Default |
 | :-- | :-- | :-- |
 | `--count <n>` | How many recent pasted images to recover | `1` |
-| `--out-dir <path>` | Where to write recovered images | `<tmpdir>/modlens-paste` |
+| `--out-dir <path>` | Where to write recovered images | a fresh private `<tmpdir>/modlens-paste-*` per run |
 | `--session <id>` | Session id for exact targeting | auto-detect |
 | `--transcript <path>` | Explicit transcript `.jsonl` or `.db` (overrides `--session`) | |
 | `--harness <name>` | Force storage scope: `claude-code`, `pi`, `opencode`, `none` | auto-detect |

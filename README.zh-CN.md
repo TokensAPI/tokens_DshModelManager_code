@@ -169,7 +169,7 @@ Codex 桌面 App 里丢一张推文截图。配文、互动数据（2.9K 回复�
 | 参数 | 含义 | 默认值 |
 | :-- | :-- | :-- |
 | `--count <n>` | 恢复最近几张粘贴的图 | `1` |
-| `--out-dir <path>` | 恢复的图写到哪个目录 | `<tmpdir>/modlens-paste` |
+| `--out-dir <path>` | 恢复的图写到哪个目录 | 每次运行新建的私有目录 `<tmpdir>/modlens-paste-*` |
 | `--session <id>` | 精确锁定的 session id | 自动检测 |
 | `--transcript <path>` | 显式指定 `.jsonl` 或 `.db`（优先于 `--session`） | |
 | `--harness <name>` | 强制存储范围：`claude-code`、`pi`、`opencode`、`none` | 自动检测 |
