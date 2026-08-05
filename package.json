@@ -20,8 +20,11 @@
   },
   "files": [
     "dist",
+    "docs",
     "skills/modlens/SKILL.md",
-    "skills/modlens/references"
+    "skills/modlens/references",
+    "CHANGELOG.md",
+    "SECURITY.md"
   ],
   "keywords": [
     "cli",
