@@ -59,7 +59,7 @@ modlens config set provider gemini-api
 curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # 浏览器登录后退出
 ```
 
-需要 Node 18+（OpenCode 的粘贴恢复需要 22.5+），macOS 或 Linux。
+需要 Node 18+（OpenCode 的粘贴恢复需要 22.13+），macOS 或 Linux。
 
 ## 用法
 

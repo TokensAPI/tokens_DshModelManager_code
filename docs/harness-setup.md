@@ -24,7 +24,7 @@ None of them writes a pasted image to a regular temp file, but all three persist
 | :-- | :-- | :-- |
 | Claude Code | `~/.claude/projects/<slug>/<session>.jsonl` | images as base64. The injected `CLAUDE_CODE_SESSION_ID` targets the exact session |
 | Pi | `~/.pi/agent/sessions/--<encoded-cwd>--/*.jsonl` | same shape as Claude Code |
-| OpenCode | `~/.local/share/opencode/opencode.db` | SQLite, images as data URLs. Needs Node 22.5+ for `node:sqlite` |
+| OpenCode | `~/.local/share/opencode/opencode.db` | SQLite, images as data URLs. Needs Node 22.13+ for `node:sqlite` |
 
 Running a text-only model behind `ANTHROPIC_BASE_URL` in Claude Code, a pasted image arrives as a pathless `[Unsupported Image]` placeholder (on lenient gateways) or breaks the request outright ([#62009](https://github.com/anthropics/claude-code/issues/62009)). The bytes are not gone, and that is what `recover-paste` retrieves.
 

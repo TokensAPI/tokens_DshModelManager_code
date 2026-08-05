@@ -12,7 +12,8 @@ jobs:
       fail-fast: false
       matrix:
         # node:sqlite (used by the OpenCode paste-recovery tests) ships unflagged
-        # only on Node 24+, so those tests skip on 18/20/22 while the rest run.
+        # on Node 22.13+, so those tests skip on 18 and 20 and run on 22 (setup-node
+        # installs the latest 22.x) while the rest of the suite runs everywhere.
         node-version: [18, 20, 22]
     steps:
       - uses: actions/checkout@v4

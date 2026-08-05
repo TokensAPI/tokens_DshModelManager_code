@@ -24,7 +24,7 @@ describe('escapeLikePattern', () => {
     });
 });
 
-// node:sqlite ships (unflagged) only on Node 24+, so these DB-backed tests are
+// node:sqlite ships unflagged on Node 22.13+, so these DB-backed tests are
 // skipped on older runtimes rather than crashing the suite. The recovery path
 // itself degrades gracefully there: opencode surfaces as a "Blocked:" note while
 // the JSONL harnesses keep working, which the index suite covers.
