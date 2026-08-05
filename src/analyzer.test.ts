@@ -47,8 +47,20 @@ describe('provider subprocess handling', () => {
         return { bin, image };
     }
 
-    const SUCCESS_ENVELOPE =
-        '{"status":"SUCCESS","structured_output":{"summary":"ok","ocr":{"full_text":""}}}';
+    // A full instance of the contract: analyzeImage now verifies the shape of
+    // every provider result, so a partial structured_output would be rejected.
+    const VALID_RESULT = {
+        summary: 'ok',
+        ocr: { full_text: '', lines: [] },
+        layout: { regions: [] },
+        semantics: { scene: '', entities: [] },
+        visual: {},
+        uncertainty: [],
+    };
+    const SUCCESS_ENVELOPE = JSON.stringify({
+        status: 'SUCCESS',
+        structured_output: VALID_RESULT,
+    });
 
     it('returns as soon as the provider exits, even when a descendant holds the stdout pipe open', async () => {
         // agy leaves a language server running that inherited the pipe, so the
@@ -76,6 +88,22 @@ describe('provider subprocess handling', () => {
         await expect(
             analyzeImage({ input: image, providerBin: bin, timeoutMs: 20_000, config: {} }),
         ).rejects.toThrow(/failed with code 3.*boom/s);
+    }, 30_000);
+
+    it('rejects a provider result that is missing schema fields', async () => {
+        // The provider succeeded and returned JSON, but it is only half the
+        // contract. Every provider goes through the same shape check now.
+        const partial = JSON.stringify({
+            status: 'SUCCESS',
+            structured_output: { summary: 'ok' },
+        });
+        const { bin, image } = fakeProvider(`#!/bin/sh\necho '${partial}'\nexit 0\n`);
+
+        await expect(
+            analyzeImage({ input: image, providerBin: bin, timeoutMs: 20_000, config: {} }),
+        ).rejects.toThrow(
+            /antigravity-cli returned a result that does not match the vision schema/,
+        );
     }, 30_000);
 
     it('reports a timeout when the provider never exits', async () => {

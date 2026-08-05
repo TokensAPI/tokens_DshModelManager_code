@@ -13,6 +13,7 @@ import {
     type ProviderParsedOutput,
     resolveProvider,
 } from './providers/index.ts';
+import { missingSchemaFields } from './schema.ts';
 
 export interface AnalyzeOptions {
     input: string;
@@ -99,6 +100,17 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
     } else {
         throw new Error(
             `Provider ${provider.name} implements neither execute nor buildInvocation.`,
+        );
+    }
+
+    // Server-side schema enforcement is uneven across providers, and even the
+    // routes that have it can return a shell that only looks right. Verify the
+    // shape here so a structurally broken result fails loudly for every provider
+    // instead of reaching the caller as if it were evidence.
+    const missing = missingSchemaFields(parsed.result);
+    if (missing.length > 0) {
+        throw new Error(
+            `${provider.name} returned a result that does not match the vision schema (missing: ${missing.join(', ')}).`,
         );
     }
 
