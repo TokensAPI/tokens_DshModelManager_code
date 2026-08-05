@@ -6,7 +6,13 @@
 //   pnpm release patch        bump from the current one
 //
 // The order matters: everything that can refuse to release runs before
-// anything irreversible (tag, push, publish) happens.
+// anything irreversible (tag, push) happens.
+//
+// This script does NOT publish. It runs the guards, bumps the version, commits,
+// tags, and pushes the tag. Pushing the tag triggers .github/workflows/release.yml,
+// which is the single place that runs `npm publish` and creates the GitHub
+// Release. Publishing from both here and CI is a race that double-publishes or
+// fails half-way, so the tag push is the one handoff.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -83,14 +89,8 @@ writeFileSync(pkgPath, pkgRaw.replace(`"version": "${pkg.version}"`, `"version":
 run('git', ['commit', '-am', `chore(release): v${next}`]);
 run('git', ['tag', '-a', `v${next}`, '-m', `v${next}`]);
 run('git', ['push', '--follow-tags']);
-runLoud('pnpm', ['publish', '--access', 'public', '--no-git-checks']);
 
-try {
-    run('gh', ['release', 'create', `v${next}`, '--title', `v${next}`, '--notes', notes]);
-    console.log(`\nGitHub release created: v${next}`);
-} catch (error) {
-    console.warn(`\nPublished, but the GitHub release failed: ${error.message}`);
-    console.warn(`Create it by hand: gh release create v${next} --notes-file <(...)`);
-}
-
-console.log(`\n${pkg.name} v${next} is out.`);
+console.log(
+    `\nTag v${next} pushed. CI will finish the release: npm publish and the GitHub Release.`,
+);
+console.log('Watch it: gh run watch, or https://github.com/liustack/modlens/actions');
