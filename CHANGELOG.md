@@ -4,6 +4,8 @@
 
 A code-review pass. Two user-facing bugs, a stack of doc corrections, and the tooling a public repo is expected to carry.
 
+- A provider that ignores SIGTERM on timeout is now actually killed. The SIGKILL backstop checked `child.killed`, which turns true the moment a signal is delivered, not when the process exits, so a child that trapped SIGTERM read as already dead and was never escalated. It now tracks whether the process has exited and sends SIGKILL when it has not.
+
 - `config show` prints the effective config now, merging environment variables over the file and tagging each value file or env. Reading only the file hid keys set through `GEMINI_API_KEY` and the other bound vars, so the value modlens actually used never appeared.
 - Local image paths containing `#` or `?` keep their real extension. Routing them through `new URL()` read the character as a fragment or query and dropped the extension, mislabelling the type as JPEG.
 - The disclaimer no longer contradicts the MIT license it ships beside. It withholds warranty and endorsement without withholding the commercial-use right MIT grants, and points at the upstream engines' own terms.
