@@ -27,15 +27,15 @@ npx -y skills add liustack/modlens             # install the skill
 npx @liustack/modlens -i screenshot.png        # or just use the CLI
 ```
 
-Models like DeepSeek-V4-Flash are cheap, fast, capable, and blind. Throw one a screenshot of an error and it sees nothing. ModLens turns the image into evidence it can quote, and **you just paste**: every other bridge makes you save a file and report its path, while ModLens pulls the pasted image back out of session storage.
+Models like DeepSeek-V4-Flash are cheap, fast, capable, and blind. Throw one a screenshot of an error and it sees nothing. ModLens hands the image to a real vision engine and brings back evidence your model can quote: every word transcribed, the layout mapped, the doubts declared. And **you just paste**: other bridges make you save a file and report its path, while ModLens pulls the pasted image straight back out of session storage.
 
 ## Highlights
 
-- **Pasting works.** Vision MCP servers cannot catch a paste (the client encodes and sends it the moment it lands), so ModLens reads it from local session storage instead.
-- **Evidence, not an impression.** Every word transcribed, layout cut into regions in reading order, entities and relations listed, all of it quotable.
-- **It says when it cannot read something.** Uncertain parts land in `uncertainty`. Pixel coordinates and confidence scores, the two things models fabricate most, were dropped in v2.
+- **Pasting works.** A pasted image never becomes a file, which is why other vision bridges cannot see it. ModLens recovers it from the harness's local session storage instead.
+- **Evidence, not an impression.** Every word transcribed, layout cut into regions in reading order, entities and relations listed. Your model quotes specifics instead of trusting a vibe.
+- **It says when it cannot read something.** Uncertain parts land in `uncertainty`. Pixel coordinates and confidence scores, the two things vision models fabricate most, were deliberately dropped.
 - **Keep your model.** You picked it for price and reasoning, not eyesight. That choice stays.
-- **Starts with no key.** agy needs none. A free Gemini key makes it 5 to 10 seconds per image.
+- **Starts with no key.** The default engine (Antigravity CLI) needs none. A free Gemini key cuts a read to 5-10 seconds.
 - **Install once, works everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
 
 ## Installation
@@ -46,14 +46,14 @@ npx -y skills add liustack/modlens
 
 Or tell your agent: "Install the skill from https://github.com/liustack/modlens".
 
-Then give it a vision engine. A free **[AI Studio](https://aistudio.google.com) Gemini key** is the fast answer (three minutes, no credit card, 5 to 10 seconds per image):
+Then give it a vision engine. A free **[AI Studio](https://aistudio.google.com) Gemini key** is the fast answer (three minutes, no credit card, 5-10 seconds per image):
 
 ```bash
 modlens config set gemini-api.apiKey <key>
 modlens config set provider gemini-api
 ```
 
-Skipping the sign-up is fine: **Antigravity CLI** works with no key, it is just slower (15 to 40 seconds) with a tight free quota:
+Skipping the sign-up is fine: **Antigravity CLI** works with no key, it is just slower (15-40 seconds) with a tight free quota:
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # sign in, then exit
@@ -96,20 +96,43 @@ Output is a fixed JSON shape:
 
 `meta` records how the result was produced: when (`generatedAt`), which `model`, the provider's `conversationId` when it has one, wall-clock `durationSeconds`, and the raw `usage` the provider reported (shape varies by provider, `null` when none).
 
-Inside the Codex desktop app: drop in a tweet screenshot and a text-only DeepSeek reads the caption, the engagement numbers (2.9K replies, 270K likes, 5M views), even the image's alt text. Where the resolution runs out, it says so.
+## See it work
+
+Unedited runs, all driving a text-only DeepSeek-V4-Flash.
+
+A tweet screenshot in the Codex desktop app. It reads the caption, the engagement numbers (2.9K replies, 270K likes, 5M views), even the image's alt text. Where the resolution runs out, it says so instead of guessing.
 
 ![Text-only DeepSeek reading a tweet screenshot in full detail via ModLens](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.png)
+
+Three images pasted at once. The model queues them up and reads them one by one, design intent included.
+
+![Three images dropped together, read one by one](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-batch.png)
+
+The stress test: a scatter plot of 128 models. It identifies the chart, both axes, the log scale, and picks the one highlighted point out of the crowd with its coordinates (about $0.028, intelligence score 50). Dense charts are where vision models usually fold.
+
+![The 128-model scatter plot, highlighted point read with exact coordinates](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.png)
+
+And the paste path, end to end: Claude Code on a DeepSeek gateway, two images pasted straight into the chat. The UI shows nothing but placeholders, the skill recovers both from session storage and reads them, down to the color values on a slide cover.
+
+![Two pasted images recovered from session storage and read in a gateway Claude Code session](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.png)
 
 ## How it works
 
 ![A text-only model hands an image to the vision engine through the modlens skill and gets structured JSON evidence back](https://raw.githubusercontent.com/liustack/modlens/main/assets/flow.en.png)
 
-Pasting works here because of a different route. The paste itself is handled end to end by the client: the image is encoded and sent the moment it lands, so an MCP server never gets a chance, which is why their docs tell you to save a file and report the path. But before those bytes go anywhere, the harness has already written them to local session storage, and that is where `recover-paste` goes. Each harness stores them differently (JSONL in Claude Code and Pi, SQLite in OpenCode, real temp files in Codex): see [harness setup](docs/harness-setup.md).
+No magic, four steps:
 
-| | Swap in a multimodal model | Vision MCP servers | ModLens |
+1. The skill triggers when an image shows up: a path, a URL, or the bare placeholder a text-only model gets left with after a paste.
+2. It runs the `modlens` CLI, which hands the image to a vision engine. Five to choose from, the free Antigravity CLI by default.
+3. The engine's reading is forced into a fixed JSON schema: transcription, layout, semantics, uncertainty. Output that does not match the schema is rejected, never patched up.
+4. Your model quotes the evidence and answers.
+
+The paste trick is the part nobody else does. A pasted image is handled inside the client: encoded and sent the moment it lands, gone before any outside tool can touch it, which is why other bridges tell you to save a file and report the path. But before those bytes leave, the harness has already written them into its local session record. `recover-paste` reads them back from there: JSONL in Claude Code and Pi, SQLite in OpenCode, and Codex needs no recovery at all because its pastes already land as temp files. Details in [harness setup](docs/harness-setup.md).
+
+| | Swap in a multimodal model | Other vision bridges (MCP servers etc.) | ModLens |
 | :-- | :-- | :-- | :-- |
 | Your chosen model | has to change | stays | stays |
-| An image pasted into the chat | visible if the model supports it | out of reach | handled directly |
+| An image pasted into the chat | visible if the model supports it | out of reach | recovered and read |
 | What you get back | the model's own reading | usually a description | transcription, layout regions, entities |
 | Where it cannot read | may invent | may invent | says so in `uncertainty` |
 | Cost | multimodal model pricing | usually per API call | agy's free quota or a free Gemini key |
@@ -165,6 +188,13 @@ Five providers: `antigravity-cli` (default, no key), `gemini-api` (fastest free 
 | [Security](docs/security.md) | File permissions, image content as untrusted input |
 | [CHANGELOG](CHANGELOG.md) | Finding what changed in a version |
 | [AGENTS.md](AGENTS.md) | Working on this codebase |
+
+## Contributing
+
+ModLens does not accept pull requests. It is a small tool with one pair of hands on it, and every line stays author-owned: that tight loop is what keeps it dependable. Two ways to contribute that genuinely help:
+
+- **[Open an issue](https://github.com/liustack/modlens/issues).** Bugs, ideas, a confusing error, docs that read wrong. Issues get read and drive what gets built.
+- **Fork it.** MIT means your copy is fully yours: rename it, rewire it, ship it.
 
 ## Shameless plug
 
