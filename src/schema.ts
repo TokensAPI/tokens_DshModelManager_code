@@ -104,3 +104,40 @@ export const VISION_RESULT_SCHEMA = {
 export function visionResultSchemaJson(): string {
     return JSON.stringify(VISION_RESULT_SCHEMA);
 }
+
+/**
+ * Required fields the vision contract promises, nested ones included. Returns
+ * the paths that are absent or the wrong type.
+ *
+ * Server-side schema enforcement only covers some routes (gemini responseSchema,
+ * anthropic tool input_schema, agy/claude-cli --json-schema), and even those can
+ * hand back a shell that only looks right. This is the portable check the
+ * analyzer runs over every provider's result, so a structurally broken payload
+ * fails loudly instead of reaching the caller as if it were evidence.
+ */
+export function missingSchemaFields(result: unknown): string[] {
+    const missing: string[] = [];
+    const root = (result ?? {}) as Record<string, unknown>;
+    const child = (key: string) =>
+        (root[key] && typeof root[key] === 'object' ? root[key] : {}) as Record<string, unknown>;
+
+    const expect = (path: string, ok: boolean) => {
+        if (!ok) {
+            missing.push(path);
+        }
+    };
+
+    expect('summary', typeof root.summary === 'string');
+    expect('ocr', typeof root.ocr === 'object' && root.ocr !== null);
+    expect('ocr.full_text', typeof child('ocr').full_text === 'string');
+    expect('ocr.lines', Array.isArray(child('ocr').lines));
+    expect('layout', typeof root.layout === 'object' && root.layout !== null);
+    expect('layout.regions', Array.isArray(child('layout').regions));
+    expect('semantics', typeof root.semantics === 'object' && root.semantics !== null);
+    expect('semantics.scene', typeof child('semantics').scene === 'string');
+    expect('semantics.entities', Array.isArray(child('semantics').entities));
+    expect('visual', typeof root.visual === 'object' && root.visual !== null);
+    expect('uncertainty', Array.isArray(root.uncertainty));
+
+    return missing;
+}

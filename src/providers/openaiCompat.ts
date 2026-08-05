@@ -4,6 +4,7 @@
 // response goes through tolerant JSON extraction.
 import { readLocalImageBase64 } from '../imageInput.ts';
 import { buildVisionPrompt } from '../prompt.ts';
+import { missingSchemaFields } from '../schema.ts';
 import { extractJson, truncate } from '../util/json.ts';
 import type {
     BuildProviderInvocationOptions,
@@ -100,37 +101,6 @@ Respond with ONE JSON object only, no markdown fences, no commentary. Fill this 
             usage: payload.usage ?? null,
         },
     };
-}
-
-/**
- * Required fields the vision contract promises, nested ones included. Returns
- * the paths that are absent or the wrong type.
- */
-export function missingSchemaFields(result: unknown): string[] {
-    const missing: string[] = [];
-    const root = (result ?? {}) as Record<string, unknown>;
-    const child = (key: string) =>
-        (root[key] && typeof root[key] === 'object' ? root[key] : {}) as Record<string, unknown>;
-
-    const expect = (path: string, ok: boolean) => {
-        if (!ok) {
-            missing.push(path);
-        }
-    };
-
-    expect('summary', typeof root.summary === 'string');
-    expect('ocr', typeof root.ocr === 'object' && root.ocr !== null);
-    expect('ocr.full_text', typeof child('ocr').full_text === 'string');
-    expect('ocr.lines', Array.isArray(child('ocr').lines));
-    expect('layout', typeof root.layout === 'object' && root.layout !== null);
-    expect('layout.regions', Array.isArray(child('layout').regions));
-    expect('semantics', typeof root.semantics === 'object' && root.semantics !== null);
-    expect('semantics.scene', typeof child('semantics').scene === 'string');
-    expect('semantics.entities', Array.isArray(child('semantics').entities));
-    expect('visual', typeof root.visual === 'object' && root.visual !== null);
-    expect('uncertainty', Array.isArray(root.uncertainty));
-
-    return missing;
 }
 
 function toDataUrl(image: { data: string; mimeType: string }): string {
