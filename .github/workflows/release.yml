@@ -1,9 +1,11 @@
 name: release
 
-# Publishes to npm when a v* tag is pushed. The tag is normally created by
-# scripts/release.mjs (`pnpm release <version>`), which runs the same guards
-# locally and pushes the tag. This workflow re-runs the guards in CI, then
-# publishes with provenance.
+# Publishes to npm and creates the GitHub Release when a v* tag is pushed. The
+# tag is normally created by scripts/release.mjs (`pnpm release <version>`),
+# which runs the same guards locally and pushes the tag but does NOT publish.
+# This workflow is the single place that publishes, so the two can never race.
+# It re-runs the guards in CI, publishes with provenance, then cuts the Release
+# with the matching CHANGELOG section as its notes.
 #
 # PREREQUISITE that cannot be configured in this file: npm-side trusted
 # publishing. On npmjs.com, open the @liustack/modlens package settings ->
@@ -21,7 +23,8 @@ on:
       - 'v*'
 
 permissions:
-  contents: read
+  # write is needed to create the GitHub Release from the pushed tag.
+  contents: write
   # Required for provenance and OIDC trusted publishing.
   id-token: write
 
@@ -47,3 +50,20 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: npm publish --provenance --access public
+      - name: Create GitHub Release from the tag and CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Pull this version's section out of CHANGELOG.md: from its "## <version>"
+          # heading up to the next "## " heading.
+          awk -v ver="$version" '
+            $0 == "## " ver || index($0, "## " ver " ") == 1 { grab=1; next }
+            grab && /^## / { exit }
+            grab { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG section for $version" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
