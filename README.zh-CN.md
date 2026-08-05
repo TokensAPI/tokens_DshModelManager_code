@@ -27,15 +27,15 @@ npx -y skills add liustack/modlens                # 装 skill
 npx @liustack/modlens -i screenshot.png           # 或者直接当 CLI 用
 ```
 
-DeepSeek-V4-Flash 这类模型便宜、快、能打，唯独看不见图。你甩过去一张报错截图，它一片漆黑。ModLens 把图读成能引用的证据交给它，而且**你直接粘贴就行**：别的方案都要你先存成文件再报路径，ModLens 从会话存储里把粘贴的图捞回来。
+DeepSeek-V4-Flash 这类模型便宜、快、能打，唯独看不见图。你甩过去一张报错截图，它一片漆黑。ModLens 把图交给真正的视觉引擎，带回你的模型能引用的证据：图里的字一句不落地转录，版面切好，读不准的地方明说。而且**你直接粘贴就行**：别的方案都要你先存成文件再报路径，ModLens 直接从会话存储里把粘贴的图捞回来。
 
 ## 亮点
 
-- **粘贴就能用。** 识图类 MCP server 接不住粘贴（图一进对话框就被客户端发走了），ModLens 从本地会话存储里捞。
-- **给的是证据，不是印象。** 图里的字一句不落地转录、版面按阅读顺序切块、实体和关系单列，模型能引用具体内容。
-- **读不准就说读不准。** 拿不准的地方进 `uncertainty`。像素坐标和置信度分数这两样模型最爱编的，v2 直接删了。
+- **粘贴就能用。** 粘贴的图从来不会落成文件，所以别的识图外挂都接不住。ModLens 换了条路，从 harness 的本地会话存储里捞。
+- **给的是证据，不是印象。** 全文转录、版面按阅读顺序切块、实体和关系单列。模型引用的是具体内容，不是大概感觉。
+- **读不准就说读不准。** 拿不准的地方进 `uncertainty`。像素坐标和置信度分数这两样视觉模型最爱编的字段，v2 直接删了。
 - **模型不用换。** 你选 DeepSeek 图的是价格和推理，不是视力，这个选择不用动。
-- **零 key 起步。** agy 不要 key；想快就领个免费 Gemini key，识图 5 到 10 秒。
+- **零 key 起步。** 默认引擎 Antigravity CLI 不要 key；领个免费 Gemini key，识图缩到 5 到 10 秒。
 - **一次装好，处处能用。** Claude Code、Codex、Pi、OpenCode 都在真机上验证过。
 
 ## 安装
@@ -96,20 +96,43 @@ modlens recover-paste                          # 把刚粘贴的图捞成文件
 
 `meta` 记录这份结果是怎么来的：生成时间（`generatedAt`）、用的 `model`、provider 给的 `conversationId`（没有就是 null）、实际耗时 `durationSeconds`、以及 provider 报告的原始 `usage`（结构随 provider 而定，没有就是 null）。
 
-Codex 桌面 App 里的实拍：丢一张推文截图，纯文本的 DeepSeek 读出了配文、互动数据（2.9K 回复、270K 点赞、5M 浏览），连图片的 alt 文字都没放过。分辨率不够的地方它老实说读不清。
+## 实测
+
+以下全是原样实录，驱动的都是纯文本的 DeepSeek-V4-Flash。
+
+Codex 桌面 App 里丢一张推文截图。配文、互动数据（2.9K 回复、270K 点赞、5M 浏览），连图片的 alt 文字都没放过。分辨率不够的地方它老实说读不清，不硬编。
 
 ![纯文本 DeepSeek 通过 ModLens 读出推文截图的全部细节](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.png)
+
+一次粘三张图。模型自己排队逐张读，连设计意图都点出来了。
+
+![一次丢三张图，逐张读取](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-batch.png)
+
+压力测试：128 个模型的散点图。它认出了图表类型、双轴定义、对数刻度，还把高亮的那个点从点堆里精准拎出来（成本约 $0.028，智能指数 50）。密集图表是识图模型最容易露怯的地方。
+
+![128 个模型的散点图，精确读出高亮点的坐标](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.png)
+
+粘贴链路的端到端实录：DeepSeek 网关版 Claude Code，两张图直接粘进对话。界面里只剩占位符，skill 从会话存储把两张图都捞回来读了，连 PPT 封面的配色色值都读出来了。
+
+![网关版 Claude Code 里粘贴的两张图被捞回并逐张读出](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.png)
 
 ## 它是怎么干活的
 
 ![纯文本模型经 modlens skill 把图片交给视觉引擎，回来的是结构化 JSON 证据](https://raw.githubusercontent.com/liustack/modlens/main/assets/flow.zh.png)
 
-粘贴之所以只有它接得住，是因为走了另一条路：粘贴从头到尾是客户端办的事，图一进对话框就被转码发走，MCP server 连插手的机会都没有，所以它们只能教你存文件报路径。而图片字节在发走之前，早被 harness 原样写进了本地会话存储，`recover-paste` 直接去那儿捞。四家 harness 的存储各不相同（Claude Code 和 Pi 是 JSONL，OpenCode 是 SQLite，Codex 本来就有临时文件），细节见[宿主接入](docs/harness-setup.md)。
+没有魔法，四步：
 
-| | 换个多模态模型 | 识图类 MCP server | ModLens |
+1. 图片出现时 skill 触发：一个路径、一个 URL，或者纯文本模型粘贴后剩下的那个占位符。
+2. skill 跑 `modlens` 命令，把图交给视觉引擎。五个引擎可选，默认是免费的 Antigravity CLI。
+3. 引擎的识读结果被强制装进固定的 JSON 结构：转录、版面、语义、不确定项。不合规的输出直接拒收，绝不凑合。
+4. 模型引用证据，回答问题。
+
+粘贴这一手是别家都没有的。粘贴从头到尾在客户端内部完成：图一落进对话框就被编码发走，外部工具根本没机会碰到，所以别的方案只能教你存文件报路径。但字节发走之前，harness 已经把它原样写进了本地会话记录，`recover-paste` 就是去那里捞：Claude Code 和 Pi 存 JSONL，OpenCode 存 SQLite，Codex 的粘贴本来就落成临时文件所以不需要捞。细节见[宿主接入](docs/harness-setup.md)。
+
+| | 换个多模态模型 | 其他识图外挂（MCP server 这类） | ModLens |
 | :-- | :-- | :-- | :-- |
 | 你选的模型 | 得换掉 | 不用换 | 不用换 |
-| 粘贴进对话的图 | 模型支持才看得见 | 接不住 | 直接接住 |
+| 粘贴进对话的图 | 模型支持才看得见 | 接不住 | 捞回来直接读 |
 | 拿到手的是什么 | 模型自己的理解 | 通常一段描述 | 全文转录、版面区块、实体关系 |
 | 读不准的地方 | 可能编 | 可能编 | 进 `uncertainty` |
 | 花费 | 多模态模型的价格 | 多数按 API 计费 | agy 免费额度或免费 Gemini key |
@@ -166,13 +189,22 @@ Codex 桌面 App 里的实拍：丢一张推文截图，纯文本的 DeepSeek �
 | [更新日志](CHANGELOG.md) | 想知道某个版本改了什么 |
 | [AGENTS.md](AGENTS.md) | 要改这个项目的代码 |
 
+## 参与方式
+
+本仓不收 PR。工具小，一双手维护，每一行代码都要作者自己背，这个闭环收紧了它才可靠。真正帮得上忙的两条路：
+
+- **[提 issue](https://github.com/liustack/modlens/issues)。** bug、想法、看不懂的报错、读着别扭的文档都算。issue 一定会被读，也真的会影响接下来做什么。
+- **Fork。** MIT 协议下你的副本完全归你：改名、魔改、发布都随意。
+
 ## 关注公众号
 
-AI 工具、实践与想法，第一时间推送。微信扫码关注公众号「liustack」：
+AI 工具、实践与想法，第一时间推送。微信扫码，或搜一搜「liustack」关注：
 
-<img src="https://raw.githubusercontent.com/liustack/modlens/main/assets/wechat-qrcode.png" width="360" alt="微信公众号 liustack" />
+<p align="center">
+  <img src="https://raw.githubusercontent.com/liustack/modlens/main/assets/wechat-qrcode.png" width="420" alt="微信公众号 liustack" />
+</p>
 
-⭐ 好用的话给 [ModLens](https://github.com/liustack/modlens) 点个 star。star 是下一个开发者找到它的方式。
+⭐ 好用的话给 [ModLens](https://github.com/liustack/modlens) 点个 star，这是下一个开发者找到它的方式。
 
 ## 免责声明
 
