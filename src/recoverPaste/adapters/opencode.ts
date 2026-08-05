@@ -1,6 +1,7 @@
 // OpenCode stores pasted images as data-URL file parts in a SQLite database
 // (~/.local/share/opencode/opencode.db), joined to their message (role) and
-// session (directory). Reading it needs node:sqlite, which ships with Node 22.5+.
+// session (directory). Reading it needs node:sqlite, which ships unflagged on
+// Node 22.13+ (added flagged in 22.5).
 import * as fs from 'fs';
 import { createRequire } from 'module';
 import * as os from 'os';
@@ -23,8 +24,8 @@ interface SqliteRow {
 }
 
 function opencodeQuery(dbPath: string, cwd: string, sessionId?: string): SqliteRow[] {
-    // node:sqlite ships with Node 22.5+. Loaded lazily so the other adapters
-    // keep working on older runtimes.
+    // node:sqlite ships unflagged on Node 22.13+. Loaded lazily so the other
+    // adapters keep working on older runtimes.
     let DatabaseSync: new (
         p: string,
         o?: { readOnly?: boolean },
@@ -37,7 +38,7 @@ function opencodeQuery(dbPath: string, cwd: string, sessionId?: string): SqliteR
         ({ DatabaseSync } = nodeRequire('node:sqlite'));
     } catch {
         throw new Error(
-            'Reading opencode storage needs the node:sqlite module (Node 22.5+). Upgrade Node, or pass --transcript/--session for a JSONL-based harness.',
+            'Reading opencode storage needs the node:sqlite module (unflagged on Node 22.13+). Upgrade Node, or pass --transcript/--session for a JSONL-based harness.',
         );
     }
 

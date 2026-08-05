@@ -30,8 +30,8 @@ pnpm build       # must produce a single dist/main.js
 pnpm lint        # Biome
 ```
 
-Requires Node 18+ (22.5+ if you touch OpenCode paste recovery, which needs
-`node:sqlite`).
+Requires Node 18+ (22.13+ if you touch OpenCode paste recovery, which needs
+`node:sqlite` without a flag).
 
 ## Tests
 

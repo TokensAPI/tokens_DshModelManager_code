@@ -64,7 +64,7 @@ In order of likelihood:
 
 - **You are in the wrong directory.** Recovery is scoped to the project the conversation is happening in. Pass `--cwd /path/to/project`.
 - **Nothing was pasted.** Dragged files and typed paths are already real files, so there is nothing to recover: use the path directly.
-- **A setup problem is blocking one harness.** Anything blocking appears after `Blocked:` in the same message, for example OpenCode needing Node 22.5+ for `node:sqlite`.
+- **A setup problem is blocking one harness.** Anything blocking appears after `Blocked:` in the same message, for example OpenCode needing Node 22.13+ for `node:sqlite`.
 
 ## recover-paste returned an image from another project
 
