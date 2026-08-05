@@ -55,6 +55,65 @@ const EXT_BY_MIME: Record<string, string> = {
 
 const ADAPTERS: HarnessAdapter[] = [claudeAdapter, piAdapter, opencodeAdapter];
 
+/**
+ * Resolve, and lock down, the directory recovered images land in.
+ *
+ * Pasted screenshots can hold anything, so the bytes must never be readable by
+ * another local user. The default is a fresh per-call `mkdtemp` directory:
+ * `mkdirSync -p` does not apply its mode to a directory that already exists, so
+ * a fixed `tmpdir()/modlens-paste` let anyone on a shared box pre-create it
+ * (0755, owned by them) and read every screenshot recovered into it. A unique
+ * name nobody can predict closes that. We deliberately do not clean it up: the
+ * recovered files are the product (downstream reads them via `modlens -i`), and
+ * the system's own tmp reaper collects them later.
+ *
+ * An explicit `--out-dir` is the user's choice, so honour it, but still refuse
+ * an unsafe one: created 0700 when absent, and when it already exists it must be
+ * a real directory (not a symlink), owned by us, with no group/other bits.
+ */
+function prepareOutDir(explicit?: string): string {
+    if (!explicit) {
+        // mkdtemp creates the directory 0700 and owned by us in one step.
+        return fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-paste-'));
+    }
+
+    const outDir = path.resolve(explicit);
+    if (!fs.existsSync(outDir)) {
+        fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
+        try {
+            // mkdir's mode is masked by umask, so pin it down afterwards.
+            fs.chmodSync(outDir, 0o700);
+        } catch {
+            // best effort on platforms without chmod
+        }
+        return outDir;
+    }
+
+    // lstat, not stat: a symlink here could redirect the bytes somewhere world
+    // readable, which is exactly what we are guarding against.
+    const stat = fs.lstatSync(outDir);
+    if (stat.isSymbolicLink()) {
+        throw new Error(
+            `--out-dir is a symlink, refusing to use it: ${outDir}. A symlink could redirect recovered screenshots somewhere readable by others.`,
+        );
+    }
+    if (!stat.isDirectory()) {
+        throw new Error(`--out-dir exists but is not a directory: ${outDir}.`);
+    }
+    const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
+    if (uid !== undefined && stat.uid !== uid) {
+        throw new Error(
+            `--out-dir is owned by another user (uid ${stat.uid}, not ${uid}): ${outDir}. On a shared machine that user could read the recovered images.`,
+        );
+    }
+    if (stat.mode & 0o077) {
+        throw new Error(
+            `--out-dir is group- or world-accessible (mode ${(stat.mode & 0o777).toString(8)}): ${outDir}. Recovered screenshots can hold anything; use a private directory (chmod 700).`,
+        );
+    }
+    return outDir;
+}
+
 function sourceForExplicitPath(filePath: string, cwd: string, harness?: string): SourceRef {
     // An explicit --harness is the user telling us the format. Honour it: a
     // copied transcript has no telltale path, and guessing read it as Claude.
@@ -170,7 +229,6 @@ export function recoverPastedImages(options: RecoverOptions = {}): RecoverResult
         source ??= locateSource(cwd, adapters);
     }
     const count = Math.max(1, options.count ?? 1);
-    const outDir = options.outDir ?? path.join(os.tmpdir(), 'modlens-paste');
 
     const all = source.extract();
     if (all.length === 0) {
@@ -179,14 +237,7 @@ export function recoverPastedImages(options: RecoverOptions = {}): RecoverResult
         );
     }
 
-    // Pasted screenshots can hold anything. On a shared /tmp with the usual
-    // umask these landed as 0755/0644, readable by every local user.
-    fs.mkdirSync(outDir, { recursive: true, mode: 0o700 });
-    try {
-        fs.chmodSync(outDir, 0o700);
-    } catch {
-        // best effort on platforms without chmod
-    }
+    const outDir = prepareOutDir(options.outDir);
     const picked = all.slice(-count);
     const images: RecoveredImage[] = picked.map((image) => {
         const buffer = Buffer.from(image.data, 'base64');

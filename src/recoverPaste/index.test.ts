@@ -398,6 +398,61 @@ describe('cross-project safety', () => {
         }
     });
 
+    it('refuses a pre-existing group- or world-accessible out-dir', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-outdir-'));
+        const dir = path.join(home, '.claude', 'projects', claudeProjectSlug('/tmp/p'));
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(
+            path.join(dir, 'c.jsonl'),
+            imageLine('secret', '2026-08-05T09:00:00.000Z'),
+        );
+
+        // A directory someone else could have pre-created 0755 on a shared box.
+        const outDir = path.join(home, 'shared-out');
+        fs.mkdirSync(outDir);
+        fs.chmodSync(outDir, 0o755);
+
+        const realHome = process.env.HOME;
+        process.env.HOME = home;
+        process.env.MODLENS_HARNESS = 'none';
+        try {
+            expect(() => recoverPastedImages({ cwd: '/tmp/p', outDir })).toThrow(
+                /group- or world-accessible/,
+            );
+        } finally {
+            process.env.HOME = realHome;
+            fs.rmSync(home, { recursive: true, force: true });
+        }
+    });
+
+    it('mints a private per-call directory when no out-dir is given', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-default-out-'));
+        const dir = path.join(home, '.claude', 'projects', claudeProjectSlug('/tmp/p'));
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(
+            path.join(dir, 'c.jsonl'),
+            imageLine('secret', '2026-08-05T09:00:00.000Z'),
+        );
+
+        const realHome = process.env.HOME;
+        process.env.HOME = home;
+        process.env.MODLENS_HARNESS = 'none';
+        try {
+            const a = recoverPastedImages({ cwd: '/tmp/p' });
+            const b = recoverPastedImages({ cwd: '/tmp/p' });
+            const dirA = path.dirname(a.images[0].path);
+            const dirB = path.dirname(b.images[0].path);
+            // Each call gets its own unpredictable directory, created 0700.
+            expect(dirA).not.toBe(dirB);
+            expect(fs.statSync(dirA).mode & 0o777).toBe(0o700);
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        } finally {
+            process.env.HOME = realHome;
+            fs.rmSync(home, { recursive: true, force: true });
+        }
+    });
+
     it('keeps an unmapped media type instead of relabelling it png', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-mime-'));
         const dir = path.join(home, '.claude', 'projects', claudeProjectSlug('/tmp/p'));

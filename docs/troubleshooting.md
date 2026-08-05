@@ -79,7 +79,7 @@ The output lists images oldest to newest, so the **last** entry is the most rece
 `recover-paste` auto-detects which harness it runs inside (process ancestry first, then environment fingerprints) and reads only that harness's storage. Two knobs override it:
 
 - **`MODLENS_HARNESS`** forces the storage scope without a flag: `claude-code`, `pi`, `opencode`, `codex`, or `none` (scan every store, no scoping). Detection reads it first, so it wins over ancestry and env fingerprints. `--harness` does the same for a single run.
-- **`--out-dir`** sets where recovered images land. It defaults to `<tmpdir>/modlens-paste`, a 0700 directory holding 0600 files. Point it elsewhere when the system temp dir is not where you want the bytes.
+- **`--out-dir`** sets where recovered images land. By default each run mints a fresh, unpredictable `<tmpdir>/modlens-paste-*` directory (0700, holding 0600 files), so nobody can pre-create a shared path to intercept the bytes. Point it elsewhere when the system temp dir is not where you want them. An explicit `--out-dir` that already exists is rejected unless it is a real directory (not a symlink), owned by you, with no group or world access.
 
 ## This is a Codex session
 
