@@ -1,25 +1,15 @@
-## What and why
+<!-- Please read before opening this PR. -->
 
-What this changes, and the reason for it. Link the issue it closes (e.g. `Closes #12`).
+Thanks for the effort, and sorry to catch you here: **ModLens does not accept
+pull requests.** The tool is maintained single-handedly and every line stays
+author-owned, so PRs are closed without review as a matter of policy, not as a
+judgment on your work.
 
-## Type
+What works instead:
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Refactor (no behavior change)
-- [ ] Docs
-- [ ] Build / CI / tooling
+- **[Open an issue](https://github.com/liustack/modlens/issues)** describing
+  the bug or the idea. Issues get read and drive what gets built. If your
+  branch demonstrates the fix, link it from the issue as a reference.
+- **Keep it in your fork.** MIT means your copy is fully yours.
 
-## Checklist
-
-- [ ] `pnpm typecheck` passes
-- [ ] `pnpm test` passes
-- [ ] `pnpm build` produces a single `dist/main.js`
-- [ ] `pnpm lint` passes
-- [ ] Behavior changes ship with a test in the same commit
-- [ ] Commits follow Conventional Commits, one concern each (reformat kept separate from logic)
-- [ ] User-visible changes update the README (both `README.md` and `README.zh-CN.md`, kept aligned) and any affected doc
-
-## Notes for the reviewer
-
-Anything worth calling out: trade-offs, follow-ups, things you are unsure about.
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for the whole picture.
