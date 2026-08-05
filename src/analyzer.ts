@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import {
     defaultProviderName,
@@ -85,18 +86,37 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
     if (provider.execute) {
         parsed = await provider.execute(providerOptions);
     } else if (provider.buildInvocation && provider.parseOutput) {
-        const invocation = provider.buildInvocation(providerOptions);
-        // The grace exists for engines with their own internal deadline (agy
-        // gets --print-timeout). Engines without one must honour the caller's
-        // number as given.
-        const backstop = provider.hasInternalTimeout ? timeoutMs + KILL_GRACE_MS : timeoutMs;
-        const commandResult = await runCommand(
-            provider.name,
-            invocation,
-            backstop,
-            provider.describeFailure,
-        );
-        parsed = provider.parseOutput(commandResult.stdout);
+        const buildInvocation = provider.buildInvocation;
+        const parseOutput = provider.parseOutput;
+        // Run the agent in a throwaway directory holding only this one image, so
+        // an injection in the image cannot steer it into siblings of the
+        // original file. An explicit --workdir opts out; remote images have no
+        // local file to isolate.
+        const isolation =
+            !options.workdir && resolvedInput.kind === 'local' && provider.isolateWorkdir
+                ? isolateImage(resolvedInput.source)
+                : null;
+        try {
+            const invocation = buildInvocation({
+                ...providerOptions,
+                imageSource: isolation?.imageSource ?? providerOptions.imageSource,
+                workdir: isolation?.workdir ?? providerOptions.workdir,
+            });
+            // The grace exists for engines with their own internal deadline (agy
+            // gets --print-timeout). Engines without one must honour the caller's
+            // number as given.
+            const backstop = provider.hasInternalTimeout ? timeoutMs + KILL_GRACE_MS : timeoutMs;
+            const commandResult = await runCommand(
+                provider.name,
+                invocation,
+                backstop,
+                provider.describeFailure,
+            );
+            parsed = parseOutput(commandResult.stdout);
+        } finally {
+            // Output goes over stdout, so nothing here needs to outlive the run.
+            isolation?.cleanup();
+        }
     } else {
         throw new Error(
             `Provider ${provider.name} implements neither execute nor buildInvocation.`,
@@ -159,6 +179,35 @@ function validateInputFile(filePath: string): void {
     if (!stat.isFile()) {
         throw new Error(`Input is not a file: ${filePath}`);
     }
+}
+
+interface IsolatedImage {
+    imageSource: string;
+    workdir: string;
+    cleanup: () => void;
+}
+
+/**
+ * Place the input image, and nothing else, into a fresh temp directory the agent
+ * runs in. Subprocess providers are handed a path and broad permissions, so text
+ * inside the image could otherwise point them at neighbouring files; a directory
+ * of one removes that reach.
+ */
+function isolateImage(source: string): IsolatedImage {
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-work-'));
+    const imageSource = path.join(workdir, path.basename(source));
+    try {
+        // A hardlink shares the bytes with no copy; fall back to a real copy
+        // across devices or when linking is not permitted.
+        fs.linkSync(source, imageSource);
+    } catch {
+        fs.copyFileSync(source, imageSource);
+    }
+    return {
+        imageSource,
+        workdir,
+        cleanup: () => fs.rmSync(workdir, { recursive: true, force: true }),
+    };
 }
 
 /** Exported for tests: the timeout path is otherwise behind a 30s backstop. */

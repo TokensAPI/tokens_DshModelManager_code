@@ -52,6 +52,13 @@ export interface VisionProvider {
     describeFailure?: (context: ProviderFailureContext) => string | null;
     /** True when the CLI enforces its own deadline, so we add a kill backstop. */
     hasInternalTimeout?: boolean;
+    /**
+     * True for subprocess agents that read a path with broad permissions: the
+     * analyzer runs them in a throwaway directory holding only the one image, so
+     * a prompt injection in the image cannot steer them into sibling files. An
+     * explicit --workdir opts out.
+     */
+    isolateWorkdir?: boolean;
 }
 
 const PROVIDERS: Record<string, VisionProvider> = {

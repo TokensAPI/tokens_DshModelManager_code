@@ -232,4 +232,5 @@ export const antigravityCliProvider: VisionProvider = {
     parseOutput: parseAntigravityOutput,
     describeFailure: describeAntigravityFailure,
     hasInternalTimeout: true,
+    isolateWorkdir: true,
 };

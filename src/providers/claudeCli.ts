@@ -104,4 +104,5 @@ export const claudeCliProvider: VisionProvider = {
     defaultModel: CLAUDE_CLI_DEFAULT_MODEL,
     buildInvocation: buildClaudeCliInvocation,
     parseOutput: parseClaudeCliOutput,
+    isolateWorkdir: true,
 };
