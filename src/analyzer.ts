@@ -181,7 +181,10 @@ export function runCommand(
             // dies.
             settle(null);
             setTimeout(() => {
-                if (!child.killed) {
+                // child.killed only means a signal was delivered, not that the
+                // process left, so a child ignoring SIGTERM read as "killed" and
+                // never got SIGKILL. Escalate on "has not exited yet" instead.
+                if (!exited) {
                     child.kill('SIGKILL');
                 }
             }, SIGKILL_GRACE_MS).unref();

@@ -87,4 +87,54 @@ describe('provider subprocess handling', () => {
             runCommand('fake', { command: bin, args: [], cwd: os.tmpdir() }, 1_000),
         ).rejects.toThrow(/timed out after 1000 ms/);
     }, 20_000);
+
+    it('escalates to SIGKILL when the child ignores SIGTERM', async () => {
+        // The real failure mode: a process that traps SIGTERM. child.killed goes
+        // true the instant SIGTERM is delivered, so the old !child.killed guard
+        // never fired SIGKILL and this process would outlive the timeout.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-kill-'));
+        cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+        const bin = path.join(dir, 'stubborn');
+        const pidFile = path.join(dir, 'pid');
+        // trap '' TERM ignores SIGTERM outright; only SIGKILL can end this.
+        fs.writeFileSync(
+            bin,
+            `#!/bin/sh\ntrap '' TERM\necho $$ > "$1"\nwhile true; do sleep 1; done\n`,
+            { mode: 0o755 },
+        );
+
+        await expect(
+            runCommand('fake', { command: bin, args: [pidFile], cwd: dir }, 500),
+        ).rejects.toThrow(/timed out after 500 ms/);
+
+        const pid = await waitFor(() => {
+            const raw = fs.existsSync(pidFile) ? fs.readFileSync(pidFile, 'utf-8').trim() : '';
+            return raw ? Number(raw) : null;
+        });
+        // The caller already has its timeout error; the process itself must still
+        // be gone, killed by the SIGKILL backstop rather than left running.
+        await waitFor(() => (isAlive(pid) ? null : true));
+        expect(isAlive(pid)).toBe(false);
+    }, 15_000);
 });
+
+function isAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function waitFor<T>(probe: () => T | null | undefined, timeoutMs = 8_000): Promise<T> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const value = probe();
+        if (value !== null && value !== undefined && value !== false) {
+            return value;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error('waitFor timed out');
+}
