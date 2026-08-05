@@ -5,6 +5,7 @@
 A code-review pass. Two user-facing bugs, a stack of doc corrections, and the tooling a public repo is expected to carry.
 
 - A provider that ignores SIGTERM on timeout is now actually killed. The SIGKILL backstop checked `child.killed`, which turns true the moment a signal is delivered, not when the process exits, so a child that trapped SIGTERM read as already dead and was never escalated. It now tracks whether the process has exited and sends SIGKILL when it has not.
+- The published npm package now includes `docs/`, `CHANGELOG.md`, and `SECURITY.md`. The README links to the harness, security, and troubleshooting docs, but the `files` allow-list left them out of the tarball, so those links 404'd for anyone reading the package on npm.
 - CI now runs on macOS as well as Linux across the Node 18/20/22 matrix, so a macOS-only regression (path handling, `mkdtemp`, file modes) is caught before release.
 - `vitest` moves to 3.2.7 to match `@vitest/coverage-v8`, silencing the version-mismatch warning `pnpm coverage` printed when the two drifted.
 - The `node:sqlite` requirement for OpenCode paste recovery is stated correctly: Node **22.13+**, not 22.5. The module was added in 22.5 but behind `--experimental-sqlite`, and only became available without a flag in 22.13. Both READMEs, CONTRIBUTING, the harness and troubleshooting docs, the runtime error message, and the CI comment now agree.
