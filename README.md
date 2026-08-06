@@ -22,35 +22,28 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
 </p>
 
-```text
-Send this to your AI: install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md
-```
-
 Text-only models like DeepSeek-V4-Flash have no vision capability and cannot process screenshots or images. ModLens hands the image to a real vision engine and returns structured evidence the model can quote: every word transcribed, the layout mapped into reading-order regions, uncertain parts marked. It also solves a problem other bridges do not: **images pasted directly into the chat are recovered and read**, with no save-to-file step.
 
 ## Highlights
 
-- **Pasted images are recoverable.** A pasted image never becomes a file, so other vision bridges cannot process it. ModLens recovers it from the harness's local session storage.
 - **Evidence, not an impression.** Full transcription, reading-order layout regions, entity and relation lists. The model quotes specifics.
-- **Uncertainty is explicit.** Unclear content goes into the `uncertainty` field. Pixel coordinates and confidence scores, the two data points vision models most often fabricate, are deliberately excluded.
-- **Keep your model.** The model was chosen for price and reasoning. That choice stays.
 - **Free to start.** The default engine (Antigravity CLI) needs no key. A free Gemini key brings a read down to 5-10 seconds.
 - **Install once, use everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
 
 ## Installation
 
-Send this line to your AI. It installs, configures, and verifies the skill, then reports back:
+**Step 1, set up a vision engine (the only part that needs your hands).** The recommended choice is a free Gemini key: get one at [Google AI Studio](https://aistudio.google.com), about three minutes, no credit card.
 
-> Install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md, then run the health check and tell me the result.
-
-The recommended engine is a free Gemini key: get one at [Google AI Studio](https://aistudio.google.com) (about three minutes, no credit card), then send the key to your AI and let it configure the engine.
-
-To avoid any sign-up, use Antigravity CLI instead. **The one step that needs your hands** is its browser sign-in:
+To avoid any sign-up, install Antigravity CLI instead and complete its browser sign-in yourself:
 
 ```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash   # install, skip if your AI already did
+curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy                                                           # sign in, then exit
 ```
+
+**Step 2, hand the rest to your AI.** Send it this line, along with the key if you chose one:
+
+> Install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md, then run the health check and tell me the result.
 
 ## Usage
 

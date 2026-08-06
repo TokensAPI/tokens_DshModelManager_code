@@ -22,35 +22,28 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
 </p>
 
-```text
-把这句话发给你的 AI：按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill
-```
-
 DeepSeek-V4-Flash 这类纯文本模型没有视觉能力，无法处理截图和图片。ModLens 把图片交给真正的视觉引擎，返回模型可以引用的结构化证据：图中文字逐句转录，版面按阅读顺序划分区块，读不准的部分明确标出。它还解决了一个别家没有解决的问题：**直接粘贴进对话的图片也能识别**，无需先保存成文件再提供路径。
 
 ## 亮点
 
-- **粘贴的图片可恢复。** 粘贴的图片不会落成文件，其他视觉方案因此无法处理。ModLens 从宿主的本地会话存储中将它恢复出来。
 - **返回证据，而非印象。** 全文转录、按阅读顺序划分的版面区块、实体与关系列表，模型引用的是具体内容。
-- **不确定性明确标注。** 读不准的内容进入 `uncertainty` 字段。像素坐标和置信度这两类视觉模型最常编造的数据已被移除。
-- **不更换模型。** 选择 DeepSeek 是为了价格和推理能力，这个选择不需要改变。
 - **免费起步。** 默认引擎 Antigravity CLI 无需 key。配一个免费的 Gemini key 可将识别耗时降至 5 到 10 秒。
 - **一次安装，多端可用。** Claude Code、Codex、Pi、OpenCode 均经真机验证。
 
 ## 安装
 
-把下面这句话发给你的 AI，它会完成安装、配置和验证，并把结果告诉你：
+**第一步，准备一个视觉引擎（唯一需要你亲手做的）。** 推荐免费的 Gemini key：到 [Google AI Studio](https://aistudio.google.com) 领取，约三分钟，无需信用卡。
 
-> 按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill，完成后运行体检并把结果告诉我。
-
-推荐引擎是免费的 Gemini key：到 [Google AI Studio](https://aistudio.google.com) 领取（约三分钟，无需信用卡），把 key 发给你的 AI 让它配置。
-
-想完全免注册就用 Antigravity CLI。**唯一需要亲手做的一步**是它的浏览器登录：
+想完全免注册就改装 Antigravity CLI，在浏览器完成本人登录：
 
 ```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash   # 安装，AI 已代装过则跳过
+curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy                                                           # 浏览器完成登录后退出
 ```
+
+**第二步，剩下的交给你的 AI。** 把这句话发给它，用 Gemini key 的话把 key 一起发：
+
+> 按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill，完成后运行体检并把结果告诉我。
 
 ## 用法
 
