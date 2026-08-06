@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { recoverPastedImages } from '../index.ts';
 import { buildOpencodeQuery, escapeLikePattern } from './opencode.ts';
 
+const onWindows = process.platform === 'win32';
+
 // The suite itself runs inside a real harness, so default every test to
 // unscoped scanning.
 beforeEach(() => {
@@ -152,12 +154,25 @@ describe.skipIf(!DatabaseSync)('opencode harness support', () => {
 
     function withHome<T>(home: string, run: () => T): T {
         const realHome = process.env.HOME;
+        const realUserProfile = process.env.USERPROFILE;
+        // os.homedir() reads HOME on POSIX and USERPROFILE on Windows; set both so
+        // the opencode db lookup lands in the fake home on either platform.
         process.env.HOME = home;
+        process.env.USERPROFILE = home;
         try {
             return run();
         } finally {
-            process.env.HOME = realHome;
+            restoreEnv('HOME', realHome);
+            restoreEnv('USERPROFILE', realUserProfile);
             fs.rmSync(home, { recursive: true, force: true });
+        }
+    }
+
+    function restoreEnv(key: string, value: string | undefined): void {
+        if (value === undefined) {
+            delete process.env[key];
+        } else {
+            process.env[key] = value;
         }
     }
 
@@ -255,7 +270,11 @@ describe.skipIf(!DatabaseSync)('opencode harness support', () => {
         });
     });
 
-    it('outranks older jsonl images when its part is newest', () => {
+    // Mixes an OpenCode db image with a Claude JSONL fixture. The Claude side keys
+    // off the Claude project slug, which keeps the drive colon on Windows and so
+    // cannot be located there; the cross-store ranking is exercised on POSIX. The
+    // three tests above already prove OpenCode recovery end to end on Windows.
+    it.skipIf(onWindows)('outranks older jsonl images when its part is newest', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-oc2-'));
         const cwd = '/tmp/proj';
         const claudeDir = path.join(home, '.claude', 'projects', '-tmp-proj');

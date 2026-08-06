@@ -9,6 +9,16 @@ import {
     recoverPastedImages,
 } from './index.ts';
 
+// Recovery from JSONL stores keys off os.homedir() and the harness slug
+// conventions (Claude Code, Pi), both of which are POSIX-shaped here: HOME points
+// at a temp home, cwds are POSIX paths, and the slugs derive from them. On Windows
+// os.homedir() reads USERPROFILE and the Claude slug keeps the drive colon, so
+// these fixtures cannot stand in for a real Windows layout; the suites that depend
+// on them are scoped to POSIX. The OpenCode path, the one issue #11 fixed, is
+// verified on Windows in adapters/opencode.test.ts, and the transcript-based and
+// Codex-guard tests below stay cross-platform.
+const onWindows = process.platform === 'win32';
+
 // The suite itself runs inside a real harness (its process ancestry and env
 // would trip detection), so default every test to unscoped scanning and let
 // detection tests opt in explicitly.
@@ -59,7 +69,7 @@ function piImageLine(data: string, timestamp: string, mimeType = 'image/png'): s
     });
 }
 
-describe('slug encoding', () => {
+describe.skipIf(onWindows)('slug encoding', () => {
     it('derives claude project slugs (slashes and dots become dashes)', () => {
         expect(claudeProjectSlug('/Users/dev/projects/liustack-web')).toBe(
             '-Users-dev-projects-liustack-web',
@@ -125,7 +135,7 @@ describe('extractUserImages + recoverPastedImages', () => {
     });
 });
 
-describe('locateTranscript (via recoverPastedImages)', () => {
+describe.skipIf(onWindows)('locateTranscript (via recoverPastedImages)', () => {
     it('picks the session with the newest image timestamp, resisting mtime misdirection', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
         const cwd = '/tmp/proj';
@@ -158,7 +168,7 @@ describe('locateTranscript (via recoverPastedImages)', () => {
     });
 });
 
-describe('transcriptForSession', () => {
+describe.skipIf(onWindows)('transcriptForSession', () => {
     it('targets the exact session file and errors on a missing one', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-sess-'));
         const cwd = '/tmp/proj';
@@ -194,7 +204,7 @@ describe('transcriptForSession', () => {
     });
 });
 
-describe('pi harness support', () => {
+describe.skipIf(onWindows)('pi harness support', () => {
     it('recovers pi-format images and reports the harness', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-pi-'));
         const cwd = '/tmp/proj';
@@ -253,100 +263,109 @@ describe('pi harness support', () => {
 });
 
 describe('harness detection scoping', () => {
-    it('scopes recovery to the detected harness even when another store has newer images', () => {
-        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-scope-'));
-        const cwd = '/tmp/proj';
-        const claudeDir = path.join(home, '.claude', 'projects', '-tmp-proj');
-        fs.mkdirSync(claudeDir, { recursive: true });
-        fs.writeFileSync(
-            path.join(claudeDir, 'c.jsonl'),
-            imageLine('claude-newer', '2026-08-04T09:00:00.000Z'),
-        );
-        const piDir = path.join(home, '.pi', 'agent', 'sessions', '--tmp-proj--');
-        fs.mkdirSync(piDir, { recursive: true });
-        fs.writeFileSync(
-            path.join(piDir, '2026-08-04T01-00-00-000Z_abcd.jsonl'),
-            piImageLine('pi-older', '2026-08-04T01:00:00.000Z'),
-        );
-
-        const realHome = process.env.HOME;
-        process.env.HOME = home;
-        process.env.MODLENS_HARNESS = 'pi';
-        try {
-            const result = recoverPastedImages({ cwd, outDir: path.join(home, 'out') });
-            expect(result.harness).toBe('pi');
-            expect(result.detected).toBe('pi');
-            expect(fs.readFileSync(result.images[0].path).toString()).toBe('pi-older');
-        } finally {
-            process.env.HOME = realHome;
-            fs.rmSync(home, { recursive: true, force: true });
-        }
-    });
-
-    it('refuses to fall through to other stores when the detected harness has nothing', () => {
-        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-scope2-'));
-        const cwd = '/tmp/proj';
-        const claudeDir = path.join(home, '.claude', 'projects', '-tmp-proj');
-        fs.mkdirSync(claudeDir, { recursive: true });
-        fs.writeFileSync(
-            path.join(claudeDir, 'c.jsonl'),
-            imageLine('stale-claude', '2026-08-04T09:00:00.000Z'),
-        );
-
-        const realHome = process.env.HOME;
-        process.env.HOME = home;
-        process.env.MODLENS_HARNESS = 'opencode';
-        try {
-            expect(() => recoverPastedImages({ cwd, outDir: path.join(home, 'out') })).toThrow(
-                /No pasted images/,
+    it.skipIf(onWindows)(
+        'scopes recovery to the detected harness even when another store has newer images',
+        () => {
+            const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-scope-'));
+            const cwd = '/tmp/proj';
+            const claudeDir = path.join(home, '.claude', 'projects', '-tmp-proj');
+            fs.mkdirSync(claudeDir, { recursive: true });
+            fs.writeFileSync(
+                path.join(claudeDir, 'c.jsonl'),
+                imageLine('claude-newer', '2026-08-04T09:00:00.000Z'),
             );
-        } finally {
-            process.env.HOME = realHome;
-            fs.rmSync(home, { recursive: true, force: true });
-        }
-    });
+            const piDir = path.join(home, '.pi', 'agent', 'sessions', '--tmp-proj--');
+            fs.mkdirSync(piDir, { recursive: true });
+            fs.writeFileSync(
+                path.join(piDir, '2026-08-04T01-00-00-000Z_abcd.jsonl'),
+                piImageLine('pi-older', '2026-08-04T01:00:00.000Z'),
+            );
+
+            const realHome = process.env.HOME;
+            process.env.HOME = home;
+            process.env.MODLENS_HARNESS = 'pi';
+            try {
+                const result = recoverPastedImages({ cwd, outDir: path.join(home, 'out') });
+                expect(result.harness).toBe('pi');
+                expect(result.detected).toBe('pi');
+                expect(fs.readFileSync(result.images[0].path).toString()).toBe('pi-older');
+            } finally {
+                process.env.HOME = realHome;
+                fs.rmSync(home, { recursive: true, force: true });
+            }
+        },
+    );
+
+    it.skipIf(onWindows)(
+        'refuses to fall through to other stores when the detected harness has nothing',
+        () => {
+            const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-scope2-'));
+            const cwd = '/tmp/proj';
+            const claudeDir = path.join(home, '.claude', 'projects', '-tmp-proj');
+            fs.mkdirSync(claudeDir, { recursive: true });
+            fs.writeFileSync(
+                path.join(claudeDir, 'c.jsonl'),
+                imageLine('stale-claude', '2026-08-04T09:00:00.000Z'),
+            );
+
+            const realHome = process.env.HOME;
+            process.env.HOME = home;
+            process.env.MODLENS_HARNESS = 'opencode';
+            try {
+                expect(() => recoverPastedImages({ cwd, outDir: path.join(home, 'out') })).toThrow(
+                    /No pasted images/,
+                );
+            } finally {
+                process.env.HOME = realHome;
+                fs.rmSync(home, { recursive: true, force: true });
+            }
+        },
+    );
 
     it('rejects recover-paste in codex with path-tag guidance', () => {
         process.env.MODLENS_HARNESS = 'codex';
         expect(() => recoverPastedImages({ cwd: '/tmp/nowhere' })).toThrow(/Codex session/);
     });
 
-    it('auto-targets the exact Claude Code session from the injected env var', () => {
-        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-envsess-'));
-        const cwd = '/tmp/proj';
-        const claudeDir = path.join(home, '.claude', 'projects', '-tmp-proj');
-        fs.mkdirSync(claudeDir, { recursive: true });
-        // decoy holds the newer image; env session must still win
-        fs.writeFileSync(
-            path.join(claudeDir, 'decoy.jsonl'),
-            imageLine('decoy-newer', '2026-08-04T09:00:00.000Z'),
-        );
-        fs.writeFileSync(
-            path.join(claudeDir, 'env-sess.jsonl'),
-            imageLine('mine', '2026-08-04T01:00:00.000Z'),
-        );
+    it.skipIf(onWindows)(
+        'auto-targets the exact Claude Code session from the injected env var',
+        () => {
+            const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-envsess-'));
+            const cwd = '/tmp/proj';
+            const claudeDir = path.join(home, '.claude', 'projects', '-tmp-proj');
+            fs.mkdirSync(claudeDir, { recursive: true });
+            // decoy holds the newer image; env session must still win
+            fs.writeFileSync(
+                path.join(claudeDir, 'decoy.jsonl'),
+                imageLine('decoy-newer', '2026-08-04T09:00:00.000Z'),
+            );
+            fs.writeFileSync(
+                path.join(claudeDir, 'env-sess.jsonl'),
+                imageLine('mine', '2026-08-04T01:00:00.000Z'),
+            );
 
-        const realHome = process.env.HOME;
-        process.env.HOME = home;
-        process.env.MODLENS_HARNESS = 'claude-code';
-        process.env.CLAUDE_CODE_SESSION_ID = 'env-sess';
-        try {
-            const result = recoverPastedImages({ cwd, outDir: path.join(home, 'out') });
-            expect(result.transcript.endsWith('env-sess.jsonl')).toBe(true);
-            expect(fs.readFileSync(result.images[0].path).toString()).toBe('mine');
+            const realHome = process.env.HOME;
+            process.env.HOME = home;
+            process.env.MODLENS_HARNESS = 'claude-code';
+            process.env.CLAUDE_CODE_SESSION_ID = 'env-sess';
+            try {
+                const result = recoverPastedImages({ cwd, outDir: path.join(home, 'out') });
+                expect(result.transcript.endsWith('env-sess.jsonl')).toBe(true);
+                expect(fs.readFileSync(result.images[0].path).toString()).toBe('mine');
 
-            // an env session with no transcript must fall back to scanning
-            process.env.CLAUDE_CODE_SESSION_ID = 'gone-sess';
-            const fallback = recoverPastedImages({ cwd, outDir: path.join(home, 'out') });
-            expect(fs.readFileSync(fallback.images[0].path).toString()).toBe('decoy-newer');
-        } finally {
-            process.env.HOME = realHome;
-            fs.rmSync(home, { recursive: true, force: true });
-        }
-    });
+                // an env session with no transcript must fall back to scanning
+                process.env.CLAUDE_CODE_SESSION_ID = 'gone-sess';
+                const fallback = recoverPastedImages({ cwd, outDir: path.join(home, 'out') });
+                expect(fs.readFileSync(fallback.images[0].path).toString()).toBe('decoy-newer');
+            } finally {
+                process.env.HOME = realHome;
+                fs.rmSync(home, { recursive: true, force: true });
+            }
+        },
+    );
 });
 
-describe('cross-project safety', () => {
+describe.skipIf(onWindows)('cross-project safety', () => {
     it('rejects a transcript whose recorded cwd belongs to another project', () => {
         // /tmp/project.alpha and /tmp/project-alpha share one Claude slug.
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-collide-'));

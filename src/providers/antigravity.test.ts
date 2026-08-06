@@ -11,6 +11,14 @@ import {
     parseAntigravityOutput,
 } from './antigravity.ts';
 
+function restoreEnv(key: string, value: string | undefined): void {
+    if (value === undefined) {
+        delete process.env[key];
+    } else {
+        process.env[key] = value;
+    }
+}
+
 describe('buildAntigravityInvocation', () => {
     it('builds agy print invocation with schema-enforced json output', () => {
         const invocation = buildAntigravityInvocation({
@@ -106,16 +114,20 @@ describe('parseAntigravityOutput', () => {
 
 describe('describeAntigravityFailure', () => {
     const realHome = process.env.HOME;
+    const realUserProfile = process.env.USERPROFILE;
     let fakeHome: string;
 
     beforeEach(() => {
-        // Isolate from this machine's real agy logs.
+        // Isolate from this machine's real agy logs. os.homedir() reads HOME on
+        // POSIX and USERPROFILE on Windows, so point both at the fake home.
         fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-agy-'));
         process.env.HOME = fakeHome;
+        process.env.USERPROFILE = fakeHome;
     });
 
     afterEach(() => {
-        process.env.HOME = realHome;
+        restoreEnv('HOME', realHome);
+        restoreEnv('USERPROFILE', realUserProfile);
         fs.rmSync(fakeHome, { recursive: true, force: true });
     });
 
@@ -222,7 +234,9 @@ describe('log evidence is scoped to this run', () => {
         fs.writeFileSync(path.join(dir, 'cli.log'), stamp(old));
 
         const realHome = process.env.HOME;
+        const realUserProfile = process.env.USERPROFILE;
         process.env.HOME = home;
+        process.env.USERPROFILE = home;
         try {
             const message = describeAntigravityFailure({
                 stdout: JSON.stringify({
@@ -237,7 +251,8 @@ describe('log evidence is scoped to this run', () => {
             expect(message).not.toContain('weekly bucket');
             expect(message).toContain('Agent execution terminated');
         } finally {
-            process.env.HOME = realHome;
+            restoreEnv('HOME', realHome);
+            restoreEnv('USERPROFILE', realUserProfile);
             fs.rmSync(home, { recursive: true, force: true });
         }
     });

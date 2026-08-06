@@ -4,12 +4,14 @@ import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { analyzeImage, resolveInput, runCommand } from './analyzer.ts';
 
+const onWindows = process.platform === 'win32';
+
 describe('resolveInput', () => {
     it('resolves local paths to absolute paths', () => {
         const resolved = resolveInput('some/dir/img.png');
         expect(resolved.kind).toBe('local');
-        expect(resolved.source.startsWith('/')).toBe(true);
-        expect(resolved.source.endsWith('some/dir/img.png')).toBe(true);
+        expect(path.isAbsolute(resolved.source)).toBe(true);
+        expect(resolved.source.endsWith(path.join('some', 'dir', 'img.png'))).toBe(true);
     });
 
     it('keeps https URLs as remote sources', () => {
@@ -19,7 +21,7 @@ describe('resolveInput', () => {
 
     it('unwraps file:// URLs into local paths', () => {
         const resolved = resolveInput('file:///tmp/shot.png');
-        expect(resolved).toEqual({ source: '/tmp/shot.png', kind: 'local' });
+        expect(resolved).toEqual({ source: path.resolve('/tmp/shot.png'), kind: 'local' });
     });
 
     it('rejects empty input', () => {
@@ -27,7 +29,11 @@ describe('resolveInput', () => {
     });
 });
 
-describe('provider subprocess handling', () => {
+// These exercise real subprocess lifecycle (pipe draining, SIGTERM/SIGKILL) with
+// `#!/bin/sh` fake providers, which a POSIX shell has to run. Windows has no
+// equivalent for `trap '' TERM` or a backgrounded `sleep`, so the suite is scoped
+// to POSIX; the CLI's argument wiring is covered cross-platform in main.test.ts.
+describe.skipIf(onWindows)('provider subprocess handling', () => {
     const cleanups: Array<() => void> = [];
 
     afterEach(() => {
