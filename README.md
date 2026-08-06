@@ -69,33 +69,11 @@ And the paste path, end to end: Claude Code on a DeepSeek gateway, two images pa
 
 ![Two pasted images recovered from session storage and read in a gateway Claude Code session](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.png)
 
-## How it works
-
-![A text-only model hands an image to the vision engine through the modlens skill and gets structured JSON evidence back](https://raw.githubusercontent.com/liustack/modlens/main/assets/flow.en.png)
-
-Four steps:
-
-1. The skill triggers when an image shows up: a path, a URL, or the bare placeholder a text-only model gets left with after a paste.
-2. It runs the `modlens` CLI, which hands the image to a vision engine. Five to choose from, the free Antigravity CLI by default.
-3. The engine's reading is forced into a fixed JSON schema: transcription, layout, semantics, uncertainty. Output that does not match the schema is rejected, never patched up.
-4. Your model quotes the evidence and answers.
-
-Paste recovery is the capability other bridges lack. A paste is handled entirely inside the client: the image is encoded and sent the moment it lands, out of reach of any external tool, which is why other bridges require a saved file and a path. But before those bytes leave, the harness has already written them into its local session record. `recover-paste` reads them back from there: JSONL in Claude Code and Pi, SQLite in OpenCode, and Codex needs no recovery at all because its pastes already land as temp files. Details in [harness setup](docs/harness-setup.md).
-
-| | Swap in a multimodal model | Other vision bridges (MCP servers etc.) | ModLens |
-| :-- | :-- | :-- | :-- |
-| Your chosen model | has to change | stays | stays |
-| An image pasted into the chat | visible if the model supports it | out of reach | recovered and read |
-| What you get back | the model's own reading | usually a description | transcription, layout regions, entities |
-| Where it cannot read | may invent | may invent | says so in `uncertainty` |
-| Cost | multimodal model pricing | usually per API call | agy's free quota or a free Gemini key |
-
-The weaknesses, in the same place: agy's free tier is a weekly quota and heavy use hits the wall (a free Gemini key sidesteps it). Session storage layouts are each harness's internals with no compatibility promise, so if recovery ever breaks, dragging the file in still works everywhere.
-
 ## Documentation
 
 | Doc | Read it when |
 | :-- | :-- |
+| [INSTALL.md](INSTALL.md) | Installing the skill step by step (written for an agent) |
 | [CLI manual](skills/modlens/references/cli.md) | The CLI the skill drives: flags, config, doctor |
 | [Troubleshooting](docs/troubleshooting.md) | A command failed and the message needs decoding |
 | [Configuration](skills/modlens/references/configure.md) | Setting a key, switching providers, fixing config |
