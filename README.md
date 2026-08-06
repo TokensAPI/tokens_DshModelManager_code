@@ -22,9 +22,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
 </p>
 
-```bash
-npx -y skills add liustack/modlens             # install the skill
-npx @liustack/modlens -i screenshot.png        # or just use the CLI
+```text
+Send this to your AI: install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md
 ```
 
 Text-only models like DeepSeek-V4-Flash have no vision capability and cannot process screenshots or images. ModLens hands the image to a real vision engine and returns structured evidence the model can quote: every word transcribed, the layout mapped into reading-order regions, uncertain parts marked. It also solves a problem other bridges do not: **images pasted directly into the chat are recovered and read**, with no save-to-file step.
@@ -40,53 +39,13 @@ Text-only models like DeepSeek-V4-Flash have no vision capability and cannot pro
 
 ## Installation
 
-Two ways in. Choose by who is doing the install.
+Send this line to your AI. It installs, configures, and verifies the skill, then reports back:
 
-### If you are a person
+> Install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md, then run the health check and tell me the result.
 
-Run this block top to bottom. It installs the skill, points ModLens at a free Gemini engine, and verifies the result. Nothing to choose:
+The recommended engine is a free Gemini key: get one at [Google AI Studio](https://aistudio.google.com) (about three minutes, no credit card), then send the key to your AI and let it configure the engine.
 
-```bash
-npx -y skills add liustack/modlens
-npx @liustack/modlens config set gemini-api.apiKey <KEY>
-npx @liustack/modlens config set provider gemini-api
-npx @liustack/modlens doctor
-```
-
-Get `<KEY>` from [Google AI Studio](https://aistudio.google.com): about three minutes, no credit card. The last command runs a local health check. You are done when the entry under `Selected provider` reads `[ok]`.
-
-### If you are an AI agent
-
-Tell it: "Install the ModLens skill from https://github.com/liustack/modlens, following its INSTALL.md." The agent reads [INSTALL.md](INSTALL.md), a zero-ambiguity four-step guide, and runs it.
-
-<details>
-<summary>No-key engine, manual install, other engines, multiple agents</summary>
-
-**No key at all.** Antigravity CLI needs no sign-up. It is slower (15-40 seconds), its free quota is a weekly bucket, and its browser sign-in cannot be completed in a headless session, so for agents and servers the Gemini key above is the reliable choice.
-
-```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # sign in, then exit
-```
-
-**Manual skill install.** When the `skills` CLI is unavailable, copy the skill into your host's directory:
-
-| Host | Skill directory |
-| :-- | :-- |
-| Claude Code | `~/.claude/skills/` |
-| Codex | `~/.codex/skills/` |
-| Pi, OpenCode | `~/.agents/skills/` |
-
-The exact clone-and-copy commands and a per-host walkthrough are in [INSTALL.md](INSTALL.md).
-
-**Other engines.** `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (your existing Claude login). Recipes in [Configuration](skills/modlens/references/configure.md).
-
-**Multiple agents on one machine.** Install into each host's directory, or keep one copy under `~/.agents/skills/modlens` and symlink the others to it.
-
-</details>
-
-Requires Node 22.13+.
-
-**Platform support.** macOS and Linux are fully supported and verified in CI on Node 22 and 24. Windows runs the same CI matrix on Node 22 and 24, covering the CLI core, config, `doctor`, harness detection, and OpenCode paste recovery (the [#11](https://github.com/liustack/modlens/issues/11) fix included). The POSIX-only cases (subprocess signal handling, permission bits, and the Claude Code and Pi JSONL home layouts) are guarded out of the Windows run. Harness detection on Windows falls back to environment fingerprints, since there is no `ps` to read the process tree. External engines (Antigravity CLI, Claude CLI) run only where they ship a Windows build.
+To avoid any sign-up, use Antigravity CLI instead. **The one step that needs your hands** is its browser sign-in: after your AI installs it, run `agy` once and sign in.
 
 ## Usage
 
