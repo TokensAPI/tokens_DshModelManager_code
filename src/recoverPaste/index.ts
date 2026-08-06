@@ -100,16 +100,24 @@ function prepareOutDir(explicit?: string): string {
     if (!stat.isDirectory()) {
         throw new Error(`--out-dir exists but is not a directory: ${outDir}.`);
     }
+    // POSIX ownership and permission bits only mean something where the platform
+    // enforces them. On Windows process.getuid is undefined and directories report
+    // mode 0o777, so the ownership and group/world checks would reject every
+    // existing --out-dir. Skip them there and rely on the symlink and
+    // is-a-directory guards above; access control on Windows is ACL-based, outside
+    // what modlens can assert from a stat.
     const uid = typeof process.getuid === 'function' ? process.getuid() : undefined;
-    if (uid !== undefined && stat.uid !== uid) {
-        throw new Error(
-            `--out-dir is owned by another user (uid ${stat.uid}, not ${uid}): ${outDir}. On a shared machine that user could read the recovered images.`,
-        );
-    }
-    if (stat.mode & 0o077) {
-        throw new Error(
-            `--out-dir is group- or world-accessible (mode ${(stat.mode & 0o777).toString(8)}): ${outDir}. Recovered screenshots can hold anything; use a private directory (chmod 700).`,
-        );
+    if (uid !== undefined) {
+        if (stat.uid !== uid) {
+            throw new Error(
+                `--out-dir is owned by another user (uid ${stat.uid}, not ${uid}): ${outDir}. On a shared machine that user could read the recovered images.`,
+            );
+        }
+        if (stat.mode & 0o077) {
+            throw new Error(
+                `--out-dir is group- or world-accessible (mode ${(stat.mode & 0o777).toString(8)}): ${outDir}. Recovered screenshots can hold anything; use a private directory (chmod 700).`,
+            );
+        }
     }
     return outDir;
 }

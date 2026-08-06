@@ -245,7 +245,12 @@ function inspectConfigFile(configPath: string): DoctorReport['config'] {
     try {
         const stat = fs.statSync(configPath);
         const mode = stat.mode & 0o777;
-        const permissionsOk = (mode & 0o077) === 0;
+        // POSIX permission bits are only meaningful where the platform enforces
+        // them. On Windows every file reads back as 0o666/0o777, so judging it by
+        // the group/world bits would warn on a perfectly private file; report the
+        // mode without the verdict there.
+        const enforcesPosixPerms = typeof process.getuid === 'function';
+        const permissionsOk = !enforcesPosixPerms || (mode & 0o077) === 0;
         return {
             path: configPath,
             exists: true,
