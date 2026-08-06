@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { VISION_RESULT_SCHEMA } from '../schema.ts';
 import { buildClaudeCliInvocation, parseClaudeCliOutput } from './claudeCli.ts';
@@ -15,7 +16,9 @@ describe('buildClaudeCliInvocation', () => {
         expect(invocation.args[invocation.args.indexOf('--model') + 1]).toBe('haiku');
         const schemaArg = invocation.args[invocation.args.indexOf('--json-schema') + 1] as string;
         expect(JSON.parse(schemaArg)).toEqual(VISION_RESULT_SCHEMA);
-        expect(invocation.cwd).toBe('/tmp/shots');
+        // buildInvocation resolves the cwd; compare against the resolved form so
+        // the drive-rooted Windows path matches too.
+        expect(invocation.cwd).toBe(path.resolve('/tmp/shots'));
     });
 
     it('rejects remote urls with guidance', () => {
