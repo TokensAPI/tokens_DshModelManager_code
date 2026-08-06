@@ -54,38 +54,7 @@ agy                                                           # 浏览器完成�
 
 ## 用法
 
-安装 skill 后无需记忆命令：粘贴图片或给出图片路径，提问即可，skill 自动触发。手动使用：
-
-```bash
-modlens -i screenshot.png                      # 本地图片
-modlens -i https://example.com/chart.png       # 远程图片
-modlens -i chart.png --prompt "重点看数据轴"    # 指定关注点
-modlens recover-paste                          # 将刚粘贴的图片恢复为文件
-```
-
-输出是结构固定的 JSON：
-
-```json
-{
-  "image": "/path/to/screenshot.png",
-  "provider": "gemini-api",
-  "result": {
-    "summary": "四个节点的工作流图，箭头带标注。",
-    "ocr": { "full_text": "/shaping\nBEFORE YOU BUILD\n...", "lines": [] },
-    "layout": { "regions": [{ "reading_order": 1, "type": "title", "text": "/shaping" }] },
-    "uncertainty": []
-  },
-  "meta": {
-    "generatedAt": "2026-08-06T12:00:00.000Z",
-    "model": "gemini-3.6-flash",
-    "conversationId": null,
-    "durationSeconds": 6.4,
-    "usage": { "promptTokenCount": 1234, "candidatesTokenCount": 567 }
-  }
-}
-```
-
-`meta` 记录结果的产生过程：生成时间（`generatedAt`）、使用的 `model`、provider 返回的 `conversationId`（无则为 null）、实际耗时 `durationSeconds`，以及 provider 报告的原始 `usage`（结构随 provider 而异，无则为 null）。
+装好之后不需要记任何命令。正常聊天，粘贴图片或给出图片路径，提问即可，skill 自动触发：图片交给视觉引擎，答案基于读到的内容返回。
 
 ## 实测
 
@@ -130,48 +99,11 @@ Codex 桌面 App 中识别一张推文截图。配文、互动数据（2.9K 回�
 
 限制如下：agy 免费额度按周发放，重度使用会耗尽（免费 Gemini key 可替代）。会话存储格式是各宿主的内部实现，没有兼容承诺。恢复方式失效时，将图片文件拖入终端始终可用。
 
-## CLI 参数
-
-`modlens analyze`（默认命令）：
-
-| 参数 | 含义 | 默认值 |
-| :-- | :-- | :-- |
-| `-i, --input <path\|url>` | 要识别的图片（必填） | |
-| `-p, --provider <name>` | 视觉 provider | `antigravity-cli` |
-| `-m, --model <name>` | provider 模型 | 按 provider（见下） |
-| `-o, --output <path>` | 同时将 JSON 写入文件 | |
-| `--prompt <text>` | 额外关注点 | |
-| `--timeout <ms>` | provider 超时 | `180000` |
-| `--provider-bin <path>` | provider 可执行文件路径 | `agy` / `claude` |
-| `--workdir <path>` | provider 的工作目录 | 每次运行新建的隔离目录 |
-
-`-m` 的默认模型取决于 provider：
-
-| Provider | 默认模型 |
-| :-- | :-- |
-| `antigravity-cli`（默认） | `gemini-3.6-flash-low` |
-| `gemini-api` | `gemini-3.6-flash` |
-| `anthropic` | `claude-haiku-4-5-20251001` |
-| `claude-cli` | `haiku` |
-| `openai` | 无默认，必须指定 `-m` |
-
-`modlens recover-paste`：
-
-| 参数 | 含义 | 默认值 |
-| :-- | :-- | :-- |
-| `--count <n>` | 恢复最近几张粘贴的图片 | `1` |
-| `--out-dir <path>` | 恢复文件的输出目录 | 每次运行新建的私有目录 `<tmpdir>/modlens-paste-*` |
-| `--session <id>` | 精确指定 session id | 自动检测 |
-| `--transcript <path>` | 显式指定 `.jsonl` 或 `.db`（优先于 `--session`） | |
-| `--harness <name>` | 限定存储范围：`claude-code`、`pi`、`opencode`、`none` | 自动检测 |
-| `--cwd <path>` | 图片粘贴时所在的项目目录 | 当前目录 |
-
-五个 provider：`antigravity-cli`（默认，无需 key）、`gemini-api`（最快的免费路线）、`openai`（任何 OpenAI 兼容多模态端点）、`anthropic`（Claude API）、`claude-cli`（使用现有 Claude 订阅）。另有两个子命令：`modlens config <init|set|show>` 管理配置，`modlens doctor` 输出本机诊断（Node 版本、各 provider 就绪状态、最终选用的 provider 及原因、检测到的宿主），不消耗额度、不发起网络请求，`--json` 输出可供程序消费。
-
 ## 文档
 
 | 文档 | 适用场景 |
 | :-- | :-- |
+| [CLI 手册](skills/modlens/references/cli.md) | skill 所驱动的 CLI：参数、配置与体检 |
 | [故障排查](docs/troubleshooting.md) | 命令报错，查成因和解法 |
 | [配置手册](skills/modlens/references/configure.md) | 配置 key、切换 provider、排查配置 |
 | [输出契约](skills/modlens/references/output-schema.md) | 解析 JSON 或构建下游工具 |
