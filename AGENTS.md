@@ -20,9 +20,10 @@ pnpm install
 
 ```
 src/
-├── main.ts           # CLI entry: analyze (default), recover-paste, config subcommands
+├── main.ts           # CLI entry: analyze (default), recover-paste, doctor, config subcommands
 ├── analyzer.ts       # orchestration: input resolution, config merge, provider dispatch
 ├── config.ts         # layered config load/set/show/init
+├── doctor.ts         # offline diagnostics: Node, provider readiness, selection, harness, config perms
 ├── prompt.ts         # vision prompt (local/remote agent modes + inline api mode)
 ├── schema.ts         # vision result JSON schema (single source of truth)
 ├── imageInput.ts     # base64/mime helpers (local + remote image bytes)
@@ -55,6 +56,7 @@ skills/modlens/
 modlens -i screenshot.png                     # default provider (antigravity-cli)
 modlens -i screenshot.png -p gemini-api       # fastest free route (5-10s)
 modlens recover-paste --session <uuid>        # Claude Code pasted-image recovery
+modlens doctor                                # offline config/routing diagnosis (--json for machine output)
 modlens config show
 ```
 

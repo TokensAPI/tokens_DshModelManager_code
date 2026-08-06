@@ -13,6 +13,7 @@ import {
     renderEffectiveConfig,
     setConfigValue,
 } from './config.ts';
+import { buildDoctorReport, renderDoctorReport } from './doctor.ts';
 import { listProviders } from './providers/index.ts';
 import { recoverPastedImages } from './recoverPaste/index.ts';
 
@@ -100,6 +101,33 @@ program
                 harness: options.harness,
             });
             process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        } catch (error) {
+            process.stderr.write(
+                `Error: ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+            process.exit(1);
+        }
+    });
+
+program
+    .command('doctor')
+    .description(
+        'Diagnose local config and routing (Node, providers, selection, harness) without spending quota or hitting the network',
+    )
+    .option('--json', 'Emit the report as JSON')
+    .option('-p, --provider <name>', 'Show which provider this -p value would select')
+    .action((options: { json?: boolean; provider?: string }) => {
+        try {
+            const report = buildDoctorReport({
+                config: loadConfigFile(),
+                env: process.env,
+                providerFlag: options.provider,
+                configPath: CONFIG_PATH,
+            });
+            const output = options.json
+                ? JSON.stringify(report, null, 2)
+                : renderDoctorReport(report);
+            process.stdout.write(`${output}\n`);
         } catch (error) {
             process.stderr.write(
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,

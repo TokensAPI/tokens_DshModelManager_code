@@ -175,7 +175,7 @@ Codex 桌面 App 里丢一张推文截图。配文、互动数据（2.9K 回复�
 | `--harness <name>` | 强制存储范围：`claude-code`、`pi`、`opencode`、`none` | 自动检测 |
 | `--cwd <path>` | 图片是在哪个项目目录粘贴的 | 当前目录 |
 
-五个 provider 可选：`antigravity-cli`（默认，零 key）、`gemini-api`（最快的免费路线）、`openai`（任何 OpenAI 兼容多模态端点）、`anthropic`、`claude-cli`（吃你的 Claude 订阅）。另有 `modlens config <init|set|show>` 管配置。
+五个 provider 可选：`antigravity-cli`（默认，零 key）、`gemini-api`（最快的免费路线）、`openai`（任何 OpenAI 兼容多模态端点）、`anthropic`、`claude-cli`（吃你的 Claude 订阅）。另有两个子命令：`modlens config <init|set|show>` 管配置，`modlens doctor` 体检本机（Node 版本、各 provider 就绪状态、最终会选哪个 provider 及原因、检测到的 harness），不消耗额度、不发网络请求，加 `--json` 输出机器可读报告。
 
 ## 文档
 
