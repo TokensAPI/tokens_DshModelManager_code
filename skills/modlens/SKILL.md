@@ -116,7 +116,7 @@ Structure is enforced by schema on antigravity-cli and claude-cli (`--json-schem
 
 ## Failure Handling
 
-Every error this CLI prints is catalogued with its cause and fix in the project's `docs/troubleshooting.md`. Read the message first: most of them already name the fix.
+Every error this CLI prints names its cause, and most already name the fix, so read the message first.
 
 - `Provider CLI not found`: Antigravity CLI is not installed. Install it, or switch provider: `-p gemini-api`.
 - Missing key errors name the exact env var and `config set` command to run. Relay that to the user.
