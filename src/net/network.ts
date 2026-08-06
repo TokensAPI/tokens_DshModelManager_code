@@ -187,11 +187,7 @@ function isPrivateIPv6(ipAddress: string): boolean {
     // ::ffff:127.0.0.1 normalizes to ::ffff:7f00:1, whose last two groups are
     // the IPv4 address in hex. Judging it as IPv6 would wave through loopback.
     const groups = expandIpv6(ipAddress);
-    if (
-        groups !== null &&
-        groups.slice(0, 5).every((group) => group === 0) &&
-        groups[5] === 0xffff
-    ) {
+    if (groups !== null && hasMappedV4Prefix(groups)) {
         const mapped = [groups[6] >> 8, groups[6] & 0xff, groups[7] >> 8, groups[7] & 0xff].join(
             '.',
         );
@@ -217,6 +213,10 @@ function isPrivateIPv6(ipAddress: string): boolean {
         inIpv6Range(value, 'ff00::', 8) ||
         inIpv6Range(value, '2001:db8::', 32)
     );
+}
+
+function hasMappedV4Prefix(groups: number[]): boolean {
+    return groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff;
 }
 
 function extractMappedIpv4(ipAddress: string): string | null {

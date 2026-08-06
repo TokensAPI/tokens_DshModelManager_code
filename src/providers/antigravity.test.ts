@@ -61,7 +61,9 @@ describe('buildAntigravityInvocation', () => {
         expect(prompt).toContain(
             'Fetch the image at this URL and analyze it: https://example.com/demo.png',
         );
-        expect(invocation.cwd).toBe(process.cwd());
+        // Never the caller's directory: the analyzer supplies an isolated
+        // workdir, and the provider's own fallback is the neutral tmpdir.
+        expect(invocation.cwd).toBe(path.resolve(os.tmpdir()));
     });
 });
 
