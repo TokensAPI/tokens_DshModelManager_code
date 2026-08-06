@@ -98,7 +98,7 @@ export const VISION_RESULT_SCHEMA = {
         },
         uncertainty: { type: 'array', items: { type: 'string' } },
     },
-    required: ['summary', 'ocr', 'layout', 'semantics', 'uncertainty'],
+    required: ['summary', 'ocr', 'layout', 'semantics', 'visual', 'uncertainty'],
 } as const;
 
 export function visionResultSchemaJson(): string {
@@ -106,38 +106,81 @@ export function visionResultSchemaJson(): string {
 }
 
 /**
- * Required fields the vision contract promises, nested ones included. Returns
- * the paths that are absent or the wrong type.
+ * The paths where a result violates the vision contract: absent required
+ * fields, wrong types, wrong element types inside arrays, values outside an
+ * enum. Empty means the result matches.
  *
  * Server-side schema enforcement only covers some routes (gemini responseSchema,
  * anthropic tool input_schema, agy/claude-cli --json-schema), and even those can
  * hand back a shell that only looks right. This is the portable check the
  * analyzer runs over every provider's result, so a structurally broken payload
  * fails loudly instead of reaching the caller as if it were evidence.
+ *
+ * The walk is driven by VISION_RESULT_SCHEMA itself, so the provider schema and
+ * this runtime check can never disagree: there is one source of truth.
  */
 export function missingSchemaFields(result: unknown): string[] {
-    const missing: string[] = [];
-    const root = (result ?? {}) as Record<string, unknown>;
-    const child = (key: string) =>
-        (root[key] && typeof root[key] === 'object' ? root[key] : {}) as Record<string, unknown>;
+    return schemaViolations(VISION_RESULT_SCHEMA as JsonSchemaNode, result, '');
+}
 
-    const expect = (path: string, ok: boolean) => {
-        if (!ok) {
-            missing.push(path);
+interface JsonSchemaNode {
+    type?: string;
+    properties?: Record<string, JsonSchemaNode>;
+    required?: readonly string[];
+    items?: JsonSchemaNode;
+    enum?: readonly string[];
+}
+
+function schemaViolations(schema: JsonSchemaNode, value: unknown, path: string): string[] {
+    const label = path || '(root)';
+
+    if (schema.type === 'object') {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+            return [label];
         }
-    };
+        const record = value as Record<string, unknown>;
+        const violations: string[] = [];
+        for (const [key, childSchema] of Object.entries(schema.properties ?? {})) {
+            const childPath = path ? `${path}.${key}` : key;
+            const isRequired = schema.required?.includes(key) ?? false;
+            if (!(key in record) || record[key] === undefined) {
+                if (isRequired) {
+                    violations.push(childPath);
+                }
+                continue;
+            }
+            // A present field must match its schema whether required or not.
+            violations.push(...schemaViolations(childSchema, record[key], childPath));
+        }
+        return violations;
+    }
 
-    expect('summary', typeof root.summary === 'string');
-    expect('ocr', typeof root.ocr === 'object' && root.ocr !== null);
-    expect('ocr.full_text', typeof child('ocr').full_text === 'string');
-    expect('ocr.lines', Array.isArray(child('ocr').lines));
-    expect('layout', typeof root.layout === 'object' && root.layout !== null);
-    expect('layout.regions', Array.isArray(child('layout').regions));
-    expect('semantics', typeof root.semantics === 'object' && root.semantics !== null);
-    expect('semantics.scene', typeof child('semantics').scene === 'string');
-    expect('semantics.entities', Array.isArray(child('semantics').entities));
-    expect('visual', typeof root.visual === 'object' && root.visual !== null);
-    expect('uncertainty', Array.isArray(root.uncertainty));
+    if (schema.type === 'array') {
+        if (!Array.isArray(value)) {
+            return [label];
+        }
+        if (!schema.items) {
+            return [];
+        }
+        const itemSchema = schema.items;
+        return value.flatMap((item, index) =>
+            schemaViolations(itemSchema, item, `${path}[${index}]`),
+        );
+    }
 
-    return missing;
+    if (schema.type === 'string') {
+        if (typeof value !== 'string') {
+            return [label];
+        }
+        if (schema.enum && !schema.enum.includes(value)) {
+            return [label];
+        }
+        return [];
+    }
+
+    if (schema.type === 'number') {
+        return typeof value === 'number' && Number.isFinite(value) ? [] : [label];
+    }
+
+    return [];
 }
