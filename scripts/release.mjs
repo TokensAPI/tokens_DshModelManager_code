@@ -17,6 +17,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stampLaunchers } from './stamp.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const run = (cmd, args, options = {}) =>
@@ -86,6 +87,9 @@ runLoud('pnpm', ['build']);
 // --- from here on it is real ---
 
 writeFileSync(pkgPath, pkgRaw.replace(`"version": "${pkg.version}"`, `"version": "${next}"`));
+// Stamp the new version into the skill launchers and runtime.md, so the pinned
+// version can never drift from package.json. The commit below picks them up.
+stampLaunchers(root);
 run('git', ['commit', '-am', `chore(release): v${next}`]);
 run('git', ['tag', '-a', `v${next}`, '-m', `v${next}`]);
 run('git', ['push', '--follow-tags']);
