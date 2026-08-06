@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.1.0 - 2026-08-07
 
 - Windows joins the CI matrix (Node 22 and 24), so the CLI core, config, `doctor`, harness detection, and OpenCode paste recovery run on a real Windows runner rather than being assumed. The POSIX-only cases (subprocess signal handling, permission-bit assertions, and the Claude Code and Pi JSONL home-layout fixtures) are guarded with `describe.skipIf`, and the OpenCode path normalization from #11 now runs end to end on Windows, not only as an injected-path unit test. A `.gitattributes` pins text files to LF so the Windows checkout matches the other platforms and Biome does not fail on line endings.
 - Two guards that assumed POSIX permissions are fixed for Windows, where files report `0o666`/`0o777` and access is ACL-based. `recover-paste --out-dir` no longer rejects an existing private directory, and `doctor` no longer flags the config file's mode. Both checks now run only where `process.getuid` exists, and the symlink guard on `--out-dir` stays in force everywhere.
