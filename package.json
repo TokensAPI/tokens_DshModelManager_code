@@ -23,6 +23,7 @@
     "dist",
     "docs",
     "skills/modlens/SKILL.md",
+    "skills/modlens/scripts",
     "skills/modlens/references",
     "CHANGELOG.md",
     "SECURITY.md"
