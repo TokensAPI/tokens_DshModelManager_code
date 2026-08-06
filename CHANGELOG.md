@@ -4,6 +4,7 @@
 
 A code-review pass. Two user-facing bugs, a stack of doc corrections, and the tooling a public repo is expected to carry.
 
+- BREAKING: requires Node 22.13+. The floor was Node 18 with a special note that OpenCode paste recovery needed 22.13 for `node:sqlite`. That split is gone: 22.13 is the single minimum, `node:sqlite` is always available, and the CI matrix now runs Node 22 and 24 (dropping 18 and 20). The defensive runtime guard in the OpenCode adapter and the `describe.skipIf` in its tests stay, harmless, in case someone runs below the stated floor. README (both languages), CONTRIBUTING, AGENTS, and the harness doc drop the per-feature Node caveat.
 - A provider that ignores SIGTERM on timeout is now actually killed. The SIGKILL backstop checked `child.killed`, which turns true the moment a signal is delivered, not when the process exits, so a child that trapped SIGTERM read as already dead and was never escalated. It now tracks whether the process has exited and sends SIGKILL when it has not.
 - The published npm package now includes `docs/`, `CHANGELOG.md`, and `SECURITY.md`. The README links to the harness, security, and troubleshooting docs, but the `files` allow-list left them out of the tarball, so those links 404'd for anyone reading the package on npm.
 - CI now runs on macOS as well as Linux across the Node 18/20/22 matrix, so a macOS-only regression (path handling, `mkdtemp`, file modes) is caught before release.
