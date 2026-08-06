@@ -1,8 +1,8 @@
 ---
 name: modlens
 description: "Plug-in vision for text-only models. Use whenever the user shares an image (local path, screenshot, photo, chart, document scan, or image URL) and the active model cannot see images or has no vision tool. Runs the modlens CLI to convert the image into structured JSON evidence: every word transcribed, layout regions, semantics, visual clues. Also use when the user asks how to install, configure, or switch modlens providers (Gemini API key, OpenAI-compatible endpoints, Claude API or Claude Code CLI)."
-allowed-tools:
-  - Bash
+compatibility: Requires network access and one of node 22+/npx, bun/bunx, or a preinstalled modlens binary on PATH.
+allowed-tools: Bash
 ---
 
 # ModLens — Vision Bridge Skill
@@ -21,13 +21,28 @@ Do not use this skill for:
 
 ## Prerequisites
 
+Run every modlens command through the launcher bundled with this skill.
+Replace `<skill-dir>` with the directory this SKILL.md lives in:
+
 ```bash
-modlens --version
+bash <skill-dir>/scripts/run.sh -i <image-path-or-url>                              # macOS / Linux
+powershell -ExecutionPolicy Bypass -File <skill-dir>\scripts\run.ps1 -i <image>     # Windows
 ```
 
-If `modlens` is missing, run it via `npx @liustack/modlens` instead.
+The launcher finds a working way to run modlens and forwards your arguments to it unchanged. It tries, in order: a compatible `modlens` already on `PATH`, then `npx`, then `bunx`. If none of those exists it prints a JSON diagnosis to stderr and exits 78, with a `nextSteps` list for the user. Relay those steps instead of retrying. To see the full diagnosis, run `bash <skill-dir>/scripts/run.sh doctor --json` (on a machine that can launch the CLI it also chains modlens's own provider/config `doctor`).
 
-ModLens supports five vision providers. Check what is configured:
+### If you cannot run the launcher script
+
+Some harnesses forbid running scripts. Reason through the same order by hand and run the first line that works (the pinned version is 3.0.0):
+
+1. A `modlens` on `PATH` whose major version is 3 and is at least 3.0.0: `modlens <args>`.
+2. Otherwise, if `npx` exists: `npx --yes --package @liustack/modlens@3.0.0 modlens <args>`.
+3. Otherwise, if `bunx` exists: `bunx --bun @liustack/modlens@3.0.0 <args>`.
+4. Otherwise none of these runtimes is here. Tell the user no JavaScript runtime was found and that installing Node 22.13+ (https://nodejs.org) or Bun (https://bun.sh) is the next step. Do not claim modlens itself failed.
+
+`references/runtime.md` documents the version pin, the compatibility rule, and the diagnostic fields.
+
+ModLens supports five vision providers. Check what is configured (through the launcher, as above):
 
 ```bash
 modlens config show
@@ -43,12 +58,12 @@ modlens config show
 
 ## Command
 
+In the examples below, `modlens` means the command run through the launcher above (`bash <skill-dir>/scripts/run.sh ...`, or the PowerShell form on Windows).
+
 ```bash
 modlens -i <image-path-or-url>
 # pick a provider explicitly
 modlens -i <image> -p gemini-api
-# or without a global install
-npx @liustack/modlens -i <image-path-or-url>
 ```
 
 Optional flags:
