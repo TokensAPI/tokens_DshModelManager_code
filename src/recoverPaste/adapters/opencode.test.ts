@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { recoverPastedImages } from '../index.ts';
-import { escapeLikePattern } from './opencode.ts';
+import { buildOpencodeQuery, escapeLikePattern } from './opencode.ts';
 
 // The suite itself runs inside a real harness, so default every test to
 // unscoped scanning.
@@ -42,6 +42,66 @@ try {
 } catch {
     DatabaseSync = undefined;
 }
+
+describe.skipIf(!DatabaseSync)('opencode Windows path normalization (issue #11)', () => {
+    const Db = DatabaseSync as NonNullable<typeof DatabaseSync>;
+
+    // A session directory as opencode stores it: forward slashes even on
+    // Windows. path.resolve on Windows would hand back the backslash form, which
+    // the query builder must normalize before matching.
+    function dbWithSession(dir: string, partData: string) {
+        const db = new Db(':memory:');
+        db.exec(`
+            CREATE TABLE session (id TEXT PRIMARY KEY, slug TEXT, directory TEXT);
+            CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+            CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT);
+        `);
+        db.prepare('INSERT INTO session VALUES (?, ?, ?)').run('ses_1', 'slug-1', dir);
+        db.prepare(`INSERT INTO message VALUES (?, ?, ?, '{"role":"user"}')`).run(
+            'msg_1',
+            'ses_1',
+            1_000,
+        );
+        db.prepare('INSERT INTO part VALUES (?, ?, ?, ?, ?)').run(
+            'prt_1',
+            'msg_1',
+            'ses_1',
+            1_000,
+            partData,
+        );
+        return db;
+    }
+
+    function runQuery(db: InstanceType<typeof Db>, resolvedCwd: string): unknown[] {
+        const { sql, params } = buildOpencodeQuery(resolvedCwd);
+        return (db.prepare(sql) as unknown as { all: (...p: unknown[]) => unknown[] }).all(
+            ...params,
+        );
+    }
+
+    const filePart = '{"type":"file","mime":"image/png","url":"data:image/png;base64,AAAA"}';
+
+    it('matches a forward-slash session directory from a backslash cwd', () => {
+        const db = dbWithSession('E:/gitTest/proj', filePart);
+        // path.resolve on Windows returns backslashes for this cwd.
+        expect(runQuery(db, 'E:\\gitTest\\proj')).toHaveLength(1);
+        db.close();
+    });
+
+    it('matches across the repo-root/subdirectory gap with backslash input', () => {
+        // Session launched in a subdir, recovery run from the repo root: the
+        // subdirectory LIKE branch must fire after normalization.
+        const db = dbWithSession('E:/gitTest/proj/assets', filePart);
+        expect(runQuery(db, 'E:\\gitTest\\proj')).toHaveLength(1);
+        db.close();
+    });
+
+    it('does not match an unrelated project sharing a name prefix', () => {
+        const db = dbWithSession('E:/gitTest/project-two', filePart);
+        expect(runQuery(db, 'E:\\gitTest\\proj')).toHaveLength(0);
+        db.close();
+    });
+});
 
 describe.skipIf(!DatabaseSync)('opencode harness support', () => {
     const Db = DatabaseSync as NonNullable<typeof DatabaseSync>;

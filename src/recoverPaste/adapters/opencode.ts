@@ -23,6 +23,48 @@ interface SqliteRow {
     session_id: string;
 }
 
+/**
+ * Build the directory-scoped query for a cwd that has already been resolved to
+ * an absolute path (as `path.resolve` returns it on this platform).
+ *
+ * opencode records `session.directory` with forward slashes even on Windows,
+ * but `path.resolve` there hands back backslashes, so the equality and both
+ * LIKE prefix checks used to miss every row and recovery returned nothing
+ * (issue #11). Both sides are normalized to forward slashes before matching:
+ * the cwd in JS, and `session.directory` via SQL REPLACE so a store that ever
+ * held backslashes still lines up. Normalization runs before LIKE escaping, so
+ * the `_`/`%` wildcard guard stays correct.
+ *
+ * The prefix checks run in both directions because opencode's bash tool works
+ * at the repo root while a session may have been launched in a subdirectory. A
+ * session id or slug narrows that directory match rather than replacing it,
+ * since neither is unique across projects.
+ */
+export function buildOpencodeQuery(
+    resolvedCwd: string,
+    sessionId?: string,
+): { sql: string; params: unknown[] } {
+    const normalized = resolvedCwd.replace(/\\/g, '/');
+    const escaped = escapeLikePattern(normalized);
+    const dir = `REPLACE(session.directory, '\\', '/')`;
+    const directoryFilter = `(${dir} = ? OR ${dir} LIKE ? || '/%' ESCAPE '\\' OR ? LIKE ${dir} || '/%' ESCAPE '\\')`;
+    const sessionFilter = sessionId
+        ? `AND ${directoryFilter} AND (session.id = ? OR session.slug = ?)`
+        : `AND ${directoryFilter}`;
+    const params = sessionId
+        ? [normalized, escaped, normalized, sessionId, sessionId]
+        : [normalized, escaped, normalized];
+    const sql = `SELECT part.data AS data, part.time_created AS time_created, part.session_id AS session_id
+                 FROM part
+                 JOIN message ON message.id = part.message_id
+                 JOIN session ON session.id = part.session_id
+                 WHERE part.data LIKE '{"type":"file"%'
+                   AND json_extract(message.data, '$.role') = 'user'
+                   ${sessionFilter}
+                 ORDER BY part.time_created ASC`;
+    return { sql, params };
+}
+
 function opencodeQuery(dbPath: string, cwd: string, sessionId?: string): SqliteRow[] {
     // node:sqlite ships unflagged on Node 22.13+. Loaded lazily so the other
     // adapters keep working on older runtimes.
@@ -44,36 +86,8 @@ function opencodeQuery(dbPath: string, cwd: string, sessionId?: string): SqliteR
 
     const db = new DatabaseSync(dbPath, { readOnly: true });
     try {
-        const resolved = path.resolve(cwd);
-        // opencode's bash tool runs at the repo root while session.directory
-        // records where the session was launched (possibly a subdirectory), so
-        // directories must match by prefix in both directions, not exactly.
-        //
-        // Two traps live here. LIKE treats _ and % as wildcards, so a project
-        // path containing either matched other projects until escaped. And a
-        // session id or slug is not unique across projects, so it narrows the
-        // directory match rather than replacing it.
-        const directoryFilter = `(session.directory = ? OR session.directory LIKE ? || '/%' ESCAPE '\\' OR ? LIKE session.directory || '/%' ESCAPE '\\')`;
-        const escaped = escapeLikePattern(resolved);
-        const sessionFilter = sessionId
-            ? `AND ${directoryFilter} AND (session.id = ? OR session.slug = ?)`
-            : `AND ${directoryFilter}`;
-        const params = sessionId
-            ? [resolved, escaped, resolved, sessionId, sessionId]
-            : [resolved, escaped, resolved];
-        const rows = db
-            .prepare(
-                `SELECT part.data AS data, part.time_created AS time_created, part.session_id AS session_id
-                 FROM part
-                 JOIN message ON message.id = part.message_id
-                 JOIN session ON session.id = part.session_id
-                 WHERE part.data LIKE '{"type":"file"%'
-                   AND json_extract(message.data, '$.role') = 'user'
-                   ${sessionFilter}
-                 ORDER BY part.time_created ASC`,
-            )
-            .all(...params) as SqliteRow[];
-        return rows;
+        const { sql, params } = buildOpencodeQuery(path.resolve(cwd), sessionId);
+        return db.prepare(sql).all(...params) as SqliteRow[];
     } finally {
         db.close();
     }
