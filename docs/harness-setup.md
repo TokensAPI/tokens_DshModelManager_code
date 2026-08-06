@@ -38,6 +38,12 @@ Running a text-only model behind `ANTHROPIC_BASE_URL` in Claude Code, a pasted i
 
 Symlinks work in all of them, so linking the skill folder once keeps every agent on the latest version.
 
+## Platform support
+
+macOS and Linux are fully supported and verified in CI on Node 22 and 24.
+
+Windows runs the same CI matrix. Detection there skips the process-ancestry pass, since there is no `ps`, and falls back to the environment fingerprints above, so a harness that sets none of them reads as undetected (force it with `--harness` or `MODLENS_HARNESS`). OpenCode paste recovery is covered on Windows, including the path-separator normalization from [#11](https://github.com/liustack/modlens/issues/11): opencode records `session.directory` with forward slashes while `path.resolve` returns backslashes there, and both sides are normalized before matching. The JSONL stores (Claude Code, Pi) key off `os.homedir()` and each harness's own on-disk slug, and are exercised on POSIX. External engines (Antigravity CLI, the Claude CLI) run only where they ship a Windows build.
+
 ## Gateway setups
 
 OpenCode with DeepSeek: `opencode auth login`, pick DeepSeek and paste the key (it lands in `~/.local/share/opencode/auth.json`), then set the default model in `~/.config/opencode/opencode.jsonc` to `deepseek/deepseek-v4-flash`. Pi reads its key from `~/.pi/agent/auth.json`.
