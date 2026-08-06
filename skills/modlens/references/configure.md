@@ -15,6 +15,40 @@ modlens config set <provider>.<field> <value>   # fields: apiKey, baseUrl, model
 
 `config set` writes the file with 0600 permissions.
 
+## The file's exact shape
+
+Everything lives under two top-level keys, both optional. A missing file means all defaults. Provider settings sit under `providers.<name>`, not at the top level, which is the mistake hand-editors make most.
+
+```json
+{
+  "provider": "gemini-api",
+  "providers": {
+    "antigravity-cli": { "model": "gemini-3.6-flash-low" },
+    "gemini-api": {
+      "apiKey": "AIza...",
+      "baseUrl": "https://generativelanguage.googleapis.com",
+      "model": "gemini-3.6-flash"
+    },
+    "openai": {
+      "apiKey": "sk-...",
+      "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3.6-27b"
+    },
+    "anthropic": { "apiKey": "sk-ant-..." },
+    "claude-cli": { "model": "haiku" }
+  }
+}
+```
+
+Field semantics:
+
+- `provider`: which provider runs when `-p` is not given. Canonical names or aliases both work (`agy`/`antigravity` for `antigravity-cli`, `gemini` for `gemini-api`, `openai-compat` for `openai`, `claude` for `anthropic`, `claude-code` for `claude-cli`). Empty or absent means `antigravity-cli`.
+- `providers.<name>.<field>`: only three fields exist, `apiKey`, `baseUrl`, `model`. Every provider entry is optional, and every field inside it is optional. Alias keys are read too (settings saved under `gemini` are found when `gemini-api` resolves), with the canonical key winning on conflict.
+- Environment variables override the file for these bindings: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`. Nothing else is read from the environment except `MODLENS_HARNESS` (paste-recovery scope, unrelated to this file).
+- Unknown top-level keys and unknown provider names are ignored rather than rejected, so a typo fails quiet: run `modlens doctor` after hand-editing, it shows which file and env values are actually in effect.
+
+Hand-editing is fine (keep the file valid JSON and its permissions 0600). `modlens config set` does the same thing with guardrails.
+
 ## Provider setup recipes
 
 ### antigravity-cli (default, free, no key)
