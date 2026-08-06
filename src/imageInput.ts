@@ -1,5 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { Agent } from 'undici';
+import {
+    assertSafeRemoteTarget,
+    normalizeRemoteImageUrl,
+    type PinnedTarget,
+} from './net/network.ts';
 
 const MIME_BY_EXT: Record<string, string> = {
     '.jpg': 'image/jpeg',
@@ -111,30 +117,112 @@ export function readLocalImageBase64(filePath: string): { data: string; mimeType
     return { data: buffer.toString('base64'), mimeType };
 }
 
-/** Download a remote image, for APIs that only accept inline bytes. */
+const MAX_REDIRECTS = 5;
+
+/**
+ * Download a remote image, for APIs that only accept inline bytes. This is an
+ * SSRF-plus-exfiltration surface: the URL may have come from untrusted text,
+ * and whatever it serves is uploaded to a vision provider. So every hop is
+ * validated against private and reserved targets, and the connection is pinned
+ * to the exact IP the check validated, closing DNS rebinding.
+ */
 export async function fetchRemoteImageBase64(
     url: string,
     timeoutMs: number,
 ): Promise<{ data: string; mimeType: string }> {
-    const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!response.ok) {
-        throw new Error(`Failed to download image (${response.status}): ${url}`);
-    }
+    const signal = AbortSignal.timeout(timeoutMs);
+    let current = normalizeRemoteImageUrl(url);
+    // Every pinned dispatcher created along the way, closed when the run ends.
+    const dispatchers: Agent[] = [];
 
-    // Trust the advertised size to reject an oversized download before reading a
-    // single byte, then enforce the same limit while streaming, because
-    // content-length can be absent or a lie.
-    const declaredLength = Number(response.headers.get('content-length'));
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_REMOTE_IMAGE_BYTES) {
-        throw new Error(
-            `Remote image is ${declaredLength} bytes, over the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${url}`,
-        );
-    }
+    try {
+        for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+            const pinned = await assertSafeRemoteTarget(current);
+            const dispatcher = pinnedDispatcher(pinned);
+            dispatchers.push(dispatcher);
 
-    const buffer = await readCapped(response, url);
-    const contentType = response.headers.get('content-type') ?? undefined;
-    const mimeType = resolveImageMime(buffer, url, contentType);
-    return { data: buffer.toString('base64'), mimeType };
+            const response = await fetch(current, {
+                method: 'GET',
+                redirect: 'manual',
+                signal,
+                // `dispatcher` is a Node/undici extension to fetch's options,
+                // not in the DOM RequestInit type, so it goes through a cast.
+                dispatcher,
+            } as unknown as RequestInit & { dispatcher: Agent });
+
+            if (response.status >= 300 && response.status < 400) {
+                const location = response.headers.get('location');
+                if (!location) {
+                    throw new Error(
+                        `Redirect response (${response.status}) missing location header: ${current}`,
+                    );
+                }
+                await response.body?.cancel();
+                if (hop === MAX_REDIRECTS) {
+                    throw new Error(`Too many redirects (max ${MAX_REDIRECTS}): ${url}`);
+                }
+                // The next hop is a fresh target: re-normalized, re-validated,
+                // re-pinned at the top of the loop.
+                current = normalizeRemoteImageUrl(new URL(location, current).toString());
+                continue;
+            }
+
+            if (!response.ok) {
+                throw new Error(`Failed to download image (${response.status}): ${current}`);
+            }
+
+            // Trust the advertised size to reject an oversized download before
+            // reading a single byte, then enforce the same limit while
+            // streaming, because content-length can be absent or a lie.
+            const declaredLength = Number(response.headers.get('content-length'));
+            if (Number.isFinite(declaredLength) && declaredLength > MAX_REMOTE_IMAGE_BYTES) {
+                throw new Error(
+                    `Remote image is ${declaredLength} bytes, over the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${current}`,
+                );
+            }
+
+            const finalUrl = current.toString();
+            const buffer = await readCapped(response, finalUrl);
+            const contentType = response.headers.get('content-type') ?? undefined;
+            const mimeType = resolveImageMime(buffer, finalUrl, contentType);
+            return { data: buffer.toString('base64'), mimeType };
+        }
+        throw new Error(`Too many redirects (max ${MAX_REDIRECTS}): ${url}`);
+    } finally {
+        for (const dispatcher of dispatchers) {
+            void dispatcher.close();
+        }
+    }
+}
+
+/**
+ * An undici dispatcher whose DNS lookup is hard-wired to the one IP the safety
+ * check validated, while the hostname stays in place for Host and TLS SNI.
+ */
+function pinnedDispatcher(pinned: PinnedTarget): Agent {
+    return new Agent({
+        connect: {
+            lookup: (_hostname, options, callback) => {
+                const record = { address: pinned.address, family: pinned.family };
+                // undici asks with { all: true } and expects an array; be
+                // tolerant of the single-record signature too.
+                if (options && (options as { all?: boolean }).all) {
+                    (
+                        callback as (
+                            err: Error | null,
+                            addresses: Array<{ address: string; family: number }>,
+                        ) => void
+                    )(null, [record]);
+                } else {
+                    (callback as (err: Error | null, address: string, family: number) => void)(
+                        null,
+                        pinned.address,
+                        pinned.family,
+                    );
+                }
+            },
+        },
+    });
 }
 
 async function readCapped(response: Response, url: string): Promise<Buffer> {
