@@ -9,6 +9,17 @@ import {
     readLocalImageBase64,
 } from './imageInput.ts';
 
+// The download path resolves every hostname before fetching (see net/network),
+// so the fake hosts these tests use must resolve to a public address, and one
+// test host resolves to a private one to prove the rejection.
+vi.mock('dns/promises', () => ({
+    lookup: vi.fn(async (hostname: string) =>
+        hostname === 'internal.example'
+            ? [{ address: '10.0.0.1', family: 4 }]
+            : [{ address: '203.0.113.7', family: 4 }],
+    ),
+}));
+
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -68,6 +79,53 @@ describe('readLocalImageBase64', () => {
 describe('fetchRemoteImageBase64', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
+    });
+
+    it('rejects a literal loopback target before any request goes out', async () => {
+        const fetchSpy = vi.fn();
+        vi.stubGlobal('fetch', fetchSpy);
+        await expect(fetchRemoteImageBase64('http://127.0.0.1/x.png', 1000)).rejects.toThrow(
+            /Blocked private or reserved image target/,
+        );
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects localhost and cloud metadata targets', async () => {
+        await expect(fetchRemoteImageBase64('http://localhost/x.png', 1000)).rejects.toThrow(
+            /Blocked/,
+        );
+        await expect(
+            fetchRemoteImageBase64('http://169.254.169.254/latest/meta-data', 1000),
+        ).rejects.toThrow(/Blocked private or reserved image target/);
+    });
+
+    it('rejects a public-looking hostname that resolves to a private address', async () => {
+        await expect(
+            fetchRemoteImageBase64('https://internal.example/shot.png', 1000),
+        ).rejects.toThrow(/internal\.example -> 10\.0\.0\.1/);
+    });
+
+    it('re-validates every redirect hop and rejects one that lands private', async () => {
+        vi.stubGlobal(
+            'fetch',
+            async () =>
+                new Response(null, {
+                    status: 302,
+                    headers: { location: 'http://127.0.0.1/steal' },
+                }),
+        );
+        await expect(fetchRemoteImageBase64('https://x.example/a.png', 1000)).rejects.toThrow(
+            /Blocked private or reserved image target/,
+        );
+    });
+
+    it('rejects a non-http scheme and embedded credentials', async () => {
+        await expect(fetchRemoteImageBase64('file:///etc/passwd', 1000)).rejects.toThrow(
+            /Only http\/https/,
+        );
+        await expect(
+            fetchRemoteImageBase64('https://user:pw@x.example/a.png', 1000),
+        ).rejects.toThrow(/embedded credentials/);
     });
 
     it('rejects a download whose content-length is over the limit', async () => {
