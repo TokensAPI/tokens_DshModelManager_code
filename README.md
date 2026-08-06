@@ -175,7 +175,7 @@ The default `-m` model depends on the provider:
 | `--harness <name>` | Force storage scope: `claude-code`, `pi`, `opencode`, `none` | auto-detect |
 | `--cwd <path>` | Project directory the image was pasted in | current directory |
 
-Five providers: `antigravity-cli` (default, no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (rides your Claude subscription). One more subcommand: `modlens config <init|set|show>`.
+Five providers: `antigravity-cli` (default, no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (rides your Claude subscription). Two more subcommands: `modlens config <init|set|show>`, and `modlens doctor` (checks Node, provider readiness, which provider will be selected and why, and the detected harness, without spending quota or touching the network. Add `--json` for a machine-readable report).
 
 ## Documentation
 

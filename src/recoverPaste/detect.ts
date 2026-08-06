@@ -63,10 +63,18 @@ export function harnessFromPsTable(psOutput: string, startPid: number): string |
     return null;
 }
 
-export function detectHarness(): string | null {
+/** Where a harness verdict came from, so `doctor` can show its basis. */
+export type HarnessSource = 'override' | 'ancestry' | 'env' | 'none';
+
+export interface HarnessDetection {
+    harness: string | null;
+    source: HarnessSource;
+}
+
+export function detectHarnessDetailed(): HarnessDetection {
     const override = process.env.MODLENS_HARNESS;
     if (override) {
-        return override === 'none' ? null : override;
+        return { harness: override === 'none' ? null : override, source: 'override' };
     }
     try {
         const ps = childProcess.execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], {
@@ -75,19 +83,23 @@ export function detectHarness(): string | null {
         });
         const found = harnessFromPsTable(ps, process.pid);
         if (found) {
-            return found;
+            return { harness: found, source: 'ancestry' };
         }
     } catch {
         // ps unavailable (e.g. Windows): fall through to env fingerprints
     }
     if (process.env.PI_CODING_AGENT) {
-        return 'pi';
+        return { harness: 'pi', source: 'env' };
     }
     if (process.env.CODEX_THREAD_ID || process.env.CODEX_SANDBOX) {
-        return 'codex';
+        return { harness: 'codex', source: 'env' };
     }
     if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_SESSION_ID) {
-        return 'claude-code';
+        return { harness: 'claude-code', source: 'env' };
     }
-    return null;
+    return { harness: null, source: 'none' };
+}
+
+export function detectHarness(): string | null {
+    return detectHarnessDetailed().harness;
 }
