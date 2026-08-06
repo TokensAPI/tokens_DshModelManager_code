@@ -81,7 +81,7 @@ The output lists images oldest to newest, so the **last** entry is the most rece
 `recover-paste` auto-detects which harness it runs inside (process ancestry first, then environment fingerprints) and reads only that harness's storage. Two knobs override it:
 
 - **`MODLENS_HARNESS`** forces the storage scope without a flag: `claude-code`, `pi`, `opencode`, `codex`, or `none` (scan every store, no scoping). Detection reads it first, so it wins over ancestry and env fingerprints. `--harness` does the same for a single run.
-- **`--out-dir`** sets where recovered images land. By default each run mints a fresh, unpredictable `<tmpdir>/modlens-paste-*` directory (0700, holding 0600 files), so nobody can pre-create a shared path to intercept the bytes. Point it elsewhere when the system temp dir is not where you want them. An explicit `--out-dir` that already exists is rejected unless it is a real directory (not a symlink), owned by you, with no group or world access.
+- **`--out-dir`** sets where recovered images land. By default each run mints a fresh, unpredictable `<tmpdir>/modlens-paste-*` directory (0700, holding 0600 files), so nobody can pre-create a shared path to intercept the bytes. Point it elsewhere when the system temp dir is not where you want them. An explicit `--out-dir` that already exists is rejected unless it is a real directory (not a symlink), owned by you, with no group or world access. On Windows those ownership and permission checks are skipped, since the platform has no POSIX bits (see the Windows section below). The symlink guard still applies.
 
 ## This is a Codex session
 
@@ -126,6 +126,14 @@ antigravity-cli provider timed out after 210000 ms.
 ```
 
 Retry once with `--timeout 300000`. Dense images on agy legitimately take 15-40 seconds, and `-m gemini-3.1-pro-high` is slower still. Engines that ignore SIGTERM are escalated to SIGKILL, so a timeout returns promptly regardless.
+
+## Windows
+
+ModLens runs on Windows. Three platform differences are worth knowing:
+
+- **No POSIX permission checks.** Windows files carry no owner, group, or world bits (they read back as `0o666`/`0o777`, with access governed by ACLs), so `doctor` does not judge the config file's mode and `recover-paste --out-dir` does not reject a directory on ownership or group/world access. The symlink guard on `--out-dir` still applies.
+- **Harness detection uses environment fingerprints.** There is no `ps` to read the process tree, so detection relies on the environment variables each harness sets. If a run guesses wrong, force it with `--harness <name>` or `MODLENS_HARNESS`.
+- **Paste recovery.** OpenCode recovery is covered on Windows (issue #11). The Claude Code and Pi JSONL paths depend on `os.homedir()` and each harness's on-disk slug there. If recovery comes up empty, pass `--transcript` at the file, or drag the image into the terminal.
 
 ## Still stuck
 
