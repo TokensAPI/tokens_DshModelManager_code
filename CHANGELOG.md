@@ -1,6 +1,11 @@
 # Changelog
 
-## 3.0.0 - 2026-08-06
+## Unreleased
+
+- Windows joins the CI matrix (Node 22 and 24), so the CLI core, config, `doctor`, harness detection, and OpenCode paste recovery run on a real Windows runner rather than being assumed. The POSIX-only cases (subprocess signal handling, permission-bit assertions, and the Claude Code and Pi JSONL home-layout fixtures) are guarded with `describe.skipIf`, and the OpenCode path normalization from #11 now runs end to end on Windows, not only as an injected-path unit test. A `.gitattributes` pins text files to LF so the Windows checkout matches the other platforms and Biome does not fail on line endings.
+- Two guards that assumed POSIX permissions are fixed for Windows, where files report `0o666`/`0o777` and access is ACL-based. `recover-paste --out-dir` no longer rejects an existing private directory, and `doctor` no longer flags the config file's mode. Both checks now run only where `process.getuid` exists, and the symlink guard on `--out-dir` stays in force everywhere.
+- New root `INSTALL.md`, written for an AI agent installing the skill on a user's behalf, after reports that even an agent following the README could not get set up. Four ordered, idempotent steps (identify the host and its skill directory, place the skill, configure one engine, verify with `doctor`), each with a failure branch, and a concrete definition of done: the selected provider reads `[ok]`.
+- The README install section (both languages) is dual-track and human-first. A person gets one copy-paste block with a pre-chosen engine and a single done signal, an agent gets one line pointing at INSTALL.md, and the engine alternatives, the manual host-to-directory table, and multi-agent layouts fold into a collapsible block. The platform line is rewritten to state per-OS support honestly, and the harness and troubleshooting docs gain a Windows section.
 
 A code-review pass. Two user-facing bugs, a stack of doc corrections, and the tooling a public repo is expected to carry.
 
