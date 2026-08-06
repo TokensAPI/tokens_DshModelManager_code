@@ -65,6 +65,11 @@ modlens config show
 - `pnpm typecheck && pnpm test` for unit-level checks; `pnpm build` must produce a single `dist/main.js`.
 - Real end-to-end runs consume the user's provider quota (agy, API keys, Claude subscription). Ask before running them in bulk.
 
+## Evals
+
+- Every experiment leaves a reproducible artifact. `evals/` holds seed cases (`evals/cases/<id>/case.json`) and a runner (`pnpm eval`, or `pnpm eval --dry-run` to validate without a provider call). Each live run writes one evidence artifact per case to `evals/results/<date>/` (git-ignored), recording the command, tool version and commit, provider and model, input SHA-256, raw output, expected points and scoring, latency, usage, and any error or degradation. Format and fields are documented in `evals/README.md`.
+- Evals are local and on-demand: they spend real quota and never run in CI. The runner only checks containment and schema shape; whether a model obeyed a prompt injection is a human read of the artifact.
+
 ## Operational Docs (`docs/`)
 
 1. Operational docs use front-matter metadata (`summary`, `read_when`).
