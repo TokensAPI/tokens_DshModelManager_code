@@ -4,7 +4,7 @@
 
 <h1 align="center">ModLens</h1>
 
-<p align="center"><b>为纯文本模型补上视觉能力，粘贴的图片也能直接识别。</b></p>
+<p align="center"><b>为纯文本模型补上视觉能力，直接粘贴图片就能识别。</b></p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
@@ -22,26 +22,28 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
 </p>
 
-DeepSeek-V4-Flash 这类纯文本模型没有视觉能力，无法处理截图和图片。ModLens 把图片交给真正的视觉引擎，返回模型可以引用的结构化证据：图中文字逐句转录，版面按阅读顺序划分区块，读不准的部分明确标出。它还解决了一个别家没有解决的问题：**直接粘贴进对话的图片也能识别**，无需先保存成文件再提供路径。
+DeepSeek-V4-Flash 没有视觉能力，无法处理截图和图片。ModLens 借助外挂视觉引擎，为纯文本模型补上视觉能力。**ModLens 支持直接粘贴图片识别**，无需先保存成文件再提供路径。
 
 ## 亮点
 
+- **完全免费。** 默认走 Antigravity CLI 通道，无需 api key。配一个免费的 Gemini key 可将识别耗时降至 5 到 10 秒。
 - **返回证据，而非印象。** 全文转录、按阅读顺序划分的版面区块、实体与关系列表，模型引用的是具体内容。
-- **免费起步。** 默认引擎 Antigravity CLI 无需 key。配一个免费的 Gemini key 可将识别耗时降至 5 到 10 秒。
 - **一次安装，多端可用。** Claude Code、Codex、Pi、OpenCode 均经真机验证。
 
 ## 安装
 
-**第一步，准备一个视觉引擎（唯一需要你亲手做的）。** 推荐免费的 Gemini key：到 [Google AI Studio](https://aistudio.google.com) 领取，约三分钟，无需信用卡。
+**第一步，准备一个视觉引擎（唯一需要你亲手做的）。** 推荐免费的 Gemini api key：到 [Google AI Studio](https://aistudio.google.com) 领取，约三分钟，无需信用卡。
 
-想完全免注册就改装 Antigravity CLI，在浏览器完成本人登录：
+也推荐申请其他平台免费的 openai api 兼容格式的 api key。
+
+想完全免注册就改装 Antigravity CLI，然后完成登录：
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy                                                           # 浏览器完成登录后退出
 ```
 
-**第二步，剩下的交给你的 AI。** 把这句话发给它，用 Gemini key 的话把 key 一起发：
+**第二步，剩下的交给你的 AI。** 把这句话发给它，用 Gemini api key 的话把 key 一起发：
 
 > 按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill，完成后运行体检并把结果告诉我。
 
@@ -71,17 +73,17 @@ Codex 桌面 App 中识别一张推文截图。配文、互动数据（2.9K 回�
 
 ## 文档
 
-| 文档 | 适用场景 |
-| :-- | :-- |
-| [INSTALL.md](INSTALL.md) | 一步步安装 skill（为 agent 编写） |
-| [CLI 手册](skills/modlens/references/cli.md) | skill 所驱动的 CLI：参数、配置与体检 |
-| [故障排查](docs/troubleshooting.md) | 命令报错，查成因和解法 |
-| [配置手册](skills/modlens/references/configure.md) | 配置 key、切换 provider、排查配置 |
-| [输出契约](skills/modlens/references/output-schema.md) | 解析 JSON 或构建下游工具 |
-| [宿主接入](docs/harness-setup.md) | 在 Codex、Claude Code、Pi、OpenCode 中配置 |
-| [安全说明](docs/security.md) | 恢复文件的权限、图片内容作为不可信输入 |
-| [更新日志](CHANGELOG.md) | 查询版本变更 |
-| [AGENTS.md](AGENTS.md) | 修改本项目代码 |
+| 文档                                                   | 适用场景                                   |
+| :----------------------------------------------------- | :----------------------------------------- |
+| [INSTALL.md](INSTALL.md)                               | 一步步安装 skill（为 agent 编写）          |
+| [CLI 手册](skills/modlens/references/cli.md)           | skill 所驱动的 CLI：参数、配置与体检       |
+| [故障排查](docs/troubleshooting.md)                    | 命令报错，查成因和解法                     |
+| [配置手册](skills/modlens/references/configure.md)     | 配置 key、切换 provider、排查配置          |
+| [输出契约](skills/modlens/references/output-schema.md) | 解析 JSON 或构建下游工具                   |
+| [宿主接入](docs/harness-setup.md)                      | 在 Codex、Claude Code、Pi、OpenCode 中配置 |
+| [安全说明](docs/security.md)                           | 恢复文件的权限、图片内容作为不可信输入     |
+| [更新日志](CHANGELOG.md)                               | 查询版本变更                               |
+| [AGENTS.md](AGENTS.md)                                 | 修改本项目代码                             |
 
 ## 参与方式
 

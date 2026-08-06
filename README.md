@@ -22,26 +22,28 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
 </p>
 
-Text-only models like DeepSeek-V4-Flash have no vision capability and cannot process screenshots or images. ModLens hands the image to a real vision engine and returns structured evidence the model can quote: every word transcribed, the layout mapped into reading-order regions, uncertain parts marked. It also solves a problem other bridges do not: **images pasted directly into the chat are recovered and read**, with no save-to-file step.
+DeepSeek-V4-Flash has no vision capability and cannot process screenshots or images. ModLens is a plug-in vision engine that gives a text-only model sight. **ModLens reads images pasted straight into the chat**, no saving to a file and passing a path first.
 
 ## Highlights
 
+- **Completely free.** The default channel is Antigravity CLI, no API key needed. A free Gemini key brings a read down to 5-10 seconds.
 - **Evidence, not an impression.** Full transcription, reading-order layout regions, entity and relation lists. The model quotes specifics.
-- **Free to start.** The default engine (Antigravity CLI) needs no key. A free Gemini key brings a read down to 5-10 seconds.
 - **Install once, use everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
 
 ## Installation
 
-**Step 1, set up a vision engine (the only part that needs your hands).** The recommended choice is a free Gemini key: get one at [Google AI Studio](https://aistudio.google.com), about three minutes, no credit card.
+**Step 1, set up a vision engine (the only part that needs your hands).** The recommended choice is a free Gemini API key: get one at [Google AI Studio](https://aistudio.google.com), about three minutes, no credit card.
 
-To avoid any sign-up, install Antigravity CLI instead and complete its browser sign-in yourself:
+A free API key in the OpenAI-compatible format from another platform is also a good option.
+
+To avoid any sign-up, install Antigravity CLI instead, then sign in:
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy                                                           # sign in, then exit
 ```
 
-**Step 2, hand the rest to your AI.** Send it this line, along with the key if you chose one:
+**Step 2, hand the rest to your AI.** Send it this line, along with the key if you chose the Gemini API key:
 
 > Install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md, then run the health check and tell me the result.
 
