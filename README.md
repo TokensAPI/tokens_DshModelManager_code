@@ -59,7 +59,7 @@ Skipping the sign-up is fine: **Antigravity CLI** works with no key, it is just 
 curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # sign in, then exit
 ```
 
-Requires Node 18+ (22.13+ for OpenCode paste recovery), macOS or Linux.
+Requires Node 22.13+, macOS or Linux.
 
 ## Usage
 

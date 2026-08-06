@@ -12,10 +12,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        # node:sqlite (used by the OpenCode paste-recovery tests) ships unflagged
-        # on Node 22.13+, so those tests skip on 18 and 20 and run on 22 (setup-node
-        # installs the latest 22.x) while the rest of the suite runs everywhere.
-        node-version: [18, 20, 22]
+        # 22.13 is the floor (see package.json engines): node:sqlite ships
+        # unflagged there, so paste recovery works without a runtime guard.
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
