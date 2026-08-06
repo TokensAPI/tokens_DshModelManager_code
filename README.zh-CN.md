@@ -40,26 +40,51 @@ DeepSeek-V4-Flash 这类纯文本模型没有视觉能力，无法处理截图�
 
 ## 安装
 
+两种方式，按执行者选择。
+
+### 如果你是人
+
+从上到下运行这段。它安装 skill，将 ModLens 指向免费的 Gemini 引擎，并验证结果。无需做任何选择：
+
 ```bash
 npx -y skills add liustack/modlens
+npx @liustack/modlens config set gemini-api.apiKey <KEY>
+npx @liustack/modlens config set provider gemini-api
+npx @liustack/modlens doctor
 ```
 
-也可以直接告诉你的 agent：「安装这个 skill https://github.com/liustack/modlens」。
+到 [Google AI Studio](https://aistudio.google.com) 获取 `<KEY>`：约三分钟，无需信用卡。最后一条命令做本机健康检查，当 `Selected provider` 一行显示 `[ok]` 即完成。
 
-然后配置一个视觉引擎。推荐 **[AI Studio](https://aistudio.google.com) 的免费 Gemini key**（约三分钟，无需信用卡，识别耗时 5 到 10 秒）：
+### 如果你是 AI agent
 
-```bash
-modlens config set gemini-api.apiKey <key>
-modlens config set provider gemini-api
-```
+告诉它：「按 https://github.com/liustack/modlens 的 INSTALL.md 安装 ModLens skill」。agent 会读取 [INSTALL.md](INSTALL.md)（一份零歧义的四步指南）并执行。
 
-不想注册也可以使用 **Antigravity CLI**，无需 key，代价是较慢（15 到 40 秒）且免费额度有限：
+<details>
+<summary>免 key 引擎、手动安装、其他引擎、多宿主</summary>
+
+**完全不用 key。** Antigravity CLI 无需注册，代价是较慢（15 到 40 秒），免费额度按周发放，且浏览器登录无法在无界面会话中完成。因此对 agent 和服务器，上面的 Gemini key 更可靠。
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # 浏览器登录后退出
 ```
 
-要求 Node 22.13+，macOS 或 Linux。
+**手动安装 skill。** `skills` CLI 不可用时，把 skill 复制进宿主对应目录：
+
+| 宿主 | skill 目录 |
+| :-- | :-- |
+| Claude Code | `~/.claude/skills/` |
+| Codex | `~/.codex/skills/` |
+| Pi、OpenCode | `~/.agents/skills/` |
+
+确切的克隆-复制命令和分宿主步骤见 [INSTALL.md](INSTALL.md)。
+
+**其他引擎。** `openai`（任何 OpenAI 兼容多模态端点）、`anthropic`、`claude-cli`（复用现有 Claude 登录）。配置手册见 [配置](skills/modlens/references/configure.md)。
+
+**一台机器上多个 agent。** 装进每个宿主的目录，或在 `~/.agents/skills/modlens` 保留一份并把其他宿主软链过去。
+
+</details>
+
+要求 Node 22.13+。macOS 与 Linux 完整支持，且经 CI 验证。
 
 ## 用法
 

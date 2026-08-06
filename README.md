@@ -40,26 +40,51 @@ Text-only models like DeepSeek-V4-Flash have no vision capability and cannot pro
 
 ## Installation
 
+Two ways in. Choose by who is doing the install.
+
+### If you are a person
+
+Run this block top to bottom. It installs the skill, points ModLens at a free Gemini engine, and verifies the result. Nothing to choose:
+
 ```bash
 npx -y skills add liustack/modlens
+npx @liustack/modlens config set gemini-api.apiKey <KEY>
+npx @liustack/modlens config set provider gemini-api
+npx @liustack/modlens doctor
 ```
 
-Or tell your agent: "Install the skill from https://github.com/liustack/modlens".
+Get `<KEY>` from [Google AI Studio](https://aistudio.google.com): about three minutes, no credit card. The last command runs a local health check. You are done when the entry under `Selected provider` reads `[ok]`.
 
-Then give it a vision engine. A free **[AI Studio](https://aistudio.google.com) Gemini key** is the fast answer (three minutes, no credit card, 5-10 seconds per image):
+### If you are an AI agent
 
-```bash
-modlens config set gemini-api.apiKey <key>
-modlens config set provider gemini-api
-```
+Tell it: "Install the ModLens skill from https://github.com/liustack/modlens, following its INSTALL.md." The agent reads [INSTALL.md](INSTALL.md), a zero-ambiguity four-step guide, and runs it.
 
-Without a sign-up, **Antigravity CLI** works with no key. It is slower (15-40 seconds) and its free quota is limited:
+<details>
+<summary>No-key engine, manual install, other engines, multiple agents</summary>
+
+**No key at all.** Antigravity CLI needs no sign-up. It is slower (15-40 seconds), its free quota is a weekly bucket, and its browser sign-in cannot be completed in a headless session, so for agents and servers the Gemini key above is the reliable choice.
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # sign in, then exit
 ```
 
-Requires Node 22.13+, macOS or Linux.
+**Manual skill install.** When the `skills` CLI is unavailable, copy the skill into your host's directory:
+
+| Host | Skill directory |
+| :-- | :-- |
+| Claude Code | `~/.claude/skills/` |
+| Codex | `~/.codex/skills/` |
+| Pi, OpenCode | `~/.agents/skills/` |
+
+The exact clone-and-copy commands and a per-host walkthrough are in [INSTALL.md](INSTALL.md).
+
+**Other engines.** `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (your existing Claude login). Recipes in [Configuration](skills/modlens/references/configure.md).
+
+**Multiple agents on one machine.** Install into each host's directory, or keep one copy under `~/.agents/skills/modlens` and symlink the others to it.
+
+</details>
+
+Requires Node 22.13+. macOS and Linux are fully supported and verified in CI.
 
 ## Usage
 
