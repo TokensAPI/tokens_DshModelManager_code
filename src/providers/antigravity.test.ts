@@ -44,7 +44,9 @@ describe('buildAntigravityInvocation', () => {
             'Read the image file at this path and analyze it: /tmp/screenshots/my image(1).png',
         );
         expect(prompt).toContain('Focus on table headers');
-        expect(invocation.cwd).toBe('/tmp/screenshots');
+        // buildInvocation resolves the cwd, so compare against the resolved form:
+        // '/tmp/screenshots' on POSIX, a drive-rooted path on Windows.
+        expect(invocation.cwd).toBe(path.resolve('/tmp/screenshots'));
     });
 
     it('uses the default model and a fetch prompt for remote images', () => {
