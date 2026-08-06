@@ -1,146 +1,205 @@
-# Installing ModLens
+# Installing ModLens (for an AI agent)
 
-This guide is written for an **AI agent** that a user has asked to install the ModLens
-skill. Follow the four steps in order. Every step is idempotent: running it again on a
-machine that is already set up does no harm, so when in doubt, run it.
+You are an AI agent and your user told you to install the `modlens` skill. This
+document is the procedure. Follow it in order. Every step is safe to run again,
+and every step names what to do when it fails. Commands are POSIX shell
+(macOS or Linux). A Windows note follows each block that needs one.
 
-You are done when Step 4 (`npx @liustack/modlens doctor`) shows the **selected provider**
-as `[ok]`. Other providers reading `[!!]` is expected and fine: only the one that will run
-has to be ready.
+The whole install is four steps:
 
-Requirements: Node 22.13 or newer. Check with `node --version`. If it is older, install a
-newer Node before continuing (the rest will fail on an old runtime).
+1. Find the skill directory for your harness.
+2. Put the `skills/modlens` folder into it.
+3. Give it one vision engine (the user may have prepared one already; probe first).
+4. Verify with `doctor`.
 
 ---
 
-## Step 1 — Identify the host and its skill directory
+## Step 1: Find the skill directory for your harness
 
-Each coding agent loads skills from a fixed directory. Decide which one to install into.
+A skill is a folder your harness reads at startup. Each harness reads from a
+fixed location:
 
-| Host | Skill directory |
+| Harness | Skill directory (`TARGET`) |
 | :-- | :-- |
 | Claude Code | `~/.claude/skills/` |
 | Codex | `~/.codex/skills/` |
 | Pi, OpenCode | `~/.agents/skills/` |
 
-How to decide which host you are dealing with, in order of confidence:
+Install into this global directory in the user's home, so the skill is available
+in every project. Do not install into a project-local `.claude/skills` unless the
+user explicitly asks to scope it to the current project.
 
-1. **You know the host you are running inside.** Use its row from the table.
-2. **Otherwise, check which home directories exist** and install into each that does:
-
-   ```bash
-   ls -d ~/.claude ~/.codex ~/.agents 2>/dev/null
-   ```
-
-   `~/.claude` means Claude Code, `~/.codex` means Codex, `~/.agents` means Pi or OpenCode.
-
-**Multiple hosts on one machine.** Either install into each host's directory (Step 2 is cheap
-to repeat), or install once and symlink. To share a single copy, put the skill under
-`~/.agents/skills/modlens` and point the others at it:
+Pick the row for the harness you are running in. If you cannot tell which harness
+you are, decide by which config directory already exists:
 
 ```bash
-mkdir -p ~/.claude/skills ~/.codex/skills
-ln -sfn ~/.agents/skills/modlens ~/.claude/skills/modlens
-ln -sfn ~/.agents/skills/modlens ~/.codex/skills/modlens
+ls -d ~/.claude ~/.codex ~/.agents 2>/dev/null
 ```
 
-`ln -sfn` replaces an existing link in place, so this is safe to re-run.
+- `~/.claude` present -> use `~/.claude/skills/`
+- `~/.codex` present -> use `~/.codex/skills/`
+- `~/.agents` present -> use `~/.agents/skills/`
 
-**If it fails:** a missing parent directory is the usual cause. `mkdir -p` the skill
-directory first, then retry.
+Create the directory so the rest of the steps have a target:
+
+```bash
+mkdir -p ~/.claude/skills   # replace with the TARGET for your harness
+```
+
+**If it fails:** a permission error means you are pointing at a directory you
+cannot write. Confirm the path is under the user's home directory (`echo $HOME`),
+not a system path.
+
+> **Windows:** `~` is the user profile. The directories are
+> `%USERPROFILE%\.claude\skills\`, `%USERPROFILE%\.codex\skills\`, and
+> `%USERPROFILE%\.agents\skills\`. Create one with
+> `mkdir "$env:USERPROFILE\.claude\skills"` in PowerShell.
 
 ---
 
-## Step 2 — Place the skill
+## Step 2: Put `skills/modlens` into the skill directory
 
-The goal is a `modlens` directory containing `SKILL.md` inside the skill directory from
-Step 1. There are two equivalent ways. Try the CLI first; fall back to the manual copy if it
-is unavailable.
+The skill is the `skills/modlens` folder in this repository: a `SKILL.md`, a
+`references/` directory, and a `scripts/` directory with the launcher. Copy the
+whole folder into `TARGET`. There are two equivalent ways. Use path A unless the
+user asked for the skills CLI.
 
-### Path A — the skills CLI (one command)
+### Path A: clone and copy (no extra tooling)
+
+```bash
+rm -rf /tmp/modlens-src
+git clone --depth 1 https://github.com/liustack/modlens.git /tmp/modlens-src
+mkdir -p ~/.claude/skills/modlens          # replace with your TARGET
+cp -R /tmp/modlens-src/skills/modlens/. ~/.claude/skills/modlens/
+```
+
+The copy overwrites any earlier install in place, so running it again just
+refreshes the skill.
+
+**If it fails:**
+- `git: command not found` -> install git, or use Path B.
+- Clone cannot reach GitHub -> check network access, then retry.
+- After copying, confirm the skill and its launcher landed:
+  ```bash
+  ls ~/.claude/skills/modlens/SKILL.md ~/.claude/skills/modlens/scripts/run.sh ~/.claude/skills/modlens/references
+  ```
+  If `SKILL.md` or `scripts/run.sh` is missing, the copy targeted the wrong path.
+  Re-run the `cp` line and check `TARGET`.
+
+### Path B: the skills CLI (third party)
+
+`skills` is a third-party CLI for installing agent skills. It is not required.
 
 ```bash
 npx -y skills add liustack/modlens
 ```
 
-This is a third-party installer (the `skills` CLI, not part of ModLens). It detects the host
-and writes the skill to the right directory. If the command is missing, the network blocks
-it, or it errors, use Path B.
+**If it fails** (the command is unavailable, or it does not place the folder under
+your harness's skill directory): fall back to Path A, which needs only git.
 
-### Path B — clone and copy (works anywhere with git)
+> **Windows:** in PowerShell, replace the `cp -R` line with
+> `Copy-Item -Recurse -Force "$env:TEMP\modlens-src\skills\modlens\*" "$env:USERPROFILE\.claude\skills\modlens\"`
+> and clone into `"$env:TEMP\modlens-src"`.
 
-Set `DEST` to the skill directory you chose in Step 1, then run the block as-is:
+---
 
-```bash
-DEST="$HOME/.claude/skills"          # <- change per Step 1 (~/.codex/skills or ~/.agents/skills)
-SRC="$(mktemp -d)"
-git clone --depth 1 https://github.com/liustack/modlens.git "$SRC"
-mkdir -p "$DEST"
-rm -rf "$DEST/modlens"               # remove any earlier copy so this is a clean replace
-cp -R "$SRC/skills/modlens" "$DEST/modlens"
-rm -rf "$SRC"
-```
+## Step 3: Give it one vision engine
 
-Confirm the copy landed:
+ModLens needs exactly one working vision engine. The README asks the user to
+prepare one before handing you this install, so check what is already on the
+machine before setting anything up:
 
 ```bash
-ls "$DEST/modlens/SKILL.md"
+bash ~/.claude/skills/modlens/scripts/run.sh doctor   # replace with your TARGET
 ```
+
+If the report already shows a selected provider marked `[ok]`, an engine is
+ready: skip to Step 4. Otherwise pick one path below. If the user handed you a
+Gemini API key, use Path 1 with it now.
+
+### Path 1: Gemini API key (recommended; works in headless sessions)
+
+Run both commands through the launcher (replace the path with your `TARGET`):
+
+```bash
+bash ~/.claude/skills/modlens/scripts/run.sh config set gemini-api.apiKey <KEY>
+bash ~/.claude/skills/modlens/scripts/run.sh config set provider gemini-api
+```
+
+If you do not have a key, ask the user for one: a free key takes about three
+minutes at [Google AI Studio](https://aistudio.google.com), no card required.
+The key is written to `~/.modlens/config.json` with `0600` permissions, and
+re-running the commands overwrites the value in place.
+
+### Path 2: Antigravity CLI (no key; needs the user's browser sign-in)
+
+Antigravity (`agy`) needs no API key, but its one-time browser sign-in can only
+be completed by the user, and its login token lives in the OS keyring, which is
+locked in most headless sessions (cron, systemd, SSH without a desktop). On
+those machines use Path 1 instead. Handle it in three idempotent steps:
+
+1. **Probe.** Is `agy` already installed?
+
+   ```bash
+   command -v agy
+   ```
+
+   If it prints a path, skip the install. If it prints nothing, install it (you
+   run this, no user action needed):
+
+   ```bash
+   curl -fsSL https://antigravity.google/cli/install.sh | bash
+   ```
+
+2. **Confirm it runs.** This spends no quota and needs no login:
+
+   ```bash
+   agy --version
+   ```
+
+   `agy: command not found` here means the installer did not add `agy` to this
+   shell's PATH: open a new shell, or have the user do so, then probe again.
+
+3. **Sign-in.** `agy` has no offline way to report whether it is already signed
+   in, so decide from what you just saw. If `agy` was **already installed** before
+   this run, the user most likely signed in earlier: go on to Step 4, and only
+   come back here if `doctor` or a real read reports a sign-in or auth error. If
+   you **just installed** `agy`, it is not signed in yet: run it once, then **ask
+   the user to complete the Google sign-in in the browser it opens, and wait for
+   them to confirm before you continue.** Have them exit `agy` once signed in.
+   You cannot do this sign-in yourself.
+
+   ```bash
+   agy   # opens the browser for the user's one-time sign-in, then they exit
+   ```
 
 **If it fails:**
+- A `config set` write error -> `~/.modlens/config.json` is not writable by this
+  process. Confirm the home directory is writable.
+- `agy: command not found` after the installer -> the install did not add `agy`
+  to this shell's PATH. Open a new shell, or have the user do so, then re-run.
+- Not sure an engine is set up? Step 4 reports exactly which providers are ready.
 
-- `git: command not found` — install git, or use Path A.
-- Clone is blocked by the network — download the repository archive by hand and copy its
-  `skills/modlens` directory to `$DEST/modlens`.
-- `SKILL.md` is missing after the copy — `DEST` was wrong or the copy did not run. Re-check
-  Step 1 and run the block again.
-
----
-
-## Step 3 — Give it a vision engine
-
-The skill calls the `modlens` CLI, which needs one vision engine configured. Pick the
-shortest path that fits the machine. For an agent or any headless session, prefer the Gemini
-key: it needs no interactive login and works without a display.
-
-### Option 1 — Gemini API key (recommended, works headless)
-
-```bash
-npx @liustack/modlens config set gemini-api.apiKey <KEY>
-npx @liustack/modlens config set provider gemini-api
-```
-
-Get a free `<KEY>` from [Google AI Studio](https://aistudio.google.com) (about three
-minutes, no credit card). If you cannot obtain a key yourself, ask the user for one and run
-the two commands with it. The key is written to `~/.modlens/config.json` with `0600`
-permissions; re-running the commands overwrites the value in place.
-
-### Option 2 — Antigravity CLI (no key, needs a browser sign-in)
-
-```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash
-```
-
-Then the **user must run `agy` once and complete the Google sign-in in a browser**. This step
-is interactive and cannot be automated. Antigravity is slower than the Gemini key and its
-login token lives in the OS keyring, which is locked in most headless sessions (agents, cron,
-systemd, SSH without a desktop), so on those machines Option 1 is the reliable choice.
-
-**If it fails:** a provider that stays `[!!]` in Step 4 with `missing: apiKey` means the key
-was not saved, so run Option 1 again. `agy not on PATH` means Antigravity did not install or
-the shell has not picked it up yet.
+> **Windows:** the `curl | bash` installer is for macOS and Linux. On Windows,
+> agy is usable only if the tool ships a native Windows build on PATH (see
+> "Platform support" in the README). The Gemini key path is pure HTTP and works
+> the same on Windows.
 
 ---
 
-## Step 4 — Verify
+## Step 4: Verify
 
-Run the diagnostic. It reads the local machine only: no network call, no quota spent.
+Run the diagnosis through the launcher. It reads the local machine only: no
+network call, no quota spent.
 
 ```bash
-npx @liustack/modlens doctor
+bash ~/.claude/skills/modlens/scripts/run.sh doctor   # replace with your TARGET
 ```
 
-A healthy result for the recommended Gemini setup looks like this (trimmed):
+The launcher prints its runtime selection first (whether it chose a `modlens`
+on PATH, `npx`, or `bunx`), then chains modlens's own report below a
+`--- modlens doctor ---` line. A healthy result for the recommended Gemini setup
+looks like this (trimmed):
 
 ```
 Providers
@@ -151,9 +210,9 @@ Selected provider
   reason: provider set in the config file
 ```
 
-**Success is the two lines under `Selected provider`:** the provider named there is the one
-that will run, and it must appear as `[ok]` in the `Providers` list above. The other
-providers showing `[!!]` is normal and needs no action.
+**Success is the two lines under `Selected provider`:** the provider named there
+is the one that will run, and it must appear as `[ok]` in the `Providers` list
+above. The other providers showing `[!!]` is normal and needs no action.
 
 Common lines and what they mean:
 
@@ -161,16 +220,35 @@ Common lines and what they mean:
 | :-- | :-- | :-- |
 | `[!!] ... (minimum 22.13)` under `Node` | Node is too old | Upgrade Node to 22.13+ |
 | `Selected provider: antigravity-cli` when you configured Gemini | The provider was never switched | Re-run `config set provider gemini-api` (Step 3) |
-| `[!!] gemini-api: missing: apiKey` | The key was not saved | Re-run the Step 3 Option 1 commands |
-| `[!!] antigravity-cli: agy not on PATH` | Antigravity is not installed or not signed in | Use Option 1, or complete Step 3 Option 2 |
+| `[!!] gemini-api: missing: apiKey` | The key was not saved | Re-run the Step 3 Path 1 commands |
+| `[!!] antigravity-cli: agy not on PATH` | Antigravity is not installed | Use Path 1, or complete Step 3 Path 2 |
 | `none detected` under `Harness` | You are not inside a recognized agent right now | Fine for a plain CLI check; recovery detects the harness at run time |
 
-Add `--json` for a machine-readable report you can parse directly:
+Add `--json` for a machine-readable report you can parse directly.
+
+**If it fails:**
+- The launcher printed a JSON diagnosis and exited 78 -> no runtime could run
+  modlens: no compatible `modlens` on PATH, no `npx`, and no `bunx`. Read the
+  `nextSteps` field in that JSON and relay it. The manual fix is to install
+  Node 22.13+ (https://nodejs.org) or Bun (https://bun.sh), then re-run this
+  step. Do not report modlens as broken.
+- Any other message -> it is catalogued with its cause and fix in
+  [`docs/troubleshooting.md`](docs/troubleshooting.md).
+
+Once the selected provider reads `[ok]`, installation is complete. The skill
+triggers on its own the next time an image shows up. To confirm the read path
+end to end, run the launcher on any local image (this one call does use the
+engine, so it spends one read):
 
 ```bash
-npx @liustack/modlens doctor --json
+bash ~/.claude/skills/modlens/scripts/run.sh -i <path-to-image>
 ```
 
-Once the selected provider reads `[ok]`, installation is complete. The skill triggers on its
-own the next time an image shows up. To confirm the CLI end to end, run it on any local
-image: `npx @liustack/modlens -i <path-to-image>`.
+---
+
+## Done
+
+The skill is installed and a vision engine is ready. From now on you do not type
+these commands by hand: the skill triggers on its own when an image needs
+reading. To change engines or add a key later, see
+[`skills/modlens/references/configure.md`](skills/modlens/references/configure.md).
