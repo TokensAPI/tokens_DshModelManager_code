@@ -84,7 +84,9 @@ The exact clone-and-copy commands and a per-host walkthrough are in [INSTALL.md]
 
 </details>
 
-Requires Node 22.13+. macOS and Linux are fully supported and verified in CI.
+Requires Node 22.13+.
+
+**Platform support.** macOS and Linux are fully supported and verified in CI on Node 22 and 24. Windows runs the same CI matrix on Node 22 and 24, covering the CLI core, config, `doctor`, harness detection, and OpenCode paste recovery (the [#11](https://github.com/liustack/modlens/issues/11) fix included). The POSIX-only cases (subprocess signal handling, permission bits, and the Claude Code and Pi JSONL home layouts) are guarded out of the Windows run. Harness detection on Windows falls back to environment fingerprints, since there is no `ps` to read the process tree. External engines (Antigravity CLI, Claude CLI) run only where they ship a Windows build.
 
 ## Usage
 

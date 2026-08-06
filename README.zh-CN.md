@@ -84,7 +84,9 @@ curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # 浏览器
 
 </details>
 
-要求 Node 22.13+。macOS 与 Linux 完整支持，且经 CI 验证。
+要求 Node 22.13+。
+
+**平台支持。** macOS 与 Linux 完整支持，并在 Node 22 与 24 上经 CI 验证。Windows 跑同一套 CI 矩阵（Node 22 与 24），覆盖 CLI 核心、config、`doctor`、宿主检测，以及 OpenCode 粘贴恢复（含 [#11](https://github.com/liustack/modlens/issues/11) 的修复）。仅 POSIX 适用的用例（子进程信号处理、权限位、Claude Code 与 Pi 的 JSONL 家目录布局）在 Windows 上被守卫跳过。Windows 无 `ps`，宿主检测回退到环境变量指纹。外部引擎（Antigravity CLI、Claude CLI）取决于各自是否有 Windows 版本。
 
 ## 用法
 
