@@ -51,9 +51,12 @@ export function buildAntigravityInvocation(
         printTimeout,
     ];
 
+    // The analyzer supplies an isolated workdir for both local and remote
+    // images. The fallbacks are defensive: never the caller's own directory,
+    // which an injection in the image could read through the agent.
     const cwd =
         options.workdir ||
-        (options.imageKind === 'local' ? path.dirname(options.imageSource) : process.cwd());
+        (options.imageKind === 'local' ? path.dirname(options.imageSource) : os.tmpdir());
 
     return {
         command: options.providerBin || 'agy',

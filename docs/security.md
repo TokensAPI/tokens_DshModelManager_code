@@ -20,7 +20,9 @@ ModLens invokes `agy` with `--dangerously-skip-permissions` because prompt mode 
 
 The `claude-cli` provider runs with `--allowedTools Read` only, so it can read local files and nothing else.
 
-Both subprocess providers also run in a throwaway directory containing only the one image, created fresh per call and removed afterward. Text inside an image is untrusted, so an injection could otherwise steer a broadly-permissioned agent into reading files that sit next to the original. A directory of one removes that reach. Passing `--workdir` opts out and runs where you point it.
+Both subprocess providers also run in a throwaway directory created fresh per call and removed afterward. For a local image it holds a private copy of that one image and nothing else, and it is a real copy, never a hardlink, so a provider writing to its temp path cannot touch the original. For a remote image the directory is empty and the agent downloads into it. Without this, text inside an image could steer a broadly-permissioned agent into reading files next to the original, or whatever project the caller happened to be in. Passing `--workdir` opts out and runs where you point it.
+
+This is exposure reduction, not an OS sandbox: the agent can still read absolute paths, reach the network, and spawn processes. Treat it as a narrower default, not a security boundary. For images you do not trust, prefer an inline API provider (`-p gemini-api`), which hands the bytes to an HTTP endpoint and runs no local agent.
 
 ## Image content is untrusted input
 

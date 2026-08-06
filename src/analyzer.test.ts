@@ -139,6 +139,54 @@ describe.skipIf(onWindows)('provider subprocess handling', () => {
         expect(fs.existsSync(cwd)).toBe(false); // cleaned up after the run
     }, 30_000);
 
+    it('hands the provider a real copy, so writing the temp image never mutates the original', async () => {
+        // The isolated image used to be a hardlink sharing the original's
+        // inode, so a provider writing "its" temp file rewrote the user's file.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-mut-'));
+        cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+        const image = path.join(dir, 'shot.png');
+        fs.writeFileSync(image, 'original-bytes');
+        const bin = path.join(dir, 'fake-agy');
+        // Overwrite every file in the cwd (the isolated copy), then answer.
+        fs.writeFileSync(
+            bin,
+            `#!/bin/sh\nfor f in *; do echo MUTATED > "$f"; done\necho '${SUCCESS_ENVELOPE}'\n`,
+            { mode: 0o755 },
+        );
+
+        await analyzeImage({ input: image, providerBin: bin, timeoutMs: 20_000, config: {} });
+
+        expect(fs.readFileSync(image, 'utf-8')).toBe('original-bytes');
+    }, 30_000);
+
+    it('runs a remote image in an empty throwaway cwd, not the caller directory', async () => {
+        // A remote image has no local file to isolate, but the agent must still
+        // not inherit the caller's directory, which it used to fall back to.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-rem-'));
+        cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+        const record = path.join(dir, 'record.txt');
+        const bin = path.join(dir, 'fake-agy');
+        fs.writeFileSync(
+            bin,
+            `#!/bin/sh\npwd > "${record}"\nls -A >> "${record}"\necho '${SUCCESS_ENVELOPE}'\n`,
+            { mode: 0o755 },
+        );
+
+        await analyzeImage({
+            input: 'https://example.com/shot.png',
+            providerBin: bin,
+            timeoutMs: 20_000,
+            config: {},
+        });
+
+        const recorded = fs.readFileSync(record, 'utf-8').trim();
+        const lines = recorded.split('\n');
+        const cwd = lines[0];
+        expect(cwd).not.toBe(process.cwd()); // never the caller's directory
+        expect(lines).toHaveLength(1); // ls -A printed nothing: the cwd is empty
+        expect(fs.existsSync(cwd)).toBe(false); // cleaned up after the run
+    }, 30_000);
+
     it('reports a timeout when the provider never exits', async () => {
         // Straight at runCommand: analyzeImage adds a 30s kill backstop on top
         // of the caller's timeout, which would make this test crawl.

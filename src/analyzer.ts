@@ -90,11 +90,14 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
         const parseOutput = provider.parseOutput;
         // Run the agent in a throwaway directory holding only this one image, so
         // an injection in the image cannot steer it into siblings of the
-        // original file. An explicit --workdir opts out; remote images have no
-        // local file to isolate.
+        // original file. A remote image has no local file to copy, but the agent
+        // still must not run in the caller's directory, so it gets an empty
+        // throwaway cwd instead. An explicit --workdir opts out.
         const isolation =
-            !options.workdir && resolvedInput.kind === 'local' && provider.isolateWorkdir
-                ? isolateImage(resolvedInput.source)
+            !options.workdir && provider.isolateWorkdir
+                ? resolvedInput.kind === 'local'
+                    ? isolateImage(resolvedInput.source)
+                    : emptyWorkdir()
                 : null;
         try {
             const invocation = buildInvocation({
@@ -182,7 +185,7 @@ function validateInputFile(filePath: string): void {
 }
 
 interface IsolatedImage {
-    imageSource: string;
+    imageSource?: string;
     workdir: string;
     cleanup: () => void;
 }
@@ -196,15 +199,25 @@ interface IsolatedImage {
 function isolateImage(source: string): IsolatedImage {
     const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-work-'));
     const imageSource = path.join(workdir, path.basename(source));
-    try {
-        // A hardlink shares the bytes with no copy; fall back to a real copy
-        // across devices or when linking is not permitted.
-        fs.linkSync(source, imageSource);
-    } catch {
-        fs.copyFileSync(source, imageSource);
-    }
+    // Always a real copy, never a hardlink: a hardlink shares the inode, so a
+    // provider writing to its temp path would mutate the user's original file.
+    fs.copyFileSync(source, imageSource);
+    fs.chmodSync(imageSource, 0o600);
     return {
         imageSource,
+        workdir,
+        cleanup: () => fs.rmSync(workdir, { recursive: true, force: true }),
+    };
+}
+
+/**
+ * An empty throwaway cwd for a remote image: there is no local file to copy,
+ * but the agent still must not run in the caller's directory, where an
+ * injection in the image could read whatever project the user happens to be in.
+ */
+function emptyWorkdir(): IsolatedImage {
+    const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-work-'));
+    return {
         workdir,
         cleanup: () => fs.rmSync(workdir, { recursive: true, force: true }),
     };
