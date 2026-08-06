@@ -22,9 +22,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
 </p>
 
-```bash
-npx -y skills add liustack/modlens                # 安装 skill
-npx @liustack/modlens -i screenshot.png           # 或直接作为 CLI 使用
+```text
+把这句话发给你的 AI：按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill
 ```
 
 DeepSeek-V4-Flash 这类纯文本模型没有视觉能力，无法处理截图和图片。ModLens 把图片交给真正的视觉引擎，返回模型可以引用的结构化证据：图中文字逐句转录，版面按阅读顺序划分区块，读不准的部分明确标出。它还解决了一个别家没有解决的问题：**直接粘贴进对话的图片也能识别**，无需先保存成文件再提供路径。
@@ -40,53 +39,13 @@ DeepSeek-V4-Flash 这类纯文本模型没有视觉能力，无法处理截图�
 
 ## 安装
 
-两种方式，按执行者选择。
+把下面这句话发给你的 AI，它会完成安装、配置和验证，并把结果告诉你：
 
-### 如果你是人
+> 按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill，完成后运行体检并把结果告诉我。
 
-从上到下运行这段。它安装 skill，将 ModLens 指向免费的 Gemini 引擎，并验证结果。无需做任何选择：
+推荐引擎是免费的 Gemini key：到 [Google AI Studio](https://aistudio.google.com) 领取（约三分钟，无需信用卡），把 key 发给你的 AI 让它配置。
 
-```bash
-npx -y skills add liustack/modlens
-npx @liustack/modlens config set gemini-api.apiKey <KEY>
-npx @liustack/modlens config set provider gemini-api
-npx @liustack/modlens doctor
-```
-
-到 [Google AI Studio](https://aistudio.google.com) 获取 `<KEY>`：约三分钟，无需信用卡。最后一条命令做本机健康检查，当 `Selected provider` 一行显示 `[ok]` 即完成。
-
-### 如果你是 AI agent
-
-告诉它：「按 https://github.com/liustack/modlens 的 INSTALL.md 安装 ModLens skill」。agent 会读取 [INSTALL.md](INSTALL.md)（一份零歧义的四步指南）并执行。
-
-<details>
-<summary>免 key 引擎、手动安装、其他引擎、多宿主</summary>
-
-**完全不用 key。** Antigravity CLI 无需注册，代价是较慢（15 到 40 秒），免费额度按周发放，且浏览器登录无法在无界面会话中完成。因此对 agent 和服务器，上面的 Gemini key 更可靠。
-
-```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # 浏览器登录后退出
-```
-
-**手动安装 skill。** `skills` CLI 不可用时，把 skill 复制进宿主对应目录：
-
-| 宿主 | skill 目录 |
-| :-- | :-- |
-| Claude Code | `~/.claude/skills/` |
-| Codex | `~/.codex/skills/` |
-| Pi、OpenCode | `~/.agents/skills/` |
-
-确切的克隆-复制命令和分宿主步骤见 [INSTALL.md](INSTALL.md)。
-
-**其他引擎。** `openai`（任何 OpenAI 兼容多模态端点）、`anthropic`、`claude-cli`（复用现有 Claude 登录）。配置手册见 [配置](skills/modlens/references/configure.md)。
-
-**一台机器上多个 agent。** 装进每个宿主的目录，或在 `~/.agents/skills/modlens` 保留一份并把其他宿主软链过去。
-
-</details>
-
-要求 Node 22.13+。
-
-**平台支持。** macOS 与 Linux 完整支持，并在 Node 22 与 24 上经 CI 验证。Windows 跑同一套 CI 矩阵（Node 22 与 24），覆盖 CLI 核心、config、`doctor`、宿主检测，以及 OpenCode 粘贴恢复（含 [#11](https://github.com/liustack/modlens/issues/11) 的修复）。仅 POSIX 适用的用例（子进程信号处理、权限位、Claude Code 与 Pi 的 JSONL 家目录布局）在 Windows 上被守卫跳过。Windows 无 `ps`，宿主检测回退到环境变量指纹。外部引擎（Antigravity CLI、Claude CLI）取决于各自是否有 Windows 版本。
+想完全免注册就用 Antigravity CLI。**唯一需要亲手做的一步**是它的浏览器登录：你的 AI 装好之后，运行 `agy` 完成登录即可。
 
 ## 用法
 
