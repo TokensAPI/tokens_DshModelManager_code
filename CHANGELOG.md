@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.0.0 - 2026-08-06
 
 A code-review pass. Two user-facing bugs, a stack of doc corrections, and the tooling a public repo is expected to carry.
 
