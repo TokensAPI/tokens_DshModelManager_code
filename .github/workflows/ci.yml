@@ -11,9 +11,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         # 22.13 is the floor (see package.json engines): node:sqlite ships
         # unflagged there, so paste recovery works without a runtime guard.
+        # Windows runs the same suite; the POSIX-only cases (subprocess signals,
+        # permission bits, JSONL home layouts) are guarded with describe.skipIf.
         node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
