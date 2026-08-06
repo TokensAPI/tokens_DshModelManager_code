@@ -136,6 +136,6 @@ describe('schema shape enforcement', () => {
                 timeoutMs: 1000,
                 settings: { apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm' },
             }),
-        ).rejects.toThrow(/does not match the vision schema \(missing: ocr, ocr.full_text/);
+        ).rejects.toThrow(/does not match the vision schema \(missing: ocr, layout/);
     });
 });
