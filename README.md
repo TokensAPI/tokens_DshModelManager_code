@@ -27,16 +27,16 @@ npx -y skills add liustack/modlens             # install the skill
 npx @liustack/modlens -i screenshot.png        # or just use the CLI
 ```
 
-Models like DeepSeek-V4-Flash are cheap, fast, capable, and blind. Throw one a screenshot of an error and it sees nothing. ModLens hands the image to a real vision engine and brings back evidence your model can quote: every word transcribed, the layout mapped, the doubts declared. And **you just paste**: other bridges make you save a file and report its path, while ModLens pulls the pasted image straight back out of session storage.
+Text-only models like DeepSeek-V4-Flash have no vision capability and cannot process screenshots or images. ModLens hands the image to a real vision engine and returns structured evidence the model can quote: every word transcribed, the layout mapped into reading-order regions, uncertain parts marked. It also solves a problem other bridges do not: **images pasted directly into the chat are recovered and read**, with no save-to-file step.
 
 ## Highlights
 
-- **Pasting works.** A pasted image never becomes a file, which is why other vision bridges cannot see it. ModLens recovers it from the harness's local session storage instead.
-- **Evidence, not an impression.** Every word transcribed, layout cut into regions in reading order, entities and relations listed. Your model quotes specifics instead of trusting a vibe.
-- **It says when it cannot read something.** Uncertain parts land in `uncertainty`. Pixel coordinates and confidence scores, the two things vision models fabricate most, were deliberately dropped.
-- **Keep your model.** You picked it for price and reasoning, not eyesight. That choice stays.
-- **Starts with no key.** The default engine (Antigravity CLI) needs none. A free Gemini key cuts a read to 5-10 seconds.
-- **Install once, works everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
+- **Pasted images are recoverable.** A pasted image never becomes a file, so other vision bridges cannot process it. ModLens recovers it from the harness's local session storage.
+- **Evidence, not an impression.** Full transcription, reading-order layout regions, entity and relation lists. The model quotes specifics.
+- **Uncertainty is explicit.** Unclear content goes into the `uncertainty` field. Pixel coordinates and confidence scores, the two data points vision models most often fabricate, are deliberately excluded.
+- **Keep your model.** The model was chosen for price and reasoning. That choice stays.
+- **Free to start.** The default engine (Antigravity CLI) needs no key. A free Gemini key brings a read down to 5-10 seconds.
+- **Install once, use everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
 
 ## Installation
 
@@ -53,7 +53,7 @@ modlens config set gemini-api.apiKey <key>
 modlens config set provider gemini-api
 ```
 
-Skipping the sign-up is fine: **Antigravity CLI** works with no key, it is just slower (15-40 seconds) with a tight free quota:
+Without a sign-up, **Antigravity CLI** works with no key. It is slower (15-40 seconds) and its free quota is limited:
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # sign in, then exit
@@ -108,7 +108,7 @@ Three images pasted at once. The model queues them up and reads them one by one,
 
 ![Three images dropped together, read one by one](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-batch.png)
 
-The stress test: a scatter plot of 128 models. It identifies the chart, both axes, the log scale, and picks the one highlighted point out of the crowd with its coordinates (about $0.028, intelligence score 50). Dense charts are where vision models usually fold.
+The stress test: a scatter plot of 128 models. It identifies the chart, both axes, the log scale, and picks the one highlighted point out of the crowd with its coordinates (about $0.028, intelligence score 50). Dense charts are where vision models most often fail.
 
 ![The 128-model scatter plot, highlighted point read with exact coordinates](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.png)
 
@@ -120,14 +120,14 @@ And the paste path, end to end: Claude Code on a DeepSeek gateway, two images pa
 
 ![A text-only model hands an image to the vision engine through the modlens skill and gets structured JSON evidence back](https://raw.githubusercontent.com/liustack/modlens/main/assets/flow.en.png)
 
-No magic, four steps:
+Four steps:
 
 1. The skill triggers when an image shows up: a path, a URL, or the bare placeholder a text-only model gets left with after a paste.
 2. It runs the `modlens` CLI, which hands the image to a vision engine. Five to choose from, the free Antigravity CLI by default.
 3. The engine's reading is forced into a fixed JSON schema: transcription, layout, semantics, uncertainty. Output that does not match the schema is rejected, never patched up.
 4. Your model quotes the evidence and answers.
 
-The paste trick is the part nobody else does. A pasted image is handled inside the client: encoded and sent the moment it lands, gone before any outside tool can touch it, which is why other bridges tell you to save a file and report the path. But before those bytes leave, the harness has already written them into its local session record. `recover-paste` reads them back from there: JSONL in Claude Code and Pi, SQLite in OpenCode, and Codex needs no recovery at all because its pastes already land as temp files. Details in [harness setup](docs/harness-setup.md).
+Paste recovery is the capability other bridges lack. A paste is handled entirely inside the client: the image is encoded and sent the moment it lands, out of reach of any external tool, which is why other bridges require a saved file and a path. But before those bytes leave, the harness has already written them into its local session record. `recover-paste` reads them back from there: JSONL in Claude Code and Pi, SQLite in OpenCode, and Codex needs no recovery at all because its pastes already land as temp files. Details in [harness setup](docs/harness-setup.md).
 
 | | Swap in a multimodal model | Other vision bridges (MCP servers etc.) | ModLens |
 | :-- | :-- | :-- | :-- |
@@ -152,7 +152,7 @@ The weaknesses, in the same place: agy's free tier is a weekly quota and heavy u
 | `--prompt <text>` | Extra focus | |
 | `--timeout <ms>` | Provider timeout | `180000` |
 | `--provider-bin <path>` | Provider binary path | `agy` / `claude` |
-| `--workdir <path>` | Working directory for the provider | image's directory |
+| `--workdir <path>` | Working directory for the provider | a fresh isolated directory per run |
 
 The default `-m` model depends on the provider:
 
@@ -175,7 +175,7 @@ The default `-m` model depends on the provider:
 | `--harness <name>` | Force storage scope: `claude-code`, `pi`, `opencode`, `none` | auto-detect |
 | `--cwd <path>` | Project directory the image was pasted in | current directory |
 
-Five providers: `antigravity-cli` (default, no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (rides your Claude subscription). Two more subcommands: `modlens config <init|set|show>`, and `modlens doctor` (checks Node, provider readiness, which provider will be selected and why, and the detected harness, without spending quota or touching the network. Add `--json` for a machine-readable report).
+Five providers: `antigravity-cli` (default, no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (uses your existing Claude subscription). Two more subcommands: `modlens config <init|set|show>`, and `modlens doctor` (checks Node, provider readiness, which provider will be selected and why, and the detected harness, without spending quota or touching the network. Add `--json` for a machine-readable report).
 
 ## Documentation
 
@@ -191,10 +191,10 @@ Five providers: `antigravity-cli` (default, no key), `gemini-api` (fastest free 
 
 ## Contributing
 
-ModLens does not accept pull requests. It is a small tool with one pair of hands on it, and every line stays author-owned: that tight loop is what keeps it dependable. Two ways to contribute that genuinely help:
+ModLens does not accept pull requests. The project is maintained by a single author who reviews every line, which is a deliberate choice for reliability. Two effective ways to contribute:
 
-- **[Open an issue](https://github.com/liustack/modlens/issues).** Bugs, ideas, a confusing error, docs that read wrong. Issues get read and drive what gets built.
-- **Fork it.** MIT means your copy is fully yours: rename it, rewire it, ship it.
+- **[Open an issue](https://github.com/liustack/modlens/issues).** Bugs, suggestions, confusing errors, unclear docs. Issues are read and shape what gets built next.
+- **Fork it.** Under MIT your copy is fully yours to modify and publish.
 
 ## Shameless plug
 
