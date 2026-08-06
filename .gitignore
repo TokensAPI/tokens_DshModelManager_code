@@ -10,6 +10,8 @@ node_modules/
 
 # generated outputs
 skills/**/outputs/
+# local eval evidence artifacts
+evals/results/
 
 # logs
 npm-debug.log*
