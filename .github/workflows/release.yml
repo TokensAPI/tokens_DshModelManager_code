@@ -43,7 +43,7 @@ jobs:
           cache: pnpm
       # OIDC trusted publishing and --provenance need npm 11.5.1+, newer than
       # what Node 22 ships with.
-      - run: npm install -g npm@latest
+      - run: npm install -g npm@11
       - run: pnpm install --frozen-lockfile
       # Same guards release.mjs runs, before anything irreversible.
       - run: pnpm typecheck
