@@ -189,8 +189,9 @@ those machines use Path 1 instead. Handle it in three idempotent steps:
 
 ## Step 4: Verify
 
-Run the diagnosis through the launcher. It reads the local machine only: no
-network call, no quota spent.
+Run the diagnosis through the launcher. It spends no quota. (On a machine
+where the launcher resolves to npx or bunx, the first call may download the
+pinned package; that is how those runners work.)
 
 ```bash
 bash ~/.claude/skills/modlens/scripts/run.sh doctor   # replace with your TARGET
