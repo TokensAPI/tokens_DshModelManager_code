@@ -38,8 +38,9 @@ function run(args: string[], env: Record<string, string> = {}) {
 
 beforeAll(() => {
     // Always rebuild so the assembly under test is the current source, not a
-    // stale dist left over from a previous run.
-    execFileSync('pnpm', ['build'], { cwd: root, stdio: 'ignore' });
+    // stale dist left over from a previous run. shell:true so Windows resolves
+    // `pnpm` to `pnpm.cmd` through PATHEXT; execFile alone would only try pnpm.exe.
+    execFileSync('pnpm', ['build'], { cwd: root, stdio: 'ignore', shell: true });
 }, 120_000);
 
 describe('analyze argument validation', () => {
@@ -89,7 +90,9 @@ describe('top-level wiring', () => {
 describe('config show', () => {
     it('prints an empty effective config for a fresh home', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
-        const { code, stdout } = run(['config', 'show'], { HOME: home });
+        // HOME for POSIX, USERPROFILE for Windows: os.homedir() reads one or the
+        // other, and the config dir hangs off it.
+        const { code, stdout } = run(['config', 'show'], { HOME: home, USERPROFILE: home });
         expect(code).toBe(0);
         expect(JSON.parse(stdout)).toEqual({ providers: {} });
         fs.rmSync(home, { recursive: true, force: true });
@@ -99,6 +102,7 @@ describe('config show', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
         const { code, stdout } = run(['config', 'show'], {
             HOME: home,
+            USERPROFILE: home,
             GEMINI_API_KEY: 'AIzaSecretFromEnv12345',
         });
         expect(code).toBe(0);

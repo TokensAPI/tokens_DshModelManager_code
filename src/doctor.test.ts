@@ -148,29 +148,34 @@ describe('buildDoctorReport: harness basis', () => {
 });
 
 describe('buildDoctorReport: config file permissions', () => {
-    it('accepts a 0600 config and flags a group/world-readable one', () => {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
-        try {
-            const locked = path.join(dir, 'locked.json');
-            fs.writeFileSync(locked, '{}', { mode: 0o600 });
-            fs.chmodSync(locked, 0o600);
-            const okReport = buildDoctorReport({ config: {}, env: {}, configPath: locked });
-            expect(okReport.config).toMatchObject({
-                exists: true,
-                permissionsOk: true,
-                mode: '600',
-            });
+    // POSIX permission bits: Windows reports 0o666 for every file and enforces
+    // access through ACLs instead, so the doctor skips this verdict there.
+    it.skipIf(process.platform === 'win32')(
+        'accepts a 0600 config and flags a group/world-readable one',
+        () => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
+            try {
+                const locked = path.join(dir, 'locked.json');
+                fs.writeFileSync(locked, '{}', { mode: 0o600 });
+                fs.chmodSync(locked, 0o600);
+                const okReport = buildDoctorReport({ config: {}, env: {}, configPath: locked });
+                expect(okReport.config).toMatchObject({
+                    exists: true,
+                    permissionsOk: true,
+                    mode: '600',
+                });
 
-            const loose = path.join(dir, 'loose.json');
-            fs.writeFileSync(loose, '{}', { mode: 0o644 });
-            fs.chmodSync(loose, 0o644);
-            const looseReport = buildDoctorReport({ config: {}, env: {}, configPath: loose });
-            expect(looseReport.config.permissionsOk).toBe(false);
-            expect(looseReport.config.note).toContain('chmod 600');
-        } finally {
-            fs.rmSync(dir, { recursive: true, force: true });
-        }
-    });
+                const loose = path.join(dir, 'loose.json');
+                fs.writeFileSync(loose, '{}', { mode: 0o644 });
+                fs.chmodSync(loose, 0o644);
+                const looseReport = buildDoctorReport({ config: {}, env: {}, configPath: loose });
+                expect(looseReport.config.permissionsOk).toBe(false);
+                expect(looseReport.config.note).toContain('chmod 600');
+            } finally {
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        },
+    );
 
     it('treats a missing config file as fine, not an error', () => {
         const report = buildDoctorReport({
