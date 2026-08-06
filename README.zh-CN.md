@@ -45,7 +45,12 @@ DeepSeek-V4-Flash 这类纯文本模型没有视觉能力，无法处理截图�
 
 推荐引擎是免费的 Gemini key：到 [Google AI Studio](https://aistudio.google.com) 领取（约三分钟，无需信用卡），把 key 发给你的 AI 让它配置。
 
-想完全免注册就用 Antigravity CLI。**唯一需要亲手做的一步**是它的浏览器登录：你的 AI 装好之后，运行 `agy` 完成登录即可。
+想完全免注册就用 Antigravity CLI。**唯一需要亲手做的一步**是它的浏览器登录：
+
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash   # 安装，AI 已代装过则跳过
+agy                                                           # 浏览器完成登录后退出
+```
 
 ## 用法
 

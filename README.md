@@ -45,7 +45,12 @@ Send this line to your AI. It installs, configures, and verifies the skill, then
 
 The recommended engine is a free Gemini key: get one at [Google AI Studio](https://aistudio.google.com) (about three minutes, no credit card), then send the key to your AI and let it configure the engine.
 
-To avoid any sign-up, use Antigravity CLI instead. **The one step that needs your hands** is its browser sign-in: after your AI installs it, run `agy` once and sign in.
+To avoid any sign-up, use Antigravity CLI instead. **The one step that needs your hands** is its browser sign-in:
+
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash   # install, skip if your AI already did
+agy                                                           # sign in, then exit
+```
 
 ## Usage
 
