@@ -69,33 +69,11 @@ Codex 桌面 App 中识别一张推文截图。配文、互动数据（2.9K 回�
 
 ![接入 DeepSeek 的 Claude Code 中，粘贴的两张图被恢复并逐张读出](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.png)
 
-## 工作原理
-
-![纯文本模型经 modlens skill 把图片交给视觉引擎，返回结构化 JSON 证据](https://raw.githubusercontent.com/liustack/modlens/main/assets/flow.zh.png)
-
-四个步骤：
-
-1. 图片出现时 skill 触发：一个路径、一个 URL，或纯文本模型粘贴后留下的占位符。
-2. skill 运行 `modlens` 命令，将图片交给视觉引擎。五个引擎可选，默认为免费的 Antigravity CLI。
-3. 引擎的识别结果被强制装入固定的 JSON 结构：转录、版面、语义、不确定项。不符合结构的输出直接报错，不做修补。
-4. 模型引用证据作答。
-
-粘贴恢复是其他方案没有的能力。粘贴由客户端内部处理：图片进入对话框后立即被编码发送，外部工具无法接触，因此其他方案只能要求先保存文件。但在字节发出之前，宿主已将其原样写入本地会话记录，`recover-paste` 从那里恢复：Claude Code 和 Pi 使用 JSONL，OpenCode 使用 SQLite，Codex 的粘贴本身就有临时文件，无需恢复。细节见[宿主接入](docs/harness-setup.md)。
-
-| | 更换多模态模型 | 其他视觉方案（MCP server 等） | ModLens |
-| :-- | :-- | :-- | :-- |
-| 现有模型 | 需要更换 | 保留 | 保留 |
-| 粘贴进对话的图片 | 取决于模型支持 | 无法处理 | 恢复后识别 |
-| 返回内容 | 模型自身的理解 | 通常为一段描述 | 全文转录、版面区块、实体关系 |
-| 读不准的部分 | 可能编造 | 可能编造 | 进入 `uncertainty` |
-| 成本 | 多模态模型价格 | 多按 API 计费 | agy 免费额度或免费 Gemini key |
-
-限制如下：agy 免费额度按周发放，重度使用会耗尽（免费 Gemini key 可替代）。会话存储格式是各宿主的内部实现，没有兼容承诺。恢复方式失效时，将图片文件拖入终端始终可用。
-
 ## 文档
 
 | 文档 | 适用场景 |
 | :-- | :-- |
+| [INSTALL.md](INSTALL.md) | 一步步安装 skill（为 agent 编写） |
 | [CLI 手册](skills/modlens/references/cli.md) | skill 所驱动的 CLI：参数、配置与体检 |
 | [故障排查](docs/troubleshooting.md) | 命令报错，查成因和解法 |
 | [配置手册](skills/modlens/references/configure.md) | 配置 key、切换 provider、排查配置 |
