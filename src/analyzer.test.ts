@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { analyzeImage, resolveInput, runCommand } from './analyzer.ts';
+import { analyzeImage, chooseProviderName, resolveInput, runCommand } from './analyzer.ts';
 
 const onWindows = process.platform === 'win32';
 
@@ -247,3 +247,36 @@ async function waitFor<T>(probe: () => T | null | undefined, timeoutMs = 8_000):
     }
     throw new Error('waitFor timed out');
 }
+
+describe('chooseProviderName', () => {
+    const keyedConfig = { providers: { 'gemini-api': { apiKey: 'g-key' } } };
+    const noEnv = {} as NodeJS.ProcessEnv;
+
+    it('routes a remote URL to gemini-api when a key is configured and no -p was given', () => {
+        expect(chooseProviderName(undefined, keyedConfig, 'remote', noEnv)).toBe('gemini-api');
+    });
+
+    it('keeps the agent default for a remote URL when no gemini key exists', () => {
+        expect(chooseProviderName(undefined, {}, 'remote', noEnv)).toBe('antigravity-cli');
+    });
+
+    it('always honors an explicit -p, key or not', () => {
+        expect(chooseProviderName('antigravity-cli', keyedConfig, 'remote', noEnv)).toBe(
+            'antigravity-cli',
+        );
+    });
+
+    it('never reroutes a local image', () => {
+        expect(chooseProviderName(undefined, keyedConfig, 'local', noEnv)).toBe('antigravity-cli');
+    });
+
+    it('leaves a non-agent default alone for remote URLs', () => {
+        const geminiDefault = { ...keyedConfig, provider: 'gemini-api' };
+        expect(chooseProviderName(undefined, geminiDefault, 'remote', noEnv)).toBe('gemini-api');
+    });
+
+    it('a GEMINI_API_KEY in the environment triggers the reroute too', () => {
+        const env = { GEMINI_API_KEY: 'g-env' } as NodeJS.ProcessEnv;
+        expect(chooseProviderName(undefined, {}, 'remote', env)).toBe('gemini-api');
+    });
+});

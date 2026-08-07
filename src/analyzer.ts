@@ -59,6 +59,31 @@ const DRAIN_GRACE_MS = 500;
 // How long a killed child gets before SIGKILL.
 const SIGKILL_GRACE_MS = 2_000;
 
+/**
+ * Which provider a run should use. An explicit -p always wins, and a local
+ * image uses the configured default unchanged. A remote URL is the special
+ * case: a subprocess agent fetches the URL itself, outside the download
+ * guards (private-address blocking, magic-byte image verification, the size
+ * cap), which only exist on the inline API path. So when the default is an
+ * agent and a Gemini key is configured, a remote URL defaults to gemini-api,
+ * where every guard applies.
+ */
+export function chooseProviderName(
+    requested: string | undefined,
+    config: ModlensConfig,
+    kind: 'local' | 'remote',
+    env: NodeJS.ProcessEnv = process.env,
+): string {
+    const name = requested || defaultProviderName(config);
+    if (requested || kind !== 'remote') {
+        return name;
+    }
+    if (!resolveProvider(name).isolateWorkdir) {
+        return name;
+    }
+    return resolveProviderSettings('gemini-api', config, env).apiKey ? 'gemini-api' : name;
+}
+
 export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResult> {
     const resolvedInput = resolveInput(options.input);
     if (resolvedInput.kind === 'local') {
@@ -66,7 +91,9 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
     }
 
     const config = options.config ?? loadConfigFile();
-    const provider = resolveProvider(options.provider || defaultProviderName(config));
+    const provider = resolveProvider(
+        chooseProviderName(options.provider, config, resolvedInput.kind),
+    );
     const settings = resolveProviderSettings(provider.name, config);
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const model = options.model || settings.model || provider.defaultModel;
