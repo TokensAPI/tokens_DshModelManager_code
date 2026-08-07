@@ -112,6 +112,15 @@ export function resolveImageMime(buffer: Buffer, source: string, contentType?: s
 }
 
 export function readLocalImageBase64(filePath: string): { data: string; mimeType: string } {
+    // Same cap as remote downloads: the bytes are read whole and base64-encoded
+    // in memory, so an unbounded local file is the same exhaustion vector with
+    // a different source. Checked via stat, before any byte is read.
+    const size = fs.statSync(filePath).size;
+    if (size > MAX_REMOTE_IMAGE_BYTES) {
+        throw new Error(
+            `Image is ${size} bytes, over the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${filePath}`,
+        );
+    }
     const buffer = fs.readFileSync(filePath);
     const mimeType = resolveImageMime(buffer, filePath);
     return { data: buffer.toString('base64'), mimeType };
