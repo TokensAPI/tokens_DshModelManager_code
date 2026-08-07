@@ -190,7 +190,7 @@ describe('describeAntigravityFailure', () => {
             code: 1,
         });
         expect(message).toContain('no tokens consumed');
-        expect(message).toContain('antigravity-cli/log');
+        expect(message).toContain(path.join('antigravity-cli', 'log'));
     });
 
     it('stays out of the way when agy never ran at all', () => {
