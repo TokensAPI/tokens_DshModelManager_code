@@ -56,6 +56,8 @@ modlens config show
 
 `modlens config init` writes a starter config to `~/.modlens/config.json` when none exists. Full setup recipes per provider: `references/configure.md`.
 
+One routing rule to know: a remote image URL with no explicit `-p` runs on `gemini-api` whenever a Gemini key is configured, even if the default provider is an agent. The inline path downloads the image itself, behind the private-address guards, the magic-byte image check, and the size cap; an agent fetching the URL on its own passes through none of those. Without a Gemini key the run stays on the configured default, and an explicit `-p` always wins.
+
 ## Command
 
 In the examples below, `modlens` means the command run through the launcher above (`bash <skill-dir>/scripts/run.sh ...`, or the PowerShell form on Windows).
