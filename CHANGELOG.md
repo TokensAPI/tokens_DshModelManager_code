@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.2.0 - 2026-08-07
 
 - A remote image URL with no explicit `-p` now runs on `gemini-api` whenever a Gemini key is configured, even if the default provider is an agent. The inline path downloads the image itself, behind the private-address guards, the magic-byte image check, and the 25 MB cap; an agent fetching the URL on its own passes through none of those. Without a Gemini key the run stays on the configured default, a local image never reroutes, and an explicit `-p` always wins.
 
