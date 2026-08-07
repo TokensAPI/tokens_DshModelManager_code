@@ -69,6 +69,14 @@ describe('readLocalImageBase64', () => {
         expect(image.mimeType).toBe('image/jpeg');
     });
 
+    it('rejects a local image over the byte limit before reading it', () => {
+        // A sparse file: truncate stretches the size without writing bytes, so
+        // the stat-based cap must fire before any read is attempted.
+        const file = tmpFile('huge.png', Buffer.alloc(0));
+        fs.truncateSync(file, MAX_REMOTE_IMAGE_BYTES + 1);
+        expect(() => readLocalImageBase64(file)).toThrow(/over the .* limit/);
+    });
+
     it('rejects a type that is neither recognizable nor allow-listed', () => {
         expect(() => readLocalImageBase64(tmpFile('mystery.bin', Buffer.from('nope')))).toThrow(
             /Unsupported or unrecognized image type/,

@@ -123,6 +123,23 @@ describe('extractUserImages + recoverPastedImages', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
+    it('clamps count to 20 recovered images per call', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-clamp-'));
+        const transcript = path.join(dir, 'session.jsonl');
+        const lines = Array.from({ length: 25 }, (_, i) =>
+            imageLine(`img-${i}`, `2026-08-03T02:00:${String(i).padStart(2, '0')}.000Z`, 'image/png'),
+        );
+        fs.writeFileSync(transcript, lines.join('\n'));
+
+        const result = recoverPastedImages({
+            transcript,
+            count: 999,
+            outDir: path.join(dir, 'out'),
+        });
+        expect(result.images).toHaveLength(20);
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
     it('fails with guidance when no images exist', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-rec-'));
         const transcript = path.join(dir, 'empty.jsonl');

@@ -236,7 +236,9 @@ export function recoverPastedImages(options: RecoverOptions = {}): RecoverResult
         }
         source ??= locateSource(cwd, adapters);
     }
-    const count = Math.max(1, options.count ?? 1);
+    // Clamped to 20: recovery copies user images into the temp dir, and an
+    // unbounded --count would let one call replicate a whole session history.
+    const count = Math.min(Math.max(1, options.count ?? 1), 20);
 
     const all = source.extract();
     if (all.length === 0) {
