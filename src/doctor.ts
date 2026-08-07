@@ -3,13 +3,13 @@
 // local machine only (Node version, PATH, the config file, process ancestry).
 import * as fs from 'fs';
 import { createRequire } from 'module';
-import * as path from 'path';
+import { CONFIG_PATH, type ModlensConfig, resolveProviderSettings } from './config.ts';
 import {
-    CONFIG_PATH,
-    type ModlensConfig,
-    type ProviderSettings,
-    resolveProviderSettings,
-} from './config.ts';
+    findOnPath,
+    PROVIDER_DESCRIPTORS,
+    type ProviderDescriptor,
+    providerChain,
+} from './providers/availability.ts';
 import { resolveProvider } from './providers/index.ts';
 import { detectHarnessDetailed, type HarnessSource } from './recoverPaste/detect.ts';
 
@@ -17,62 +17,6 @@ import { detectHarnessDetailed, type HarnessSource } from './recoverPaste/detect
 export const MIN_NODE = '22.13';
 
 type SettingSource = 'env' | 'file' | 'missing';
-
-interface RequiredSetting {
-    field: keyof ProviderSettings;
-    env?: string;
-}
-
-interface ProviderDescriptor {
-    name: string;
-    kind: 'subprocess' | 'api';
-    /** subprocess providers: the binary they invoke and how to install it. */
-    bin?: string;
-    install?: string;
-    /** api providers: the settings they need and how to supply them. */
-    required?: RequiredSetting[];
-    fix?: string;
-}
-
-// Ordered to match listProviders(): agy first (the zero-config default), then
-// the key-based routes, then the Claude CLI.
-const DESCRIPTORS: ProviderDescriptor[] = [
-    {
-        name: 'antigravity-cli',
-        kind: 'subprocess',
-        bin: 'agy',
-        install:
-            'curl -fsSL https://antigravity.google/cli/install.sh | bash && agy   # sign in, then exit',
-    },
-    {
-        name: 'gemini-api',
-        kind: 'api',
-        required: [{ field: 'apiKey', env: 'GEMINI_API_KEY' }],
-        fix: 'modlens config set gemini-api.apiKey <key>   # free key: https://aistudio.google.com',
-    },
-    {
-        name: 'openai',
-        kind: 'api',
-        required: [
-            { field: 'baseUrl', env: 'OPENAI_BASE_URL' },
-            { field: 'apiKey', env: 'OPENAI_API_KEY' },
-            { field: 'model' },
-        ],
-        fix: 'modlens config set openai.baseUrl <url> / openai.apiKey <key> / openai.model <name>',
-    },
-    {
-        name: 'anthropic',
-        kind: 'api',
-        required: [{ field: 'apiKey', env: 'ANTHROPIC_API_KEY' }],
-        fix: 'modlens config set anthropic.apiKey <key>',
-    },
-    {
-        name: 'claude-cli',
-        kind: 'subprocess',
-        bin: 'claude',
-        install: 'install the Claude Code CLI, then run `claude` once to sign in',
-    },
-];
 
 export interface DoctorSettingStatus {
     field: string;
@@ -103,6 +47,8 @@ export interface DoctorReport {
         source: 'flag' | 'config' | 'default';
         reason: string;
     };
+    /** The failover order actually available on this machine, per input kind. */
+    chains: { local: string[]; remote: string[] };
     harness: { detected: string | null; source: HarnessSource };
     config: {
         path: string;
@@ -136,20 +82,6 @@ function meetsMinimum(version: string, minimum: string): boolean {
 }
 
 /** First executable named `bin` on PATH, or null. No spawning. */
-function findOnPath(bin: string, env: NodeJS.ProcessEnv): string | null {
-    const dirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
-    for (const dir of dirs) {
-        const full = path.join(dir, bin);
-        try {
-            if (fs.statSync(full).isFile()) {
-                return full;
-            }
-        } catch {
-            // not here, keep looking
-        }
-    }
-    return null;
-}
 
 function checkNodeSqlite(): { available: boolean; detail: string } {
     // Loading node:sqlite emits an "experimental" warning; silence it just for
@@ -290,8 +222,12 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
             meetsMinimum: meetsMinimum(process.version, MIN_NODE),
         },
         nodeSqlite: checkNodeSqlite(),
-        providers: DESCRIPTORS.map((d) => inspectProvider(d, input.config, env)),
+        providers: PROVIDER_DESCRIPTORS.map((d) => inspectProvider(d, input.config, env)),
         selection: resolveSelection(input.config, input.providerFlag),
+        chains: {
+            local: providerChain('local', input.config, env).map((p) => p.name),
+            remote: providerChain('remote', input.config, env).map((p) => p.name),
+        },
         harness: (() => {
             const detection = detectHarnessDetailed();
             return { detected: detection.harness, source: detection.source };
@@ -336,6 +272,13 @@ export function renderDoctorReport(report: DoctorReport): string {
               : '';
     lines.push(`  ${report.selection.provider}${canonicalNote}`);
     lines.push(`  reason: ${report.selection.reason}`);
+    lines.push('');
+
+    lines.push('Failover chains (what a run tries, in order)');
+    const chainLine = (chain: string[]) =>
+        chain.length > 0 ? chain.join(' -> ') : '(none available)';
+    lines.push(`  local:  ${chainLine(report.chains.local)}`);
+    lines.push(`  remote: ${chainLine(report.chains.remote)}`);
     lines.push('');
 
     lines.push('Harness');

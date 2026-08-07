@@ -56,7 +56,9 @@ modlens config show
 
 `modlens config init` writes a starter config to `~/.modlens/config.json` when none exists. Full setup recipes per provider: `references/configure.md`.
 
-One routing rule to know: a remote image URL with no explicit `-p` runs on `gemini-api` whenever a Gemini key is configured, even if the default provider is an agent. The inline path downloads the image itself, behind the private-address guards, the magic-byte image check, and the size cap; an agent fetching the URL on its own passes through none of those. Without a Gemini key the run stays on the configured default, and an explicit `-p` always wins.
+Failover is automatic: a run tries every provider that is set up on this machine, in order, and the first good result wins (a provider that errors, times out, or returns a schema-violating result hands over to the next). A local image tries `antigravity-cli` first, then `gemini-api`, `openai`, `anthropic`, `claude-cli`. A remote URL tries the inline API providers first (`gemini-api`, `openai`, `anthropic`) and the agent last, because only the inline download path runs the private-address guards, the magic-byte image check, and the size cap. A provider set with `config set provider <name>` is a preference that moves to the front of its allowed region, not a pin. An explicit `-p` pins exactly one provider with no fallback.
+
+In the result, the top-level `provider` names who actually answered, `meta.attempts` lists every provider tried with timings and failure reasons, and `meta.warnings` carries failover notices. Relay a failover warning when the answer's provider surprised the user.
 
 ## Command
 

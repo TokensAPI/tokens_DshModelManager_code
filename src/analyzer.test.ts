@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { analyzeImage, chooseProviderName, resolveInput, runCommand } from './analyzer.ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { analyzeImage, resolveInput, runCommand } from './analyzer.ts';
 
 const onWindows = process.platform === 'win32';
 
@@ -248,35 +248,122 @@ async function waitFor<T>(probe: () => T | null | undefined, timeoutMs = 8_000):
     throw new Error('waitFor timed out');
 }
 
-describe('chooseProviderName', () => {
-    const keyedConfig = { providers: { 'gemini-api': { apiKey: 'g-key' } } };
-    const noEnv = {} as NodeJS.ProcessEnv;
-
-    it('routes a remote URL to gemini-api when a key is configured and no -p was given', () => {
-        expect(chooseProviderName(undefined, keyedConfig, 'remote', noEnv)).toBe('gemini-api');
+// Failover drives real subprocess fakes for agy plus a stubbed fetch for the
+// inline providers, so the scenarios run offline and POSIX-only.
+describe.skipIf(onWindows)('provider failover', () => {
+    const cleanups: Array<() => void> = [];
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.unstubAllEnvs();
+        while (cleanups.length > 0) {
+            cleanups.pop()?.();
+        }
     });
 
-    it('keeps the agent default for a remote URL when no gemini key exists', () => {
-        expect(chooseProviderName(undefined, {}, 'remote', noEnv)).toBe('antigravity-cli');
-    });
+    const CONTRACT_RESULT = {
+        summary: 'ok',
+        ocr: { full_text: '', lines: [] },
+        layout: { regions: [] },
+        semantics: { scene: '', entities: [] },
+        visual: {},
+        uncertainty: [],
+    };
 
-    it('always honors an explicit -p, key or not', () => {
-        expect(chooseProviderName('antigravity-cli', keyedConfig, 'remote', noEnv)).toBe(
-            'antigravity-cli',
+    /** A directory on PATH holding a fake agy with the given script, plus an image. */
+    function fakeAgyDir(script: string) {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-fo-'));
+        cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+        fs.writeFileSync(path.join(dir, 'agy'), script, { mode: 0o755 });
+        const image = path.join(dir, 'shot.png');
+        fs.writeFileSync(image, 'not-a-real-png');
+        return { dir, image };
+    }
+
+    const geminiOk = () =>
+        new Response(
+            JSON.stringify({
+                candidates: [{ content: { parts: [{ text: JSON.stringify(CONTRACT_RESULT) }] } }],
+                usageMetadata: { totalTokenCount: 9 },
+            }),
+            { status: 200 },
         );
-    });
 
-    it('never reroutes a local image', () => {
-        expect(chooseProviderName(undefined, keyedConfig, 'local', noEnv)).toBe('antigravity-cli');
-    });
+    const GEMINI_KEYED = { providers: { 'gemini-api': { apiKey: 'g-key' } } };
 
-    it('leaves a non-agent default alone for remote URLs', () => {
-        const geminiDefault = { ...keyedConfig, provider: 'gemini-api' };
-        expect(chooseProviderName(undefined, geminiDefault, 'remote', noEnv)).toBe('gemini-api');
-    });
+    it('fails over from a broken agy to gemini-api and records both attempts', async () => {
+        const { dir, image } = fakeAgyDir('#!/bin/sh\necho "agy exploded" >&2\nexit 1\n');
+        vi.stubEnv('PATH', dir);
+        vi.stubGlobal('fetch', async () => geminiOk());
 
-    it('a GEMINI_API_KEY in the environment triggers the reroute too', () => {
-        const env = { GEMINI_API_KEY: 'g-env' } as NodeJS.ProcessEnv;
-        expect(chooseProviderName(undefined, {}, 'remote', env)).toBe('gemini-api');
-    });
+        const result = await analyzeImage({
+            input: image,
+            config: GEMINI_KEYED,
+            timeoutMs: 20_000,
+        });
+
+        expect(result.provider).toBe('gemini-api');
+        expect(result.meta.attempts).toHaveLength(2);
+        expect(result.meta.attempts[0]).toMatchObject({ provider: 'antigravity-cli', ok: false });
+        expect(result.meta.attempts[1]).toMatchObject({ provider: 'gemini-api', ok: true });
+        expect(result.meta.warnings.join(' ')).toContain('Failed over to gemini-api');
+    }, 30_000);
+
+    it('a schema-violating result also fails over, with the violation in the attempt', async () => {
+        const partial = JSON.stringify({ status: 'SUCCESS', structured_output: { summary: 'x' } });
+        const { dir, image } = fakeAgyDir(`#!/bin/sh\necho '${partial}'\nexit 0\n`);
+        vi.stubEnv('PATH', dir);
+        vi.stubGlobal('fetch', async () => geminiOk());
+
+        const result = await analyzeImage({
+            input: image,
+            config: GEMINI_KEYED,
+            timeoutMs: 20_000,
+        });
+
+        expect(result.provider).toBe('gemini-api');
+        expect(result.meta.attempts[0].error).toMatch(/does not match the vision schema/);
+    }, 30_000);
+
+    it('an explicit -p pins the provider: original error, no fallback', async () => {
+        const { dir, image } = fakeAgyDir('#!/bin/sh\necho "agy exploded" >&2\nexit 1\n');
+        vi.stubEnv('PATH', dir);
+        vi.stubGlobal('fetch', async () => geminiOk());
+
+        let thrown: Error | null = null;
+        try {
+            await analyzeImage({
+                input: image,
+                provider: 'antigravity-cli',
+                config: GEMINI_KEYED,
+                timeoutMs: 20_000,
+            });
+        } catch (error) {
+            thrown = error as Error;
+        }
+        expect(thrown).not.toBeNull();
+        expect(thrown?.message).not.toContain('Every configured vision provider failed');
+        expect(thrown?.message).toMatch(/agy|antigravity-cli/);
+    }, 30_000);
+
+    it('aggregates every failure when the whole chain is exhausted', async () => {
+        const { dir, image } = fakeAgyDir('#!/bin/sh\necho "agy exploded" >&2\nexit 1\n');
+        vi.stubEnv('PATH', dir);
+        vi.stubGlobal('fetch', async () => new Response('quota exceeded', { status: 429 }));
+
+        await expect(
+            analyzeImage({ input: image, config: GEMINI_KEYED, timeoutMs: 20_000 }),
+        ).rejects.toThrow(/Every configured vision provider failed.*antigravity-cli.*gemini-api/s);
+    }, 30_000);
+
+    it('reports how to set up when nothing is configured at all', async () => {
+        const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-none-'));
+        cleanups.push(() => fs.rmSync(empty, { recursive: true, force: true }));
+        const image = path.join(empty, 'shot.png');
+        fs.writeFileSync(image, 'not-a-real-png');
+        vi.stubEnv('PATH', empty);
+
+        await expect(analyzeImage({ input: image, config: {}, timeoutMs: 5_000 })).rejects.toThrow(
+            /No vision provider is set up/,
+        );
+    }, 20_000);
 });

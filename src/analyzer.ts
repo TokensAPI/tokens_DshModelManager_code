@@ -2,17 +2,14 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import {
-    defaultProviderName,
-    loadConfigFile,
-    type ModlensConfig,
-    resolveProviderSettings,
-} from './config.ts';
+import { loadConfigFile, type ModlensConfig, resolveProviderSettings } from './config.ts';
+import { providerChain } from './providers/availability.ts';
 import {
     type ProviderFailureContext,
     type ProviderInvocation,
     type ProviderParsedOutput,
     resolveProvider,
+    type VisionProvider,
 } from './providers/index.ts';
 import { missingSchemaFields } from './schema.ts';
 
@@ -27,6 +24,13 @@ export interface AnalyzeOptions {
     config?: ModlensConfig;
 }
 
+export interface AnalyzeAttempt {
+    provider: string;
+    ok: boolean;
+    durationSeconds: number;
+    error?: string;
+}
+
 export interface AnalyzeResult {
     image: string;
     provider: string;
@@ -37,6 +41,10 @@ export interface AnalyzeResult {
         conversationId: string | null;
         durationSeconds: number | null;
         usage: unknown | null;
+        /** Every provider tried this run, in order, successes and failures. */
+        attempts: AnalyzeAttempt[];
+        /** Routing notices: failovers and what they mean for the answer. */
+        warnings: string[];
     };
 }
 
@@ -59,31 +67,6 @@ const DRAIN_GRACE_MS = 500;
 // How long a killed child gets before SIGKILL.
 const SIGKILL_GRACE_MS = 2_000;
 
-/**
- * Which provider a run should use. An explicit -p always wins, and a local
- * image uses the configured default unchanged. A remote URL is the special
- * case: a subprocess agent fetches the URL itself, outside the download
- * guards (private-address blocking, magic-byte image verification, the size
- * cap), which only exist on the inline API path. So when the default is an
- * agent and a Gemini key is configured, a remote URL defaults to gemini-api,
- * where every guard applies.
- */
-export function chooseProviderName(
-    requested: string | undefined,
-    config: ModlensConfig,
-    kind: 'local' | 'remote',
-    env: NodeJS.ProcessEnv = process.env,
-): string {
-    const name = requested || defaultProviderName(config);
-    if (requested || kind !== 'remote') {
-        return name;
-    }
-    if (!resolveProvider(name).isolateWorkdir) {
-        return name;
-    }
-    return resolveProviderSettings('gemini-api', config, env).apiKey ? 'gemini-api' : name;
-}
-
 export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResult> {
     const resolvedInput = resolveInput(options.input);
     if (resolvedInput.kind === 'local') {
@@ -91,13 +74,111 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
     }
 
     const config = options.config ?? loadConfigFile();
-    const provider = resolveProvider(
-        chooseProviderName(options.provider, config, resolvedInput.kind),
-    );
-    const settings = resolveProviderSettings(provider.name, config);
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const model = options.model || settings.model || provider.defaultModel;
+    // An explicit -p pins exactly one provider with no fallback (like
+    // modsearch's -e). The providerBin test double pins the agent the same
+    // way. Otherwise the failover chain: every provider that is set up on
+    // this machine, ordered for the input kind (see providers/availability).
+    const chain = options.provider
+        ? [resolveProvider(options.provider)]
+        : options.providerBin
+          ? [resolveProvider('antigravity-cli')]
+          : providerChain(resolvedInput.kind, config);
+    if (chain.length === 0) {
+        throw new Error(
+            'No vision provider is set up on this machine. Install Antigravity CLI (curl -fsSL https://antigravity.google/cli/install.sh | bash, then run agy once to sign in), or configure a key: modlens config set gemini-api.apiKey <key>. Run modlens doctor for the full picture.',
+        );
+    }
 
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const attempts: AnalyzeAttempt[] = [];
+    const warnings: string[] = [];
+    let lastError: unknown;
+
+    for (const provider of chain) {
+        const startedAt = Date.now();
+        // An explicit -m names one provider's model, so it applies to the
+        // first attempt only; a failover provider runs its own default, since
+        // model names do not carry across providers.
+        const model =
+            (attempts.length === 0 ? options.model : undefined) ||
+            resolveProviderSettings(provider.name, config).model ||
+            provider.defaultModel;
+        try {
+            const parsed = await runProvider(
+                provider,
+                model,
+                options,
+                resolvedInput,
+                timeoutMs,
+                config,
+            );
+            attempts.push({
+                provider: provider.name,
+                ok: true,
+                durationSeconds: (Date.now() - startedAt) / 1000,
+            });
+            if (attempts.length > 1) {
+                const failed = attempts.slice(0, -1);
+                warnings.push(
+                    `Failed over to ${provider.name} after: ${failed
+                        .map((attempt) => `${attempt.provider} (${attempt.error})`)
+                        .join('; ')}.`,
+                );
+                if (options.model) {
+                    warnings.push(
+                        `The explicit model applied to ${failed[0].provider} only; ${provider.name} ran its own default.`,
+                    );
+                }
+            }
+            return {
+                image: resolvedInput.source,
+                provider: provider.name,
+                result: parsed.result,
+                meta: {
+                    generatedAt: new Date().toISOString(),
+                    model,
+                    conversationId: parsed.meta.conversationId,
+                    durationSeconds: parsed.meta.durationSeconds,
+                    usage: parsed.meta.usage,
+                    attempts,
+                    warnings,
+                },
+            };
+        } catch (error) {
+            lastError = error;
+            const message = error instanceof Error ? error.message : String(error);
+            attempts.push({
+                provider: provider.name,
+                ok: false,
+                durationSeconds: (Date.now() - startedAt) / 1000,
+                error: message.slice(0, 300),
+            });
+        }
+    }
+
+    // A pinned or lone provider keeps its original, actionable error (agy's
+    // sign-in guidance, a provider's own fix text). Only a real multi-provider
+    // exhaustion gets the aggregate.
+    if (chain.length === 1) {
+        throw lastError;
+    }
+    throw new Error(
+        `Every configured vision provider failed for this image. ${attempts
+            .map((attempt) => `${attempt.provider}: ${attempt.error}`)
+            .join(' | ')}`,
+    );
+}
+
+/** One provider, one attempt: execute (or spawn), parse, and verify the shape. */
+async function runProvider(
+    provider: VisionProvider,
+    model: string,
+    options: AnalyzeOptions,
+    resolvedInput: ResolvedInput,
+    timeoutMs: number,
+    config: ModlensConfig,
+): Promise<ProviderParsedOutput> {
+    const settings = resolveProviderSettings(provider.name, config);
     const providerOptions = {
         imageSource: resolvedInput.source,
         imageKind: resolvedInput.kind,
@@ -155,8 +236,8 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
 
     // Server-side schema enforcement is uneven across providers, and even the
     // routes that have it can return a shell that only looks right. Verify the
-    // shape here so a structurally broken result fails loudly for every provider
-    // instead of reaching the caller as if it were evidence.
+    // shape here so a structurally broken result fails loudly for every
+    // provider, and a failover peer gets its turn at a compliant answer.
     const missing = missingSchemaFields(parsed.result);
     if (missing.length > 0) {
         throw new Error(
@@ -164,18 +245,7 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
         );
     }
 
-    return {
-        image: resolvedInput.source,
-        provider: provider.name,
-        result: parsed.result,
-        meta: {
-            generatedAt: new Date().toISOString(),
-            model,
-            conversationId: parsed.meta.conversationId,
-            durationSeconds: parsed.meta.durationSeconds,
-            usage: parsed.meta.usage,
-        },
-    };
+    return parsed;
 }
 
 export function resolveInput(input: string): ResolvedInput {

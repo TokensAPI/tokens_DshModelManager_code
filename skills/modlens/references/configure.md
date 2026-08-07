@@ -112,6 +112,13 @@ modlens config set provider claude-cli   # make it the default if the user wants
 - Already pays for Claude: `claude-cli` (no extra key) or `anthropic` (API billing).
 - Has a favorite multimodal endpoint (qwen, GLM, ...): `openai`.
 
+Every configured provider also backs up the others: a run tries them in a
+fixed order (local images agent-first; remote URLs inline-API-first, agent
+last) and fails over on an error, a timeout, or a schema-violating result.
+`config set provider <name>` moves a provider to the front of its allowed
+region; `-p <name>` pins exactly one with no fallback. `doctor` prints the
+chains, and the result's `meta.attempts` shows what a run actually tried.
+
 ## Troubleshooting
 
 - Error names a missing env var or `config set` command: run exactly that.

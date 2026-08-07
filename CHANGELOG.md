@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.3.0 - 2026-08-07
+
+- Automatic provider failover. A run now tries every provider that is set up on this machine, in order, and the first good result wins: a provider that errors, times out, or returns a schema-violating result hands over to the next. A local image tries `antigravity-cli`, then `gemini-api`, `openai`, `anthropic`, `claude-cli`; a remote URL tries the inline API providers first and the agent last (only the inline download path runs the private-address guards, the magic-byte check, and the size cap), and `claude-cli` never joins the remote chain since it reads local files only. The result's `meta.attempts` records every provider tried with timings and failure reasons, and `meta.warnings` carries failover notices. `doctor` prints both chains. Availability (binary on PATH, required keys present) is one shared source of truth between the doctor's readiness report and the chain. The 3.2.0 remote-URL reroute is absorbed by the remote chain order.
+- Behavior change: `config set provider <name>` is now a preference, not a pin. It moves that provider to the front of its allowed region (for a remote URL an agent still stays behind the inline providers), and the rest of the chain backs it up on failure, matching modsearch's engine setting. To pin exactly one provider with no fallback, pass `-p <name>`, which keeps its original error when it fails.
+
 ## 3.2.0 - 2026-08-07
 
 - A remote image URL with no explicit `-p` now runs on `gemini-api` whenever a Gemini key is configured, even if the default provider is an agent. The inline path downloads the image itself, behind the private-address guards, the magic-byte image check, and the 25 MB cap; an agent fetching the URL on its own passes through none of those. Without a Gemini key the run stays on the configured default, a local image never reroutes, and an explicit `-p` always wins.
