@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.1.1 - 2026-08-07
 
 Fixes from a deep acceptance review (external audit, reproduced and verified here).
 
