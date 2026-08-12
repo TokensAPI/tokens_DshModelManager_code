@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The CLI no longer prints a `node:sqlite` ExperimentalWarning on every start. Bundling undici had hoisted its lazy `require('node:sqlite')` (for a cache store nothing here uses) into a top-level import. The build now keeps that require a runtime call.
+
 - Invocation guard (issue #15): `modlens guard` answers whether the vision engine should run at all, for people who point both text-only and vision-capable models at the same client. `guards.denyModels` in the config holds glob patterns of models with native vision. A match means deny (exit 1, machine-readable verdict), and the skill's workflow now checks it before the first read of a session. The active model is detected from three signals, strongest first: the `MODLENS_MODEL` env var, the harness's own session storage (Claude Code, Pi, and Codex transcripts, the OpenCode database, scoped by the same harness detection recover-paste uses: a transcript cannot misname the model, while a model's `--model` self-report can), then that self-report. Unknown stays fail-open unless `guards.denyWhenUnknown` is set: a wrongly blocked read would break the text-only bridge this tool exists for, a wrongly allowed one only wastes a provider call. `analyze` itself refuses before spending quota when the explicit `MODLENS_MODEL` matches a deny rule (only that: sniffing and the unknown policy stay advisory, in `modlens guard`), and `doctor` grew a Guard section showing the rules, the detected model with its signal, and a live verdict. Sniffing reads a bounded tail window of transcripts that can carry hundreds of MB of inline images, and a guard with no configured rules answers without touching detection at all.
 
 ## 3.4.0 - 2026-08-12
