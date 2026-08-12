@@ -136,6 +136,7 @@ Three things that bite:
 - Not every model can turn it off. Gemini 3 Pro and Gemini 2.5 Pro have no off switch, only a lower level. Some models ignore an effort field entirely and think anyway.
 - Strict clouds (Groq and Cerebras among them) reject fields they do not recognize with a 400. If a request that worked before now fails with a 400 naming your field, that gateway wants a different spelling, not this one.
 - Others accept an unknown field and quietly ignore it, so check that it took effect instead of assuming. Compare `meta.durationSeconds` and the token counts in `meta.usage` against a run without `extraBody`. If neither moved, the field did not land.
+- A weaker model may need its thinking to fill the schema. Measured on one flowchart: `gemini-3.6-flash` at `thinkingLevel: LOW` came back in 5.7s instead of 12s with the same regions and the same transcription, but `qwen3.6-27b` on DashScope with `enable_thinking: false` started omitting the required `type` on layout regions, which modlens rejects rather than passing off as evidence. If shape errors appear right after you turn thinking off, that is the trade, so turn it back on for that model or move to a route with server-side schema enforcement.
 
 ## Choosing a provider for the user
 
