@@ -24,6 +24,10 @@
 
 DeepSeek-V4-Flash has no vision capability and cannot process screenshots or images. ModLens is a plug-in vision engine that gives a text-only model sight. **ModLens reads images pasted straight into the chat**, no saving to a file and passing a path first.
 
+## Talk to us
+
+Something broken, or something missing? [Open an issue](https://github.com/liustack/modlens/issues/new/choose). For everything else, come find me on X: **[@liustack](https://x.com/liustack)**. What you built with it, which harness you are on, what should come next. New releases land there first, and a proper community space is on the way.
+
 ## Highlights
 
 - **Completely free.** The default channel is Antigravity CLI, no API key needed. A free Gemini key brings a read down to 5-10 seconds.

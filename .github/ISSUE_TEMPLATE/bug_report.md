@@ -41,3 +41,7 @@ For a `recover-paste` issue, also include the `harness` and `transcript` fields 
 ## Expected
 
 What you expected instead.
+
+---
+
+Not sure it is a bug, or just want to talk it through? Find me on X: [@liustack](https://x.com/liustack).

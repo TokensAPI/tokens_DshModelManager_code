@@ -21,3 +21,7 @@ ModLens turns an image into structured JSON evidence for text-only models, and n
 ## Alternatives
 
 Anything you have tried or considered (a different provider, a flag, a workaround).
+
+---
+
+Not sure it is a bug, or just want to talk it through? Find me on X: [@liustack](https://x.com/liustack).
