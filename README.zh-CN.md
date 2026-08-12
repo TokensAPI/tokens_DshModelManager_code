@@ -24,6 +24,10 @@
 
 DeepSeek-V4-Flash 没有视觉能力，无法处理截图和图片。ModLens 借助外挂视觉引擎，为纯文本模型补上视觉能力。**ModLens 支持直接粘贴图片识别**，无需先保存成文件再提供路径。
 
+## 交流
+
+用出问题了就[提个 issue](https://github.com/liustack/modlens/issues/new/choose)。其他的都欢迎来 X 上聊：**[@liustack](https://x.com/liustack)**，你用它做了什么、在哪个 harness 上跑、接下来该做什么，新版本也是那边先发。社群正在筹备中。
+
 ## 亮点
 
 - **完全免费。** 默认走 Antigravity CLI 通道，无需 api key。配一个免费的 Gemini key 可将识别耗时降至 5 到 10 秒。
