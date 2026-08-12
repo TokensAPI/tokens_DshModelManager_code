@@ -30,6 +30,12 @@ function tempDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-guard-'));
 }
 
+// claudeProjectSlug only rewrites '/' and '.', so on Windows a resolved cwd
+// keeps its '\' and ':' and the resulting directory name is not even legal
+// NTFS. Claude Code's real Windows layout is unverified territory recover-paste
+// already skips there (see 3.1.0), and the sniffer fails open on it.
+const onWindows = process.platform === 'win32';
+
 describe('lastAssistantModelFromLines', () => {
     it('returns the newest assistant model, skipping user lines and malformed JSON', () => {
         const lines = [
@@ -86,7 +92,7 @@ describe('codex rollout parsing', () => {
     });
 });
 
-describe('sniffClaudeModel', () => {
+describe.skipIf(onWindows)('sniffClaudeModel', () => {
     function writeSession(dir: string, name: string, cwd: string, model: string, mtime?: Date) {
         fs.mkdirSync(dir, { recursive: true });
         const file = path.join(dir, name);

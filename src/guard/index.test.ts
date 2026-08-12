@@ -17,6 +17,10 @@ function tempDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-guard-'));
 }
 
+// The two storage-backed cases lean on claudeProjectSlug, which does not
+// define a Windows layout (see the note in modelSniff.test.ts).
+const onWindows = process.platform === 'win32';
+
 function claudeFixture(cwd: string, model: string): { claudeProjectsDir: string } {
     const projects = tempDir();
     const dir = path.join(projects, claudeProjectSlug(cwd));
@@ -44,22 +48,25 @@ describe('detectActiveModel', () => {
         ).toBeNull();
     });
 
-    it('prefers storage evidence over the self-report and records the disagreement', () => {
-        const cwd = tempDir();
-        const roots = claudeFixture(cwd, 'deepseek-v4-flash');
-        const detection = detectActiveModel({
-            cwd,
-            env: { MODLENS_HARNESS: 'claude-code' },
-            selfReported: 'claude-3.7-sonnet',
-            roots,
-        });
-        expect(detection).toMatchObject({
-            model: 'deepseek-v4-flash',
-            source: 'storage',
-            harness: 'claude-code',
-            selfReported: 'claude-3.7-sonnet',
-        });
-    });
+    it.skipIf(onWindows)(
+        'prefers storage evidence over the self-report and records the disagreement',
+        () => {
+            const cwd = tempDir();
+            const roots = claudeFixture(cwd, 'deepseek-v4-flash');
+            const detection = detectActiveModel({
+                cwd,
+                env: { MODLENS_HARNESS: 'claude-code' },
+                selfReported: 'claude-3.7-sonnet',
+                roots,
+            });
+            expect(detection).toMatchObject({
+                model: 'deepseek-v4-flash',
+                source: 'storage',
+                harness: 'claude-code',
+                selfReported: 'claude-3.7-sonnet',
+            });
+        },
+    );
 
     it('falls back to the self-report when storage yields nothing, then to unknown', () => {
         const roots = { claudeProjectsDir: path.join(tempDir(), 'missing') };
@@ -73,17 +80,20 @@ describe('detectActiveModel', () => {
         });
     });
 
-    it('treats a set-but-empty MODLENS_HARNESS as not forced, like detect.ts does', () => {
-        const cwd = tempDir();
-        const roots = claudeFixture(cwd, 'deepseek-v4-flash');
-        const detection = detectActiveModel({
-            cwd,
-            env: { MODLENS_HARNESS: '' },
-            harness: 'claude-code',
-            roots,
-        });
-        expect(detection).toMatchObject({ model: 'deepseek-v4-flash', source: 'storage' });
-    });
+    it.skipIf(onWindows)(
+        'treats a set-but-empty MODLENS_HARNESS as not forced, like detect.ts does',
+        () => {
+            const cwd = tempDir();
+            const roots = claudeFixture(cwd, 'deepseek-v4-flash');
+            const detection = detectActiveModel({
+                cwd,
+                env: { MODLENS_HARNESS: '' },
+                harness: 'claude-code',
+                roots,
+            });
+            expect(detection).toMatchObject({ model: 'deepseek-v4-flash', source: 'storage' });
+        },
+    );
 });
 
 describe('runGuard', () => {
