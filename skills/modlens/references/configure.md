@@ -10,7 +10,7 @@ Read this when the user asks how to set up, configure, or switch ModLens provide
 modlens config init                     # write a starter config (refuses to overwrite; --force to redo)
 modlens config show                     # effective file, API keys masked
 modlens config set provider <name>      # change the default provider
-modlens config set <provider>.<field> <value>   # fields: apiKey, baseUrl, model
+modlens config set <provider>.<field> <value>   # fields: apiKey, baseUrl, model, extraBody
 ```
 
 `config set` writes the file with 0600 permissions.
@@ -32,7 +32,8 @@ Everything lives under two top-level keys, both optional. A missing file means a
     "openai": {
       "apiKey": "sk-...",
       "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      "model": "qwen3.6-27b"
+      "model": "qwen3.6-27b",
+      "extraBody": { "thinking": { "type": "disabled" } }
     },
     "anthropic": { "apiKey": "sk-ant-..." },
     "claude-cli": { "model": "haiku" }
@@ -43,7 +44,8 @@ Everything lives under two top-level keys, both optional. A missing file means a
 Field semantics:
 
 - `provider`: which provider runs when `-p` is not given. Canonical names or aliases both work (`agy`/`antigravity` for `antigravity-cli`, `gemini` for `gemini-api`, `openai-compat` for `openai`, `claude` for `anthropic`, `claude-code` for `claude-cli`). Empty or absent means `antigravity-cli`.
-- `providers.<name>.<field>`: only three fields exist, `apiKey`, `baseUrl`, `model`. Every provider entry is optional, and every field inside it is optional. Alias keys are read too (settings saved under `gemini` are found when `gemini-api` resolves), with the canonical key winning on conflict.
+- `providers.<name>.<field>`: four fields exist, `apiKey`, `baseUrl`, `model`, and `extraBody`. Every provider entry is optional, and every field inside it is optional. Alias keys are read too (settings saved under `gemini` are found when `gemini-api` resolves), with the canonical key winning on conflict.
+- `providers.<name>.extraBody`: a JSON object merged into the request body of the API providers (`gemini-api`, `openai`, `anthropic`), for whatever knobs that vendor has and modlens has no flag for. Turning thinking off is the usual reason, see the section below. Nested objects merge key by key, so adding one knob leaves the rest of that block alone. The fields carrying the image, the prompt, and the schema enforcement are refused with an error naming the field. The two CLI providers take no request body, so a run on `antigravity-cli` or `claude-cli` ignores it and says so in `meta.warnings`.
 - Environment variables override the file for these bindings: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`. Nothing else is read from the environment except `MODLENS_HARNESS` (paste-recovery scope, unrelated to this file).
 - Unknown top-level keys and unknown provider names are ignored rather than rejected, so a typo fails quiet: run `modlens doctor` after hand-editing, it shows which file and env values are actually in effect.
 
@@ -105,6 +107,36 @@ Rides an existing `claude` sign-in, so it costs the user's Claude subscription q
 modlens config set provider claude-cli   # make it the default if the user wants
 ```
 
+## Turning thinking off
+
+A reasoning model spends its thinking budget before it answers. Reading text out of an image needs none of that, so on a model that thinks by default the run is slower and more expensive for nothing. Every vendor names the switch differently, and there is no portable one, so modlens sends whatever you put in `extraBody` and leaves the naming to the vendor's own docs.
+
+```bash
+modlens config set openai.extraBody '{"thinking":{"type":"disabled"}}'   # persist it
+modlens -i shot.png --extra-body '{"thinking":{"type":"disabled"}}'      # one run only
+modlens config set openai.extraBody ''                                   # clear it
+```
+
+`--extra-body` replaces the stored object for that run rather than merging into it.
+
+Known spellings, current as of August 2026:
+
+| Endpoint | Field to send |
+| :-- | :-- |
+| MiMo official API (`api.xiaomimimo.com/v1`) | `{"thinking":{"type":"disabled"}}` |
+| MiMo Responses-format route | `{"reasoning":{"effort":"none"}}` |
+| Qwen, GLM, MiMo and friends self-hosted on vLLM or SGLang | `{"chat_template_kwargs":{"enable_thinking":false}}` |
+| OpenAI-style gateways that accept an effort level | `{"reasoning_effort":"low"}` |
+| `gemini-api`, Gemini 3 family | `{"generationConfig":{"thinkingConfig":{"thinkingLevel":"LOW"}}}` |
+| `gemini-api`, Gemini 2.5 Flash and Flash Lite | `{"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}}` |
+| `anthropic` | nothing to do, thinking is off unless it is asked for |
+
+Three things that bite:
+
+- Not every model can turn it off. Gemini 3 Pro and Gemini 2.5 Pro have no off switch, only a lower level. Some models ignore an effort field entirely and think anyway.
+- Strict clouds (Groq and Cerebras among them) reject fields they do not recognize with a 400. If a request that worked before now fails with a 400 naming your field, that gateway wants a different spelling, not this one.
+- Others accept an unknown field and quietly ignore it, so check that it took effect instead of assuming. Compare `meta.durationSeconds` and the token counts in `meta.usage` against a run without `extraBody`. If neither moved, the field did not land.
+
 ## Choosing a provider for the user
 
 - Wants zero setup and free: `antigravity-cli` (needs agy sign-in, 15-40s per image).
@@ -125,4 +157,6 @@ chains, and the result's `meta.attempts` shows what a run actually tried.
 - `Provider CLI not found: agy`: install Antigravity CLI or switch provider.
 - `Claude CLI reported ...` or empty result: check `claude` login state.
 - openai route `does not match the vision schema`: retry once, then switch to gemini-api or anthropic.
+- `extraBody cannot override "<field>"`: that field carries the image, the prompt, or the schema. Drop it from the object and keep the vendor knobs.
+- A 400 that names a field you set in `extraBody`: that gateway does not know it. See the thinking section above for the other spellings.
 - `config init` refusing to run: the file exists; use `modlens config show` first, `--force` only if the user agrees to overwrite.

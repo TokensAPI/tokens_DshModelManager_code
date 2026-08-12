@@ -78,6 +78,8 @@ modlens -i <image> -o <output.json> -m <model> --prompt "<extra focus>" --timeou
 
 Speed expectations: `gemini-api` typically 5-10 seconds, `antigravity-cli` 15-40 seconds and `claude-cli` 20-45 seconds (full agent loops), `openai`/`anthropic` depend on the endpoint. For dense or hard images on antigravity-cli, try `-m gemini-3.1-pro-high`.
 
+If every read is slow because the configured model thinks before answering, pass the vendor's own switch through the request body, for example `--extra-body '{"thinking":{"type":"disabled"}}'`, or store it with `modlens config set <provider>.extraBody '<json>'`. The spelling differs per endpoint, so read `references/configure.md` before guessing.
+
 ## Finding the image path in the chat
 
 Harnesses rarely hand you a clean path. First identify which harness you are in, then use its route. Never mix routes across harnesses.

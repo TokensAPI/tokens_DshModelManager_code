@@ -59,6 +59,33 @@ describe('executeGeminiApi', () => {
         expect(parsed.meta.usage).toEqual({ totalTokenCount: 9 });
     });
 
+    it('adds an extraBody thinking knob while keeping schema enforcement', async () => {
+        const calls: Array<{ init: RequestInit }> = [];
+        vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+            calls.push({ init });
+            return new Response(
+                JSON.stringify({
+                    candidates: [{ content: { parts: [{ text: JSON.stringify(structured) }] } }],
+                }),
+                { status: 200 },
+            );
+        });
+
+        await executeGeminiApi({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings: {
+                apiKey: 'AIzaTest',
+                extraBody: { generationConfig: { thinkingConfig: { thinkingLevel: 'LOW' } } },
+            },
+        });
+
+        const body = JSON.parse(String(calls[0].init.body));
+        expect(body.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'LOW' });
+        expect(body.generationConfig.responseJsonSchema.required).toContain('summary');
+    });
+
     it('surfaces api errors with status and body', async () => {
         vi.stubGlobal('fetch', async () => new Response('quota exceeded', { status: 429 }));
         await expect(

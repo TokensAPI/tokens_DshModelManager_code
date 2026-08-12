@@ -63,6 +63,37 @@ describe('executeOpenaiCompat', () => {
         expect(text).not.toContain('"type":"object"');
     });
 
+    it('merges extraBody into the request and guards the fields it needs', async () => {
+        const calls: Array<{ init: RequestInit }> = [];
+        vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+            calls.push({ init });
+            return new Response(
+                JSON.stringify({ choices: [{ message: { content: JSON.stringify(structured) } }] }),
+                { status: 200 },
+            );
+        });
+
+        await executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings: { ...settings, extraBody: { thinking: { type: 'disabled' } } },
+        });
+
+        const body = JSON.parse(String(calls[0].init.body));
+        expect(body.thinking).toEqual({ type: 'disabled' });
+        expect(body.messages[0].content).toHaveLength(2);
+
+        await expect(
+            executeOpenaiCompat({
+                imageSource: tmpImage,
+                imageKind: 'local',
+                timeoutMs: 5000,
+                settings: { ...settings, extraBody: { messages: [] } },
+            }),
+        ).rejects.toThrow('cannot override "messages"');
+    });
+
     it('extracts fenced JSON from lax gateways', async () => {
         vi.stubGlobal(
             'fetch',

@@ -7,11 +7,15 @@
 // is what failover itself handles.
 import * as fs from 'fs';
 import * as path from 'path';
-import { type ModlensConfig, type ProviderSettings, resolveProviderSettings } from '../config.ts';
+import {
+    type ModlensConfig,
+    type ProviderStringField,
+    resolveProviderSettings,
+} from '../config.ts';
 import { resolveProvider, type VisionProvider } from './index.ts';
 
 export interface RequiredSetting {
-    field: keyof ProviderSettings;
+    field: ProviderStringField;
     env?: string;
 }
 

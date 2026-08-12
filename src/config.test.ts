@@ -80,6 +80,26 @@ describe('setConfigValue + loadConfigFile + renderEffectiveConfig', () => {
         expect(parsed.providers['gemini-api'].model).toBe('m1 (file)');
     });
 
+    it('stores extraBody as parsed JSON, clears it on an empty value, and shows it', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
+        const file = path.join(dir, 'config.json');
+        setConfigValue('openai.extraBody', '{"thinking":{"type":"disabled"}}', file);
+        // An object, not the string: the provider merges it into the request body.
+        expect(loadConfigFile(file).providers?.openai?.extraBody).toEqual({
+            thinking: { type: 'disabled' },
+        });
+        const rendered = JSON.parse(renderEffectiveConfig(loadConfigFile(file), {})) as {
+            providers: Record<string, Record<string, string>>;
+        };
+        expect(rendered.providers.openai.extraBody).toBe('{"thinking":{"type":"disabled"}} (file)');
+        expect(() => setConfigValue('openai.extraBody', '{oops', file)).toThrow(
+            'openai.extraBody is not valid JSON',
+        );
+        setConfigValue('openai.extraBody', '', file);
+        expect(loadConfigFile(file).providers?.openai?.extraBody).toBeUndefined();
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
     it('rejects malformed json with a fix hint', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
         const file = path.join(dir, 'config.json');

@@ -3,6 +3,7 @@
 import { readLocalImageBase64 } from '../imageInput.ts';
 import { buildVisionPrompt } from '../prompt.ts';
 import { VISION_RESULT_SCHEMA } from '../schema.ts';
+import { mergeExtraBody } from '../util/extraBody.ts';
 import { truncate } from '../util/json.ts';
 import type {
     BuildProviderInvocationOptions,
@@ -55,27 +56,35 @@ Report your findings by calling the ${TOOL_NAME} tool.`;
             'anthropic-version': '2023-06-01',
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            model,
-            max_tokens: 4096,
-            tools: [
+        body: JSON.stringify(
+            mergeExtraBody(
                 {
-                    name: TOOL_NAME,
-                    description: 'Report the structured visual evidence extracted from the image.',
-                    input_schema: VISION_RESULT_SCHEMA,
-                },
-            ],
-            tool_choice: { type: 'tool', name: TOOL_NAME },
-            messages: [
-                {
-                    role: 'user',
-                    content: [
-                        { type: 'image', source: imageSource },
-                        { type: 'text', text: prompt },
+                    model,
+                    max_tokens: 4096,
+                    tools: [
+                        {
+                            name: TOOL_NAME,
+                            description:
+                                'Report the structured visual evidence extracted from the image.',
+                            input_schema: VISION_RESULT_SCHEMA,
+                        },
+                    ],
+                    tool_choice: { type: 'tool', name: TOOL_NAME },
+                    messages: [
+                        {
+                            role: 'user',
+                            content: [
+                                { type: 'image', source: imageSource },
+                                { type: 'text', text: prompt },
+                            ],
+                        },
                     ],
                 },
-            ],
-        }),
+                options.settings?.extraBody,
+                ['model', 'messages', 'tools', 'tool_choice', 'stream'],
+                'anthropic',
+            ),
+        ),
         signal: AbortSignal.timeout(options.timeoutMs),
     });
 

@@ -5,6 +5,7 @@
 import { readLocalImageBase64 } from '../imageInput.ts';
 import { buildVisionPrompt } from '../prompt.ts';
 import { missingSchemaFields } from '../schema.ts';
+import { mergeExtraBody } from '../util/extraBody.ts';
 import { extractJson, truncate } from '../util/json.ts';
 import type {
     BuildProviderInvocationOptions,
@@ -48,18 +49,25 @@ Respond with ONE JSON object only, no markdown fences, no commentary. Fill this 
             Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            model,
-            messages: [
+        body: JSON.stringify(
+            mergeExtraBody(
                 {
-                    role: 'user',
-                    content: [
-                        { type: 'image_url', image_url: { url: imageUrl } },
-                        { type: 'text', text: prompt },
+                    model,
+                    messages: [
+                        {
+                            role: 'user',
+                            content: [
+                                { type: 'image_url', image_url: { url: imageUrl } },
+                                { type: 'text', text: prompt },
+                            ],
+                        },
                     ],
                 },
-            ],
-        }),
+                options.settings?.extraBody,
+                ['model', 'messages', 'stream'],
+                'openai',
+            ),
+        ),
         signal: AbortSignal.timeout(options.timeoutMs),
     });
 

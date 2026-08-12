@@ -51,6 +51,12 @@ Output is a fixed JSON shape:
 | `--timeout <ms>` | Provider timeout | `180000` |
 | `--provider-bin <path>` | Provider binary path | `agy` / `claude` |
 | `--workdir <path>` | Working directory for the provider | a fresh isolated directory per run |
+| `--extra-body <json>` | JSON merged into the API request body, e.g. `'{"thinking":{"type":"disabled"}}'` | the provider's `extraBody` from the config |
+
+`--extra-body` is how vendor-specific knobs get through, turning thinking off
+being the common one. It applies to the three API providers and replaces the
+configured `extraBody` for that run. Per-vendor spellings and the fields it
+refuses to touch are in [Configuration](configure.md).
 
 The default `-m` model depends on the provider:
 

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { providerAliases } from './providers/index.ts';
+import { parseExtraBody } from './util/extraBody.ts';
 
 // Layered configuration: CLI flags > environment variables > ~/.modlens/config.json > built-ins.
 
@@ -9,7 +10,18 @@ export interface ProviderSettings {
     apiKey?: string;
     baseUrl?: string;
     model?: string;
+    /**
+     * Vendor-specific fields merged into the request body of the API providers
+     * (turning thinking off is the usual reason). Not a string like the rest,
+     * so the string-only fields have their own type below.
+     */
+    extraBody?: Record<string, unknown>;
 }
+
+/** The settings that hold a plain string, the only ones env vars can bind to. */
+export type ProviderStringField = 'apiKey' | 'baseUrl' | 'model';
+
+const STRING_FIELDS: ProviderStringField[] = ['apiKey', 'baseUrl', 'model'];
 
 export interface ModlensConfig {
     provider?: string;
@@ -19,7 +31,7 @@ export interface ModlensConfig {
 export const CONFIG_DIR = path.join(os.homedir(), '.modlens');
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
-const ENV_BINDINGS: Record<string, Partial<Record<keyof ProviderSettings, string>>> = {
+const ENV_BINDINGS: Record<string, Partial<Record<ProviderStringField, string>>> = {
     'gemini-api': { apiKey: 'GEMINI_API_KEY' },
     openai: { apiKey: 'OPENAI_API_KEY', baseUrl: 'OPENAI_BASE_URL' },
     anthropic: { apiKey: 'ANTHROPIC_API_KEY', baseUrl: 'ANTHROPIC_BASE_URL' },
@@ -76,7 +88,7 @@ export function resolveProviderSettings(
 
     const settings: ProviderSettings = { ...fromFile };
     for (const [field, envName] of Object.entries(bindings) as Array<
-        [keyof ProviderSettings, string]
+        [ProviderStringField, string]
     >) {
         const value = env[envName]?.trim();
         if (value) {
@@ -96,17 +108,33 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
         const dot = dottedKey.indexOf('.');
         if (dot <= 0 || dot === dottedKey.length - 1) {
             throw new Error(
-                `Invalid config key: ${dottedKey}. Use "provider" or "<provider>.<apiKey|baseUrl|model>".`,
+                `Invalid config key: ${dottedKey}. Use "provider" or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
             );
         }
         const providerName = dottedKey.slice(0, dot);
         const field = dottedKey.slice(dot + 1);
-        if (!['apiKey', 'baseUrl', 'model'].includes(field)) {
-            throw new Error(`Unknown config field: ${field}. Use apiKey, baseUrl, or model.`);
+        if (field === 'extraBody') {
+            config.providers ??= {};
+            config.providers[providerName] ??= {};
+            // An empty value clears it, so a user who no longer wants the
+            // passthrough does not have to hand-edit the file.
+            if (value.trim() === '') {
+                delete config.providers[providerName].extraBody;
+            } else {
+                config.providers[providerName].extraBody = parseExtraBody(
+                    value,
+                    `${providerName}.extraBody`,
+                );
+            }
+        } else if (!STRING_FIELDS.includes(field as ProviderStringField)) {
+            throw new Error(
+                `Unknown config field: ${field}. Use apiKey, baseUrl, model, or extraBody.`,
+            );
+        } else {
+            config.providers ??= {};
+            config.providers[providerName] ??= {};
+            config.providers[providerName][field as ProviderStringField] = value;
         }
-        config.providers ??= {};
-        config.providers[providerName] ??= {};
-        config.providers[providerName][field as keyof ProviderSettings] = value;
     }
 
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -167,7 +195,7 @@ export function renderEffectiveConfig(
         const fileSettings = config.providers?.[name] ?? {};
         const bindings = ENV_BINDINGS[name] ?? {};
         const fields: Record<string, string> = {};
-        for (const field of ['apiKey', 'baseUrl', 'model'] as const) {
+        for (const field of STRING_FIELDS) {
             const envName = bindings[field];
             const envValue = envName ? env[envName]?.trim() : undefined;
             const value = envValue ?? fileSettings[field];
@@ -176,6 +204,11 @@ export function renderEffectiveConfig(
                 const shown = field === 'apiKey' ? maskKey(value) : value;
                 fields[field] = `${shown} (${source})`;
             }
+        }
+        // No env binding and no secret to mask, but it changes what gets sent,
+        // so it belongs in the effective view.
+        if (fileSettings.extraBody !== undefined) {
+            fields.extraBody = `${JSON.stringify(fileSettings.extraBody)} (file)`;
         }
         if (Object.keys(fields).length > 0) {
             providers[name] = fields;
