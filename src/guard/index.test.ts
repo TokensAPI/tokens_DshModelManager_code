@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { claudeProjectSlug } from '../recoverPaste/adapters/claude.ts';
 import { detectActiveModel, runGuard } from './index.ts';
 
 // The suite itself runs inside a real harness; keep detection out of the way.
@@ -16,14 +17,14 @@ function tempDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-guard-'));
 }
 
-function claudeFixture(model: string): { claudeProjectsDir: string } {
+function claudeFixture(cwd: string, model: string): { claudeProjectsDir: string } {
     const projects = tempDir();
-    const dir = path.join(projects, '-repo');
+    const dir = path.join(projects, claudeProjectSlug(cwd));
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
         path.join(dir, 's.jsonl'),
         [
-            JSON.stringify({ cwd: '/repo', message: { role: 'user', content: [] } }),
+            JSON.stringify({ cwd, message: { role: 'user', content: [] } }),
             JSON.stringify({ message: { role: 'assistant', model } }),
         ].join('\n'),
     );
@@ -44,9 +45,10 @@ describe('detectActiveModel', () => {
     });
 
     it('prefers storage evidence over the self-report and records the disagreement', () => {
-        const roots = claudeFixture('deepseek-v4-flash');
+        const cwd = tempDir();
+        const roots = claudeFixture(cwd, 'deepseek-v4-flash');
         const detection = detectActiveModel({
-            cwd: '/repo',
+            cwd,
             env: { MODLENS_HARNESS: 'claude-code' },
             selfReported: 'claude-3.7-sonnet',
             roots,
@@ -72,9 +74,10 @@ describe('detectActiveModel', () => {
     });
 
     it('treats a set-but-empty MODLENS_HARNESS as not forced, like detect.ts does', () => {
-        const roots = claudeFixture('deepseek-v4-flash');
+        const cwd = tempDir();
+        const roots = claudeFixture(cwd, 'deepseek-v4-flash');
         const detection = detectActiveModel({
-            cwd: '/repo',
+            cwd,
             env: { MODLENS_HARNESS: '' },
             harness: 'claude-code',
             roots,
