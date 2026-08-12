@@ -29,7 +29,9 @@ function baseEnv(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
 }
 
 function run(args: string[], env: Record<string, string> = {}) {
-    const res = spawnSync('node', [cli, ...args], {
+    // process.execPath, not 'node': tests that empty PATH to starve the
+    // provider chain must still be able to launch the CLI itself.
+    const res = spawnSync(process.execPath, [cli, ...args], {
         encoding: 'utf-8',
         env: baseEnv(env),
     });
@@ -84,6 +86,115 @@ describe('top-level wiring', () => {
         const { code, stdout } = run(['--version']);
         expect(code).toBe(0);
         expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    });
+});
+
+describe('guard', () => {
+    function homeWithGuards(guards: object): string {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
+        fs.mkdirSync(path.join(home, '.modlens'));
+        fs.writeFileSync(path.join(home, '.modlens', 'config.json'), JSON.stringify({ guards }));
+        return home;
+    }
+
+    it('denies a deny-listed model with exit 1 and a machine-readable verdict', () => {
+        const home = homeWithGuards({ denyModels: ['gpt-5.6*'] });
+        const { code, stdout } = run(['guard'], {
+            HOME: home,
+            USERPROFILE: home,
+            MODLENS_HARNESS: 'none',
+            MODLENS_MODEL: 'gpt-5.6-sol',
+        });
+        expect(code).toBe(1);
+        const verdict = JSON.parse(stdout) as Record<string, string>;
+        expect(verdict.guard).toBe('deny');
+        expect(verdict.matched).toBe('gpt-5.6*');
+        expect(verdict.source).toBe('env');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('allows a model off the list with exit 0', () => {
+        const home = homeWithGuards({ denyModels: ['gpt-5.6*'] });
+        const { code, stdout } = run(['guard'], {
+            HOME: home,
+            USERPROFILE: home,
+            MODLENS_HARNESS: 'none',
+            MODLENS_MODEL: 'deepseek-v4-flash',
+        });
+        expect(code).toBe(0);
+        expect((JSON.parse(stdout) as Record<string, string>).guard).toBe('allow');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('falls back to the --model self-report when nothing else identifies the model', () => {
+        const home = homeWithGuards({ denyModels: ['gemini-3*'] });
+        const { code, stdout } = run(['guard', '--model', 'gemini-3.1-pro-high'], {
+            HOME: home,
+            USERPROFILE: home,
+            MODLENS_HARNESS: 'none',
+        });
+        expect(code).toBe(1);
+        expect((JSON.parse(stdout) as Record<string, string>).source).toBe('self-report');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+});
+
+describe('analyze guard gate', () => {
+    function guardedHome(guards: object): { home: string; file: string } {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
+        fs.mkdirSync(path.join(home, '.modlens'));
+        fs.writeFileSync(path.join(home, '.modlens', 'config.json'), JSON.stringify({ guards }));
+        const file = path.join(home, 'x.png');
+        fs.writeFileSync(file, Buffer.from('bytes'));
+        return { home, file };
+    }
+
+    it('does not gate on a whitespace-only MODLENS_MODEL (no sniffing inside analyze)', () => {
+        const { home, file } = guardedHome({ denyModels: ['gpt-5.6*'] });
+        // PATH is emptied so the provider chain fails fast without quota.
+        const { stderr } = run(['-i', file], {
+            HOME: home,
+            USERPROFILE: home,
+            MODLENS_HARNESS: 'none',
+            MODLENS_MODEL: '   ',
+            PATH: '',
+        });
+        expect(stderr).not.toMatch(/guard/i);
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('lets MODLENS_MODEL=none pass even under denyWhenUnknown (advisory only)', () => {
+        const { home, file } = guardedHome({ denyModels: ['gpt-5.6*'], denyWhenUnknown: true });
+        const { stderr } = run(['-i', file], {
+            HOME: home,
+            USERPROFILE: home,
+            MODLENS_HARNESS: 'none',
+            MODLENS_MODEL: 'none',
+            PATH: '',
+        });
+        expect(stderr).not.toMatch(/guard/i);
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('refuses to spend a provider call when MODLENS_MODEL is deny-listed', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
+        fs.mkdirSync(path.join(home, '.modlens'));
+        fs.writeFileSync(
+            path.join(home, '.modlens', 'config.json'),
+            JSON.stringify({ guards: { denyModels: ['gpt-5.6*'] } }),
+        );
+        const file = path.join(home, 'x.png');
+        fs.writeFileSync(file, Buffer.from('bytes'));
+        const { code, stderr } = run(['-i', file], {
+            HOME: home,
+            USERPROFILE: home,
+            MODLENS_HARNESS: 'none',
+            MODLENS_MODEL: 'gpt-5.6-sol',
+        });
+        expect(code).toBe(1);
+        expect(stderr).toMatch(/guard/i);
+        expect(stderr).toContain('gpt-5.6*');
+        fs.rmSync(home, { recursive: true, force: true });
     });
 });
 

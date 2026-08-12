@@ -1,8 +1,10 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import type { GuardsConfig } from './guard/rules.ts';
 import { providerAliases } from './providers/index.ts';
 import { parseExtraBody } from './util/extraBody.ts';
+import { parseJsonOrExplain } from './util/json.ts';
 
 // Layered configuration: CLI flags > environment variables > ~/.modlens/config.json > built-ins.
 
@@ -26,6 +28,8 @@ const STRING_FIELDS: ProviderStringField[] = ['apiKey', 'baseUrl', 'model'];
 export interface ModlensConfig {
     provider?: string;
     providers?: Record<string, ProviderSettings>;
+    /** Invocation guard: when the active model already sees images, skip the engine. */
+    guards?: GuardsConfig;
 }
 
 export const CONFIG_DIR = path.join(os.homedir(), '.modlens');
@@ -104,11 +108,13 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
 
     if (dottedKey === 'provider') {
         config.provider = value;
+    } else if (dottedKey.startsWith('guards.')) {
+        setGuardsValue(config, dottedKey.slice('guards.'.length), value);
     } else {
         const dot = dottedKey.indexOf('.');
         if (dot <= 0 || dot === dottedKey.length - 1) {
             throw new Error(
-                `Invalid config key: ${dottedKey}. Use "provider" or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
+                `Invalid config key: ${dottedKey}. Use "provider", "guards.<denyModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
             );
         }
         const providerName = dottedKey.slice(0, dot);
@@ -144,6 +150,44 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
     } catch {
         // best effort on platforms without chmod
     }
+}
+
+/** Accepts a JSON array of globs or a comma-separated list. Empty clears. */
+function setGuardsValue(config: ModlensConfig, field: string, value: string): void {
+    if (field === 'denyModels') {
+        if (value.trim() === '') {
+            delete config.guards?.denyModels;
+        } else {
+            config.guards ??= {};
+            config.guards.denyModels = parseModelList(value);
+        }
+    } else if (field === 'denyWhenUnknown') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized !== 'true' && normalized !== 'false') {
+            throw new Error('guards.denyWhenUnknown must be true or false.');
+        }
+        config.guards ??= {};
+        config.guards.denyWhenUnknown = normalized === 'true';
+    } else {
+        throw new Error(`Unknown guards field: ${field}. Use denyModels or denyWhenUnknown.`);
+    }
+    if (config.guards && Object.keys(config.guards).length === 0) {
+        delete config.guards;
+    }
+}
+
+function parseModelList(value: string): string[] {
+    if (value.trim().startsWith('[')) {
+        const parsed = parseJsonOrExplain(value, 'guards.denyModels');
+        if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+            throw new Error('guards.denyModels must be a JSON array of glob strings.');
+        }
+        return parsed as string[];
+    }
+    return value
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
 }
 
 /**
@@ -215,11 +259,27 @@ export function renderEffectiveConfig(
         }
     }
 
-    const effective: { provider?: string; providers: Record<string, Record<string, string>> } = {
+    const effective: {
+        provider?: string;
+        providers: Record<string, Record<string, string>>;
+        guards?: Record<string, string>;
+    } = {
         providers,
     };
     if (config.provider?.trim()) {
         effective.provider = config.provider.trim();
+    }
+    if (config.guards) {
+        const guards: Record<string, string> = {};
+        if (config.guards.denyModels !== undefined) {
+            guards.denyModels = `${JSON.stringify(config.guards.denyModels)} (file)`;
+        }
+        if (config.guards.denyWhenUnknown !== undefined) {
+            guards.denyWhenUnknown = `${config.guards.denyWhenUnknown} (file)`;
+        }
+        if (Object.keys(guards).length > 0) {
+            effective.guards = guards;
+        }
     }
     return JSON.stringify(effective, null, 2);
 }
