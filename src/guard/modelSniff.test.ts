@@ -156,9 +156,9 @@ describe('sniffClaudeModel', () => {
             'stale-vision-model',
         );
         writeSession(path.join(projects, '-repo'), 'live.jsonl', '/repo', 'claude-fable-5');
-        expect(
-            sniffClaudeModel('/repo/sub', { CLAUDE_CODE_SESSION_ID: 'live' }, projects),
-        ).toEqual({ model: 'claude-fable-5' });
+        expect(sniffClaudeModel('/repo/sub', { CLAUDE_CODE_SESSION_ID: 'live' }, projects)).toEqual(
+            { model: 'claude-fable-5' },
+        );
     });
 
     it('reads only a bounded tail window of a huge transcript', () => {
@@ -257,8 +257,20 @@ describe('sniffCodexModel', () => {
 
     it('ranks by write time, not creation time: a resumed old session beats an idle newer one', () => {
         const root = tempDir();
-        const resumed = writeRollout(root, '2026/08/01', 'rollout-a-old.jsonl', '/repo', 'resumed-text');
-        const idle = writeRollout(root, '2026/08/11', 'rollout-b-new.jsonl', '/repo', 'idle-vision');
+        const resumed = writeRollout(
+            root,
+            '2026/08/01',
+            'rollout-a-old.jsonl',
+            '/repo',
+            'resumed-text',
+        );
+        const idle = writeRollout(
+            root,
+            '2026/08/11',
+            'rollout-b-new.jsonl',
+            '/repo',
+            'idle-vision',
+        );
         fs.utimesSync(resumed, new Date('2026-08-12'), new Date('2026-08-12'));
         fs.utimesSync(idle, new Date('2026-08-11'), new Date('2026-08-11'));
         expect(sniffCodexModel('/repo', {}, root)).toBe('resumed-text');
