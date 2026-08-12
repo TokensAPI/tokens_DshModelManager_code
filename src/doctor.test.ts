@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { buildDoctorReport } from './doctor.ts';
+import { buildDoctorReport, renderDoctorReport } from './doctor.ts';
 
 // A PATH pointing at a directory holding a fake executable, so binary detection
 // is deterministic instead of depending on what the test machine has installed.
@@ -184,5 +184,41 @@ describe('buildDoctorReport: config file permissions', () => {
             configPath: path.join(os.tmpdir(), 'modlens-does-not-exist-xyz', 'config.json'),
         });
         expect(report.config).toMatchObject({ exists: false, permissionsOk: true });
+    });
+});
+
+describe('buildDoctorReport: guard', () => {
+    it('evaluates the guard on the spot so "why did it skip" answers itself', () => {
+        const report = buildDoctorReport({
+            config: { guards: { denyModels: ['gpt-5.6*'] } },
+            env: { MODLENS_MODEL: 'gpt-5.6-sol', MODLENS_HARNESS: 'none' },
+        });
+        expect(report.guard).toMatchObject({
+            rules: 1,
+            denyWhenUnknown: false,
+            model: 'gpt-5.6-sol',
+            source: 'env',
+            verdict: 'deny',
+            matched: 'gpt-5.6*',
+        });
+    });
+
+    it('reports no rules as an allow with zero rules', () => {
+        const report = buildDoctorReport({
+            config: {},
+            env: { MODLENS_HARNESS: 'none' },
+        });
+        expect(report.guard).toMatchObject({ rules: 0, verdict: 'allow' });
+    });
+
+    it('renders a Guard section', () => {
+        const report = buildDoctorReport({
+            config: { guards: { denyModels: ['gpt-5.6*'] } },
+            env: { MODLENS_MODEL: 'gpt-5.6-sol', MODLENS_HARNESS: 'none' },
+        });
+        const rendered = renderDoctorReport(report);
+        expect(rendered).toContain('Guard');
+        expect(rendered).toContain('deny');
+        expect(rendered).toContain('gpt-5.6*');
     });
 });

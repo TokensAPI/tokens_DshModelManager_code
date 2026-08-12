@@ -105,6 +105,20 @@ That endpoint returned a partial result. Only agy, gemini-api, anthropic, and cl
 modlens -i <image> -p gemini-api
 ```
 
+## The guard said deny, or a read was refused
+
+```
+Invocation guard denied this read: active model "gemini-3.1-pro" matches guards.denyModels pattern "gemini-3*". A model with native vision should read the image itself. To override, unset MODLENS_MODEL or edit guards in /Users/you/.modlens/config.json.
+```
+
+Working as configured: `guards.denyModels` in the config file lists vision-capable models, and the active model matched one, so the engine refused to spend a provider call on an image that model can read itself. `modlens doctor` has a Guard section showing the rules, which model was detected, from which signal (the `MODLENS_MODEL` env var, session storage, or a `--model` self-report), and the verdict.
+
+If the detection is wrong, `MODLENS_MODEL=<actual-model> modlens guard` overrides everything, and `MODLENS_MODEL=none` marks the model as unknown (the verdict then follows `denyWhenUnknown`, default allow). To turn the guard off entirely: `modlens config set guards.denyModels ''`.
+
+One known blind spot: storage detection reads the newest assistant turn recorded for this project, so two sessions running different models in the same project directory at the same time can shadow each other (Claude Code and Codex pin the exact session through their injected session ids, Pi and OpenCode cannot). When that bites, `MODLENS_MODEL` is the override.
+
+Note that the hard refusal above only fires on an actual `denyModels` match against the explicit `MODLENS_MODEL` value. Storage detection and the `denyWhenUnknown` policy never block `analyze`, they only speak through `modlens guard`, whose deny is advice to the agent rather than a locked door.
+
 ## Config file problems
 
 ```

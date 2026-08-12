@@ -4,6 +4,8 @@
 import * as fs from 'fs';
 import { createRequire } from 'module';
 import { CONFIG_PATH, type ModlensConfig, resolveProviderSettings } from './config.ts';
+import { detectActiveModel } from './guard/index.ts';
+import { denyPatterns, evaluateGuard, type ModelSource } from './guard/rules.ts';
 import {
     findOnPath,
     PROVIDER_DESCRIPTORS,
@@ -50,6 +52,16 @@ export interface DoctorReport {
     /** The failover order actually available on this machine, per input kind. */
     chains: { local: string[]; remote: string[] };
     harness: { detected: string | null; source: HarnessSource };
+    /** The invocation guard's rules and a live evaluation (see guards config). */
+    guard: {
+        rules: number;
+        denyWhenUnknown: boolean;
+        model: string | null;
+        source: ModelSource;
+        verdict: 'allow' | 'deny';
+        matched?: string;
+        reason: string;
+    };
     config: {
         path: string;
         exists: boolean;
@@ -215,6 +227,17 @@ function inspectConfigFile(configPath: string): DoctorReport['config'] {
 export function buildDoctorReport(input: DoctorInput): DoctorReport {
     const env = input.env ?? process.env;
     const configPath = input.configPath ?? CONFIG_PATH;
+    // Detect once and hand the result to the guard's model detection, which
+    // would otherwise spawn a second `ps` walk for the same answer. Unlike the
+    // fast-path runGuard, doctor always detects the model, so "why did it
+    // skip" (or "what would it see") answers itself even with no rules set.
+    const harnessDetection = detectHarnessDetailed();
+    const guardDetection = detectActiveModel({
+        cwd: process.cwd(),
+        env,
+        harness: harnessDetection.harness,
+    });
+    const guardVerdict = evaluateGuard(input.config.guards, guardDetection);
     return {
         node: {
             version: process.version,
@@ -228,10 +251,16 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
             local: providerChain('local', input.config, env).map((p) => p.name),
             remote: providerChain('remote', input.config, env).map((p) => p.name),
         },
-        harness: (() => {
-            const detection = detectHarnessDetailed();
-            return { detected: detection.harness, source: detection.source };
-        })(),
+        harness: { detected: harnessDetection.harness, source: harnessDetection.source },
+        guard: {
+            rules: denyPatterns(input.config.guards).length,
+            denyWhenUnknown: input.config.guards?.denyWhenUnknown ?? false,
+            model: guardVerdict.model,
+            source: guardVerdict.source,
+            verdict: guardVerdict.guard,
+            matched: guardVerdict.matched,
+            reason: guardVerdict.reason,
+        },
         config: inspectConfigFile(configPath),
     };
 }
@@ -286,6 +315,16 @@ export function renderDoctorReport(report: DoctorReport): string {
         report.harness.detected
             ? `  ${report.harness.detected} (via ${report.harness.source})`
             : `  none detected (${report.harness.source})`,
+    );
+    lines.push('');
+
+    lines.push('Guard (should the vision engine run for the active model?)');
+    lines.push(
+        `  rules: ${report.guard.rules} deny pattern(s), denyWhenUnknown: ${report.guard.denyWhenUnknown}`,
+    );
+    lines.push(`  active model: ${report.guard.model ?? 'unknown'} (via ${report.guard.source})`);
+    lines.push(
+        `  verdict: ${report.guard.verdict}${report.guard.matched ? ` (matched "${report.guard.matched}")` : ''}, ${report.guard.reason}`,
     );
     lines.push('');
 

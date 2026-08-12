@@ -21,7 +21,7 @@ pnpm install
 
 ```
 src/
-├── main.ts           # CLI entry: analyze (default), recover-paste, doctor, config subcommands
+├── main.ts           # CLI entry: analyze (default), guard, recover-paste, doctor, config subcommands
 ├── analyzer.ts       # orchestration: input resolution, config merge, provider dispatch
 ├── config.ts         # layered config load/set/show/init
 ├── doctor.ts         # offline diagnostics: Node, provider readiness, selection, harness, config perms
@@ -29,6 +29,7 @@ src/
 ├── schema.ts         # vision result JSON schema (single source of truth)
 ├── imageInput.ts     # base64/mime helpers (local + remote image bytes)
 ├── util/json.ts      # shared JSON helpers (parse, extract, truncate)
+├── guard/            # invocation guard (issue #15): rules (deny globs), modelSniff (active model from session storage), index (signal precedence)
 ├── recoverPaste/     # paste recovery: adapters/{claude,pi,opencode}, detect, jsonl, index
 └── providers/
     ├── index.ts        # provider interface + registry (5 providers + aliases)

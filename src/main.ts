@@ -14,6 +14,7 @@ import {
     setConfigValue,
 } from './config.ts';
 import { buildDoctorReport, renderDoctorReport } from './doctor.ts';
+import { runGuard } from './guard/index.ts';
 import { listProviders } from './providers/index.ts';
 import { recoverPastedImages } from './recoverPaste/index.ts';
 import { parseExtraBody } from './util/extraBody.ts';
@@ -47,6 +48,25 @@ program
                 throw new Error('Invalid --timeout. Use a positive integer in milliseconds.');
             }
 
+            // Hard gate before any provider work, fed only by the explicit
+            // MODLENS_MODEL env var and only on an actual pattern match:
+            // storage sniffing and the denyWhenUnknown policy stay advisory in
+            // `modlens guard`, where a wrong guess cannot block a read.
+            const config = loadConfigFile();
+            if (process.env.MODLENS_MODEL?.trim()) {
+                const verdict = runGuard(config.guards, {
+                    cwd: process.cwd(),
+                    env: process.env,
+                });
+                if (verdict.guard === 'deny' && verdict.matched) {
+                    throw new Error(
+                        `Invocation guard denied this read: active model "${verdict.model}" matches guards.denyModels pattern "${verdict.matched}". ` +
+                            'A model with native vision should read the image itself. ' +
+                            `To override, unset MODLENS_MODEL or edit guards in ${CONFIG_PATH}.`,
+                    );
+                }
+            }
+
             const result = await analyzeImage({
                 input: options.input,
                 provider: options.provider,
@@ -58,6 +78,7 @@ program
                 extraBody: options.extraBody
                     ? parseExtraBody(options.extraBody, '--extra-body')
                     : undefined,
+                config,
             });
 
             const output = JSON.stringify(result, null, 2);
@@ -114,6 +135,35 @@ program
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,
             );
             process.exit(1);
+        }
+    });
+
+program
+    .command('guard')
+    .description(
+        'Check whether the vision engine should run for the active model (exit 0 allow, 1 deny, 2 error)',
+    )
+    .option(
+        '--model <name>',
+        "The calling agent's own model name; weakest signal, used when env and session storage say nothing",
+    )
+    .option('--cwd <path>', 'Project directory of the session', process.cwd())
+    .action((options: { model?: string; cwd: string }) => {
+        try {
+            const verdict = runGuard(loadConfigFile().guards, {
+                cwd: options.cwd,
+                env: process.env,
+                selfReported: options.model,
+            });
+            process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+            // exitCode, not exit(): exit() can drop the buffered verdict when
+            // stdout is a pipe, and the JSON is the contract.
+            process.exitCode = verdict.guard === 'deny' ? 1 : 0;
+        } catch (error) {
+            process.stderr.write(
+                `Error: ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+            process.exitCode = 2;
         }
     });
 

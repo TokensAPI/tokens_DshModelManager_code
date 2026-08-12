@@ -17,11 +17,15 @@ modlens config set <provider>.<field> <value>   # fields: apiKey, baseUrl, model
 
 ## The file's exact shape
 
-Everything lives under two top-level keys, both optional. A missing file means all defaults. Provider settings sit under `providers.<name>`, not at the top level, which is the mistake hand-editors make most.
+Everything lives under three top-level keys, all optional. A missing file means all defaults. Provider settings sit under `providers.<name>`, not at the top level, which is the mistake hand-editors make most.
 
 ```json
 {
   "provider": "gemini-api",
+  "guards": {
+    "denyModels": ["gemini-3*", "qwen-vl-*"],
+    "denyWhenUnknown": false
+  },
   "providers": {
     "antigravity-cli": { "model": "gemini-3.6-flash-low" },
     "gemini-api": {
@@ -46,7 +50,8 @@ Field semantics:
 - `provider`: which provider runs when `-p` is not given. Canonical names or aliases both work (`agy`/`antigravity` for `antigravity-cli`, `gemini` for `gemini-api`, `openai-compat` for `openai`, `claude` for `anthropic`, `claude-code` for `claude-cli`). Empty or absent means `antigravity-cli`.
 - `providers.<name>.<field>`: four fields exist, `apiKey`, `baseUrl`, `model`, and `extraBody`. Every provider entry is optional, and every field inside it is optional. Alias keys are read too (settings saved under `gemini` are found when `gemini-api` resolves), with the canonical key winning on conflict.
 - `providers.<name>.extraBody`: a JSON object merged into the request body of the API providers (`gemini-api`, `openai`, `anthropic`), for whatever knobs that vendor has and modlens has no flag for. Turning thinking off is the usual reason, see the section below. Nested objects merge key by key, so adding one knob leaves the rest of that block alone. The fields carrying the image, the prompt, and the schema enforcement are refused with an error naming the field. The two CLI providers take no request body, so a run on `antigravity-cli` or `claude-cli` ignores it and says so in `meta.warnings`.
-- Environment variables override the file for these bindings: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`. Nothing else is read from the environment except `MODLENS_HARNESS` (paste-recovery scope, unrelated to this file).
+- `guards`: the invocation guard, for people who run both text-only and vision-capable models through the same client. `denyModels` is a list of glob patterns (`*` and `?`, case-insensitive, matched against the model name and `provider/model`): when the active model matches one, `modlens guard` answers deny and the skill must not run the engine. `denyWhenUnknown` (default `false`) decides what happens when no signal identifies the active model: `false` proceeds, `true` denies. Set with `modlens config set guards.denyModels '["gemini-3*"]'` (a JSON array or a comma-separated list) and `modlens config set guards.denyWhenUnknown true`. The active model is detected from, strongest first: the `MODLENS_MODEL` env var (`none` means "treat as unknown"), the harness's session storage, the `--model` self-report.
+- Environment variables override the file for these bindings: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`. Beyond those, modlens reads `MODLENS_HARNESS` (paste-recovery and guard scope), `MODLENS_MODEL` (guard override, see `guards`), and the fingerprints harnesses inject themselves, which pin the guard's storage lookup to the current session: `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, plus the presence markers harness detection relies on (`CLAUDECODE`, `PI_CODING_AGENT`, `CODEX_SANDBOX`).
 - Unknown top-level keys and unknown provider names are ignored rather than rejected, so a typo fails quiet: run `modlens doctor` after hand-editing, it shows which file and env values are actually in effect.
 
 Hand-editing is fine (keep the file valid JSON and its permissions 0600). `modlens config set` does the same thing with guardrails.
