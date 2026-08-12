@@ -33,11 +33,11 @@ The launcher finds a working way to run modlens and forwards your arguments to i
 
 ### If you cannot run the launcher script
 
-Some harnesses forbid running scripts. Reason through the same order by hand and run the first line that works (the pinned version is 3.3.0):
+Some harnesses forbid running scripts. Reason through the same order by hand and run the first line that works (the pinned version is 3.4.0):
 
-1. A `modlens` on `PATH` whose major version is 3 and is at least 3.3.0: `modlens <args>`.
-2. Otherwise, if `npx` exists: `npx --yes --package @liustack/modlens@3.3.0 modlens <args>`.
-3. Otherwise, if `bunx` exists: `bunx --bun @liustack/modlens@3.3.0 <args>`.
+1. A `modlens` on `PATH` whose major version is 3 and is at least 3.4.0: `modlens <args>`.
+2. Otherwise, if `npx` exists: `npx --yes --package @liustack/modlens@3.4.0 modlens <args>`.
+3. Otherwise, if `bunx` exists: `bunx --bun @liustack/modlens@3.4.0 <args>`.
 4. Otherwise none of these runtimes is here. Tell the user no JavaScript runtime was found and that installing Node 22.13+ (https://nodejs.org) or Bun (https://bun.sh) is the next step. Do not claim modlens itself failed.
 
 `references/runtime.md` documents the version pin, the compatibility rule, and the diagnostic fields.
