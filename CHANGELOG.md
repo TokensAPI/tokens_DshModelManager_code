@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.5.0 - 2026-08-12
 
 - The CLI no longer prints a `node:sqlite` ExperimentalWarning on every start. Bundling undici had hoisted its lazy `require('node:sqlite')` (for a cache store nothing here uses) into a top-level import. The build now keeps that require a runtime call.
 
