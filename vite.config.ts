@@ -22,6 +22,13 @@ export default defineConfig({
                 ...builtinModules.map((name) => `node:${name}`),
             ],
         },
+        commonjsOptions: {
+            // Keep undici's lazy require('node:sqlite') a runtime call. The
+            // CJS transform used to hoist it into a top-level import, which
+            // loaded the experimental module (and printed its warning) on
+            // every CLI start, for a cache store nothing here ever uses.
+            ignore: ['node:sqlite'],
+        },
         target: 'node18',
         outDir: 'dist',
         emptyOutDir: true,

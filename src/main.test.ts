@@ -87,6 +87,13 @@ describe('top-level wiring', () => {
         expect(code).toBe(0);
         expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
     });
+
+    it('starts without loading node:sqlite (no experimental warning on stderr)', () => {
+        // Bundling undici used to hoist its lazy require('node:sqlite') into a
+        // top-level import, so every CLI start printed an ExperimentalWarning.
+        const { stderr } = run(['--version']);
+        expect(stderr).not.toContain('ExperimentalWarning');
+    });
 });
 
 describe('guard', () => {
