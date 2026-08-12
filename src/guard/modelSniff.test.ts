@@ -3,6 +3,8 @@ import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { claudeProjectSlug } from '../recoverPaste/adapters/claude.ts';
+import { piSessionSlug } from '../recoverPaste/adapters/pi.ts';
 import {
     codexTranscriptBelongsTo,
     lastAssistantModelFromLines,
@@ -21,6 +23,9 @@ afterEach(() => {
     delete process.env.MODLENS_HARNESS;
 });
 
+// Fixture cwds are real temp paths and slug directories come from the same
+// slug functions the sniffers use, so the suite holds on Windows paths too
+// (a hardcoded '/tmp/proj' slug never matches C:\tmp\proj).
 function tempDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-guard-'));
 }
@@ -98,8 +103,8 @@ describe('sniffClaudeModel', () => {
 
     it('pins the exact session via CLAUDE_CODE_SESSION_ID', () => {
         const projects = tempDir();
-        const cwd = '/tmp/proj';
-        const dir = path.join(projects, '-tmp-proj');
+        const cwd = tempDir();
+        const dir = path.join(projects, claudeProjectSlug(cwd));
         writeSession(dir, 'aaa.jsonl', cwd, 'wrong-model');
         writeSession(dir, 'bbb.jsonl', cwd, 'claude-fable-5');
         const found = sniffClaudeModel(cwd, { CLAUDE_CODE_SESSION_ID: 'bbb' }, projects);
@@ -108,23 +113,23 @@ describe('sniffClaudeModel', () => {
 
     it('falls back to the newest transcript that belongs to the cwd', () => {
         const projects = tempDir();
-        const cwd = '/tmp/proj';
-        const dir = path.join(projects, '-tmp-proj');
+        const cwd = tempDir();
+        const dir = path.join(projects, claudeProjectSlug(cwd));
         writeSession(dir, 'old.jsonl', cwd, 'old-model', new Date('2026-01-01'));
         writeSession(dir, 'new.jsonl', cwd, 'new-model', new Date('2026-08-01'));
-        // Same slug, different real cwd: must be ignored despite being newest.
-        writeSession(dir, 'alien.jsonl', '/tmp/proj.other', 'alien-model', new Date('2026-08-10'));
+        // Same directory, different real cwd: must be ignored despite being newest.
+        writeSession(dir, 'alien.jsonl', `${cwd}-other`, 'alien-model', new Date('2026-08-10'));
         expect(sniffClaudeModel(cwd, {}, projects)).toEqual({ model: 'new-model' });
     });
 
     it('returns null when the project directory does not exist', () => {
-        expect(sniffClaudeModel('/tmp/proj', {}, path.join(tempDir(), 'missing'))).toBeNull();
+        expect(sniffClaudeModel(tempDir(), {}, path.join(tempDir(), 'missing'))).toBeNull();
     });
 
     it('falls back to the scan when the pinned session has no assistant turn yet', () => {
         const projects = tempDir();
-        const cwd = '/tmp/proj';
-        const dir = path.join(projects, '-tmp-proj');
+        const cwd = tempDir();
+        const dir = path.join(projects, claudeProjectSlug(cwd));
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(
             path.join(dir, 'fresh.jsonl'),
@@ -138,33 +143,35 @@ describe('sniffClaudeModel', () => {
 
     it('walks up to the session root slug when run in a subdirectory', () => {
         const projects = tempDir();
-        const dir = path.join(projects, '-tmp-proj');
-        writeSession(dir, 's.jsonl', '/tmp/proj', 'claude-fable-5');
-        expect(sniffClaudeModel(path.join('/tmp/proj', 'packages', 'app'), {}, projects)).toEqual({
+        const cwd = tempDir();
+        writeSession(path.join(projects, claudeProjectSlug(cwd)), 's.jsonl', cwd, 'claude-fable-5');
+        expect(sniffClaudeModel(path.join(cwd, 'packages', 'app'), {}, projects)).toEqual({
             model: 'claude-fable-5',
         });
     });
 
     it('prefers the pinned session in an ancestor slug over a scan hit in a deeper one', () => {
         const projects = tempDir();
+        const cwd = tempDir();
+        const sub = path.join(cwd, 'sub');
         // Old session filed under the subdirectory's own slug, the live pinned
         // session under the repo root's slug: the pin must win.
         writeSession(
-            path.join(projects, '-repo-sub'),
+            path.join(projects, claudeProjectSlug(sub)),
             'stale.jsonl',
-            '/repo/sub',
+            sub,
             'stale-vision-model',
         );
-        writeSession(path.join(projects, '-repo'), 'live.jsonl', '/repo', 'claude-fable-5');
-        expect(sniffClaudeModel('/repo/sub', { CLAUDE_CODE_SESSION_ID: 'live' }, projects)).toEqual(
-            { model: 'claude-fable-5' },
-        );
+        writeSession(path.join(projects, claudeProjectSlug(cwd)), 'live.jsonl', cwd, 'claude-fable-5');
+        expect(sniffClaudeModel(sub, { CLAUDE_CODE_SESSION_ID: 'live' }, projects)).toEqual({
+            model: 'claude-fable-5',
+        });
     });
 
     it('reads only a bounded tail window of a huge transcript', () => {
         const projects = tempDir();
-        const cwd = '/tmp/proj';
-        const dir = path.join(projects, '-tmp-proj');
+        const cwd = tempDir();
+        const dir = path.join(projects, claudeProjectSlug(cwd));
         fs.mkdirSync(dir, { recursive: true });
         const filler = JSON.stringify({
             type: 'user',
@@ -189,22 +196,24 @@ describe('sniffPiModel', () => {
         // (/tmp/a-b and /tmp/a/b), so a tail-only read that misses the header
         // must not fall back to trusting the slug.
         const root = tempDir();
-        const dir = path.join(root, '--tmp-proj--');
+        const cwd = tempDir();
+        const alienCwd = tempDir();
+        const dir = path.join(root, piSessionSlug(cwd));
         fs.mkdirSync(dir, { recursive: true });
         const filler = JSON.stringify({ message: { role: 'user', content: ['x'.repeat(4096)] } });
         const lines = [
-            JSON.stringify({ type: 'session', cwd: '/tmp/proj.other' }),
+            JSON.stringify({ type: 'session', cwd: alienCwd }),
             ...Array.from({ length: 300 }, () => filler),
             JSON.stringify({ message: { role: 'assistant', model: 'alien-vision' } }),
         ];
         fs.writeFileSync(path.join(dir, 'big.jsonl'), lines.join('\n'));
-        expect(sniffPiModel('/tmp/proj', root)).toBeNull();
+        expect(sniffPiModel(cwd, root)).toBeNull();
     });
 
     it('reads the newest session in the cwd-slug directory', () => {
         const root = tempDir();
-        const cwd = '/tmp/proj';
-        const dir = path.join(root, '--tmp-proj--');
+        const cwd = tempDir();
+        const dir = path.join(root, piSessionSlug(cwd));
         fs.mkdirSync(dir, { recursive: true });
         const file = path.join(dir, '2026-08-01T00-00-00-000Z_abc.jsonl');
         fs.writeFileSync(
@@ -318,6 +327,7 @@ try {
 describe.skipIf(!DatabaseSync)('opencodeModelForCwd', () => {
     it('returns the newest assistant model scoped to the session directory', () => {
         const Db = DatabaseSync as NonNullable<typeof DatabaseSync>;
+        const cwd = tempDir();
         const dbPath = path.join(tempDir(), 'opencode.db');
         const db = new Db(dbPath);
         db.exec(`
@@ -325,7 +335,8 @@ describe.skipIf(!DatabaseSync)('opencodeModelForCwd', () => {
             CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
         `);
         const insertSession = db.prepare('INSERT INTO session VALUES (?, ?, ?)');
-        insertSession.run('ses_mine', 's1', '/repo');
+        // opencode records directories with forward slashes on every platform.
+        insertSession.run('ses_mine', 's1', path.resolve(cwd).replace(/\\/g, '/'));
         insertSession.run('ses_other', 's2', '/elsewhere');
         const insertMessage = db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)');
         insertMessage.run(
@@ -352,7 +363,7 @@ describe.skipIf(!DatabaseSync)('opencodeModelForCwd', () => {
             JSON.stringify({ role: 'assistant', modelID: 'alien-vision', providerID: 'openai' }),
         );
         db.close();
-        expect(opencodeModelForCwd('/repo', dbPath)).toEqual({
+        expect(opencodeModelForCwd(cwd, dbPath)).toEqual({
             model: 'deepseek-v4-flash',
             provider: 'deepseek',
         });
