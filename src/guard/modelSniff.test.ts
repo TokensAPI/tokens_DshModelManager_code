@@ -162,7 +162,12 @@ describe('sniffClaudeModel', () => {
             sub,
             'stale-vision-model',
         );
-        writeSession(path.join(projects, claudeProjectSlug(cwd)), 'live.jsonl', cwd, 'claude-fable-5');
+        writeSession(
+            path.join(projects, claudeProjectSlug(cwd)),
+            'live.jsonl',
+            cwd,
+            'claude-fable-5',
+        );
         expect(sniffClaudeModel(sub, { CLAUDE_CODE_SESSION_ID: 'live' }, projects)).toEqual({
             model: 'claude-fable-5',
         });
