@@ -5,14 +5,11 @@
 // modlens carries no per-vendor table. The user names the fields, modlens
 // merges them into the request it was going to send anyway.
 
+import { parseJsonOrExplain } from './json.ts';
+
 /** Parse an --extra-body / config value into an object, or explain why not. */
 export function parseExtraBody(raw: string, origin: string): Record<string, unknown> {
-    let parsed: unknown;
-    try {
-        parsed = JSON.parse(raw);
-    } catch (error) {
-        throw new Error(`${origin} is not valid JSON: ${(error as Error).message}`);
-    }
+    const parsed = parseJsonOrExplain(raw, origin);
     if (!isPlainObject(parsed)) {
         throw new Error(
             `${origin} must be a JSON object, for example {"thinking":{"type":"disabled"}}`,

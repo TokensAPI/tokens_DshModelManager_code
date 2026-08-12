@@ -12,6 +12,15 @@ export function tryParseJson(text: string): unknown | null {
     }
 }
 
+/** Parse user-supplied JSON under a named origin, or explain why not. */
+export function parseJsonOrExplain(raw: string, origin: string): unknown {
+    try {
+        return JSON.parse(raw);
+    } catch (error) {
+        throw new Error(`${origin} is not valid JSON: ${(error as Error).message}`);
+    }
+}
+
 /**
  * Parse JSON, first as-is, then from the outermost {...} slice. Enough for CLIs
  * that wrap their JSON envelope in a line of log noise, but not markdown fences.

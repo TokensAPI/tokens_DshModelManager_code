@@ -6,13 +6,30 @@ import * as path from 'path';
 import type { HarnessAdapter, ImageBlockRef, SourceRef } from './types.ts';
 
 /**
+ * Does a recorded working directory speak for the wanted one? One-directional
+ * by default (recorded equal to or under wanted). `bothDirections` also accepts
+ * a recorded ancestor, for callers that may run in a subdirectory of the
+ * session's root (the guard's model sniffing, mirroring opencode's filter).
+ */
+export function cwdMatches(recorded: string, wanted: string, bothDirections = false): boolean {
+    const resolvedRecorded = path.resolve(recorded);
+    const resolvedWanted = path.resolve(wanted);
+    if (
+        resolvedRecorded === resolvedWanted ||
+        resolvedRecorded.startsWith(`${resolvedWanted}${path.sep}`)
+    ) {
+        return true;
+    }
+    return bothDirections && resolvedWanted.startsWith(`${resolvedRecorded}${path.sep}`);
+}
+
+/**
  * Slugs are lossy: /tmp/project.alpha and /tmp/project-alpha collapse to the
  * same Claude slug, and Pi has the same problem with separators. Both harnesses
  * record the real cwd inside the transcript, so check it before trusting a
  * directory match.
  */
-export function transcriptBelongsTo(lines: string[], cwd: string): boolean {
-    const wanted = path.resolve(cwd);
+export function transcriptBelongsTo(lines: string[], cwd: string, bothDirections = false): boolean {
     let sawCwd = false;
 
     for (const line of lines) {
@@ -25,11 +42,10 @@ export function transcriptBelongsTo(lines: string[], cwd: string): boolean {
                 continue;
             }
             sawCwd = true;
-            const resolved = path.resolve(recorded);
             // Any matching line is enough: a session can start in a
             // subdirectory and one early line must not settle the question,
             // which is what returning on the first cwd used to do.
-            if (resolved === wanted || resolved.startsWith(`${wanted}${path.sep}`)) {
+            if (cwdMatches(recorded, cwd, bothDirections)) {
                 return true;
             }
         } catch {
@@ -116,6 +132,21 @@ function listJsonl(dir: string): string[] {
     } catch {
         return [];
     }
+}
+
+/** The same listing ordered newest write first, for callers that stop early. */
+export function listJsonlByMtimeDesc(dir: string): string[] {
+    return listJsonl(dir)
+        .map((file) => {
+            try {
+                return { file, mtime: fs.statSync(file).mtimeMs };
+            } catch {
+                return null;
+            }
+        })
+        .filter((entry): entry is { file: string; mtime: number } => entry !== null)
+        .sort((a, b) => b.mtime - a.mtime)
+        .map((entry) => entry.file);
 }
 
 export function jsonlAdapter(options: {

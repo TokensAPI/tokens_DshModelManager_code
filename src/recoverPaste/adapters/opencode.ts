@@ -40,20 +40,28 @@ interface SqliteRow {
  * session id or slug narrows that directory match rather than replacing it,
  * since neither is unique across projects.
  */
+export function opencodeDirectoryFilter(resolvedCwd: string): {
+    clause: string;
+    params: string[];
+} {
+    const normalized = resolvedCwd.replace(/\\/g, '/');
+    const escaped = escapeLikePattern(normalized);
+    const dir = `REPLACE(session.directory, '\\', '/')`;
+    return {
+        clause: `(${dir} = ? OR ${dir} LIKE ? || '/%' ESCAPE '\\' OR ? LIKE ${dir} || '/%' ESCAPE '\\')`,
+        params: [normalized, escaped, normalized],
+    };
+}
+
 export function buildOpencodeQuery(
     resolvedCwd: string,
     sessionId?: string,
 ): { sql: string; params: unknown[] } {
-    const normalized = resolvedCwd.replace(/\\/g, '/');
-    const escaped = escapeLikePattern(normalized);
-    const dir = `REPLACE(session.directory, '\\', '/')`;
-    const directoryFilter = `(${dir} = ? OR ${dir} LIKE ? || '/%' ESCAPE '\\' OR ? LIKE ${dir} || '/%' ESCAPE '\\')`;
+    const directory = opencodeDirectoryFilter(resolvedCwd);
     const sessionFilter = sessionId
-        ? `AND ${directoryFilter} AND (session.id = ? OR session.slug = ?)`
-        : `AND ${directoryFilter}`;
-    const params = sessionId
-        ? [normalized, escaped, normalized, sessionId, sessionId]
-        : [normalized, escaped, normalized];
+        ? `AND ${directory.clause} AND (session.id = ? OR session.slug = ?)`
+        : `AND ${directory.clause}`;
+    const params = sessionId ? [...directory.params, sessionId, sessionId] : directory.params;
     const sql = `SELECT part.data AS data, part.time_created AS time_created, part.session_id AS session_id
                  FROM part
                  JOIN message ON message.id = part.message_id
@@ -65,20 +73,33 @@ export function buildOpencodeQuery(
     return { sql, params };
 }
 
-function opencodeQuery(dbPath: string, cwd: string, sessionId?: string): SqliteRow[] {
-    // node:sqlite ships unflagged on Node 22.13+. Loaded lazily so the other
-    // adapters keep working on older runtimes.
-    let DatabaseSync: new (
-        p: string,
-        o?: { readOnly?: boolean },
-    ) => {
-        prepare: (sql: string) => { all: (...params: unknown[]) => unknown[] };
-        close: () => void;
-    };
+export interface ReadOnlySqliteDb {
+    prepare: (sql: string) => { all: (...params: unknown[]) => unknown[] };
+    close: () => void;
+}
+
+/**
+ * node:sqlite ships unflagged on Node 22.13+; loaded lazily so the other
+ * adapters keep working on older runtimes. Null means the module is missing:
+ * paste recovery turns that into an error, the guard's sniffing fails open.
+ */
+export function loadNodeSqlite():
+    | (new (
+          p: string,
+          o?: { readOnly?: boolean },
+      ) => ReadOnlySqliteDb)
+    | null {
     try {
         const nodeRequire = createRequire(import.meta.url);
-        ({ DatabaseSync } = nodeRequire('node:sqlite'));
+        return nodeRequire('node:sqlite').DatabaseSync;
     } catch {
+        return null;
+    }
+}
+
+function opencodeQuery(dbPath: string, cwd: string, sessionId?: string): SqliteRow[] {
+    const DatabaseSync = loadNodeSqlite();
+    if (!DatabaseSync) {
         throw new Error(
             'Reading opencode storage needs the node:sqlite module (unflagged on Node 22.13+). Upgrade Node, or pass --transcript/--session for a JSONL-based harness.',
         );
