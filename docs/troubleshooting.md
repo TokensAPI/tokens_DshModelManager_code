@@ -127,6 +127,23 @@ antigravity-cli provider timed out after 210000 ms.
 
 Retry once with `--timeout 300000`. Dense images on agy legitimately take 15-40 seconds, and `-m gemini-3.1-pro-high` is slower still. Engines that ignore SIGTERM are escalated to SIGKILL, so a timeout returns promptly regardless.
 
+## Every read is slow on a reasoning model
+
+A model that thinks by default spends its budget before it starts transcribing, which a vision read does not need. There is no `--no-thinking` flag because each vendor names the switch differently, so pass the vendor's own field:
+
+```bash
+modlens config set openai.extraBody '{"thinking":{"type":"disabled"}}'
+modlens -i shot.png --extra-body '{"reasoning_effort":"low"}'    # one run only
+```
+
+The per-vendor spellings, which models cannot turn it off at all, and how to tell whether the field actually landed are in [Configuration](../skills/modlens/references/configure.md#turning-thinking-off).
+
+```
+extraBody cannot override "messages" for the openai provider
+```
+
+That field carries the image, the prompt, or the schema enforcement. Remove it and keep the vendor knobs. A 400 from the gateway naming a field you set means that endpoint uses a different spelling, and a run on `antigravity-cli` or `claude-cli` says in `meta.warnings` that it ignored the value, since a CLI provider has no request body.
+
 ## Windows
 
 ModLens runs on Windows. Three platform differences are worth knowing:

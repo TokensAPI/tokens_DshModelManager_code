@@ -355,6 +355,57 @@ describe.skipIf(onWindows)('provider failover', () => {
         ).rejects.toThrow(/Every configured vision provider failed.*antigravity-cli.*gemini-api/s);
     }, 30_000);
 
+    it('sends extraBody from config, and --extra-body replaces it for the run', async () => {
+        const { dir, image } = fakeAgyDir('#!/bin/sh\nexit 1\n');
+        vi.stubEnv('PATH', dir);
+        const bodies: string[] = [];
+        vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+            bodies.push(String(init.body));
+            return geminiOk();
+        });
+
+        const config = {
+            providers: {
+                'gemini-api': {
+                    apiKey: 'g-key',
+                    extraBody: { generationConfig: { thinkingConfig: { thinkingLevel: 'LOW' } } },
+                },
+            },
+        };
+
+        await analyzeImage({ input: image, provider: 'gemini-api', config, timeoutMs: 20_000 });
+        expect(JSON.parse(bodies[0]).generationConfig.thinkingConfig).toEqual({
+            thinkingLevel: 'LOW',
+        });
+
+        await analyzeImage({
+            input: image,
+            provider: 'gemini-api',
+            config,
+            extraBody: { generationConfig: { thinkingConfig: { thinkingLevel: 'HIGH' } } },
+            timeoutMs: 20_000,
+        });
+        expect(JSON.parse(bodies[1]).generationConfig.thinkingConfig).toEqual({
+            thinkingLevel: 'HIGH',
+        });
+    }, 30_000);
+
+    it('warns instead of pretending when a CLI provider gets an extraBody', async () => {
+        const payload = JSON.stringify({ status: 'SUCCESS', structured_output: CONTRACT_RESULT });
+        const { dir, image } = fakeAgyDir(`#!/bin/sh\necho '${payload}'\nexit 0\n`);
+        vi.stubEnv('PATH', dir);
+
+        const result = await analyzeImage({
+            input: image,
+            provider: 'antigravity-cli',
+            extraBody: { thinking: { type: 'disabled' } },
+            config: {},
+            timeoutMs: 20_000,
+        });
+
+        expect(result.meta.warnings.join(' ')).toContain('extraBody was ignored');
+    }, 30_000);
+
     it('reports how to set up when nothing is configured at all', async () => {
         const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-none-'));
         cleanups.push(() => fs.rmSync(empty, { recursive: true, force: true }));

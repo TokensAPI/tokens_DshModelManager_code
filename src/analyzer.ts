@@ -21,6 +21,8 @@ export interface AnalyzeOptions {
     timeoutMs?: number;
     providerBin?: string;
     workdir?: string;
+    /** --extra-body: replaces the configured extraBody for this run. */
+    extraBody?: Record<string, unknown>;
     config?: ModlensConfig;
 }
 
@@ -111,6 +113,7 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
                 resolvedInput,
                 timeoutMs,
                 config,
+                warnings,
             );
             attempts.push({
                 provider: provider.name,
@@ -177,8 +180,23 @@ async function runProvider(
     resolvedInput: ResolvedInput,
     timeoutMs: number,
     config: ModlensConfig,
+    warnings: string[],
 ): Promise<ProviderParsedOutput> {
-    const settings = resolveProviderSettings(provider.name, config);
+    const configured = resolveProviderSettings(provider.name, config);
+    // --extra-body replaces the configured object rather than merging into it:
+    // a partial override of vendor knobs is hard to reason about at the command
+    // line, and the flag is the more specific layer.
+    const settings = options.extraBody
+        ? { ...configured, extraBody: options.extraBody }
+        : configured;
+    // The passthrough is a request-body field, so the two CLI agents have
+    // nowhere to put it. Saying so beats letting the user believe thinking is
+    // off when nothing was sent.
+    if (settings.extraBody && !provider.execute) {
+        warnings.push(
+            `${provider.name} is a CLI provider and takes no request body, so extraBody was ignored for this run.`,
+        );
+    }
     const providerOptions = {
         imageSource: resolvedInput.source,
         imageKind: resolvedInput.kind,

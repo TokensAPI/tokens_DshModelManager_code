@@ -3,6 +3,7 @@
 import { fetchRemoteImageBase64, readLocalImageBase64 } from '../imageInput.ts';
 import { buildVisionPrompt } from '../prompt.ts';
 import { VISION_RESULT_SCHEMA } from '../schema.ts';
+import { mergeExtraBody } from '../util/extraBody.ts';
 import { truncate } from '../util/json.ts';
 import type {
     BuildProviderInvocationOptions,
@@ -44,20 +45,31 @@ export async function executeGeminiApi(
             'x-goog-api-key': apiKey,
             'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-            contents: [
+        body: JSON.stringify(
+            mergeExtraBody(
                 {
-                    parts: [
-                        { inline_data: { mime_type: image.mimeType, data: image.data } },
-                        { text: prompt },
+                    contents: [
+                        {
+                            parts: [
+                                { inline_data: { mime_type: image.mimeType, data: image.data } },
+                                { text: prompt },
+                            ],
+                        },
                     ],
+                    generationConfig: {
+                        responseMimeType: 'application/json',
+                        responseJsonSchema: VISION_RESULT_SCHEMA,
+                    },
                 },
-            ],
-            generationConfig: {
-                responseMimeType: 'application/json',
-                responseJsonSchema: VISION_RESULT_SCHEMA,
-            },
-        }),
+                options.settings?.extraBody,
+                [
+                    'contents',
+                    'generationConfig.responseMimeType',
+                    'generationConfig.responseJsonSchema',
+                ],
+                'gemini-api',
+            ),
+        ),
         signal: AbortSignal.timeout(options.timeoutMs),
     });
 

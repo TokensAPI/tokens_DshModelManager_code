@@ -16,6 +16,7 @@ import {
 import { buildDoctorReport, renderDoctorReport } from './doctor.ts';
 import { listProviders } from './providers/index.ts';
 import { recoverPastedImages } from './recoverPaste/index.ts';
+import { parseExtraBody } from './util/extraBody.ts';
 
 const program = new Command();
 
@@ -35,6 +36,10 @@ program
     .option('--timeout <ms>', 'Provider timeout in milliseconds', '180000')
     .option('--provider-bin <path>', 'Provider binary path (default: agy)')
     .option('--workdir <path>', 'Working directory for the provider')
+    .option(
+        '--extra-body <json>',
+        'JSON merged into the API request body, e.g. \'{"thinking":{"type":"disabled"}}\'',
+    )
     .action(async (options) => {
         try {
             const timeoutMs = Number.parseInt(options.timeout, 10);
@@ -50,6 +55,9 @@ program
                 timeoutMs,
                 providerBin: options.providerBin,
                 workdir: options.workdir,
+                extraBody: options.extraBody
+                    ? parseExtraBody(options.extraBody, '--extra-body')
+                    : undefined,
             });
 
             const output = JSON.stringify(result, null, 2);
@@ -153,6 +161,7 @@ config
                     'Everything is optional. Two things you can set:',
                     '  modlens config set provider <name>                      which provider analyzes images',
                     '  modlens config set <provider>.<apiKey|baseUrl|model> <value>   provider credentials',
+                    '  modlens config set <provider>.extraBody \'{"thinking":{"type":"disabled"}}\'   vendor request fields',
                     '',
                 ].join('\n'),
             );
