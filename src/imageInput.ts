@@ -7,7 +7,7 @@ import {
     type PinnedTarget,
 } from './net/network.ts';
 
-const MIME_BY_EXT: Record<string, string> = {
+export const MIME_BY_EXT: Record<string, string> = {
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
     '.png': 'image/png',
@@ -22,10 +22,9 @@ const MIME_BY_EXT: Record<string, string> = {
 // dense screenshot or a high-res photo while capping the damage.
 export const MAX_REMOTE_IMAGE_BYTES = 25 * 1024 * 1024;
 
-// Types we are willing to hand to a provider. The four raster formats below can
-// be confirmed from their file header; heic/heif cannot be sniffed here, so they
-// are trusted only when the extension says so.
-const ALLOWED_MIME = new Set([
+// Types we are willing to hand to a provider. Every one of them is confirmed
+// from its file header (heic/heif via the ftyp box); no extension trust.
+export const ALLOWED_MIME = new Set([
     'image/png',
     'image/jpeg',
     'image/gif',
@@ -63,7 +62,38 @@ const SNIFFERS: Array<{ mime: string; test: (b: Buffer) => boolean }> = [
             b.toString('ascii', 0, 4) === 'RIFF' &&
             b.toString('ascii', 8, 12) === 'WEBP',
     },
+    // ISO BMFF: bytes 4-8 spell "ftyp" and the brand names the format. This
+    // closes the last extension-trust hole: heic/heif must now prove
+    // themselves from the header like every other type.
+    {
+        mime: 'image/heic',
+        test: (b) =>
+            b.length >= 12 &&
+            b.toString('ascii', 4, 8) === 'ftyp' &&
+            ['heic', 'heix', 'hevc', 'hevx'].includes(b.toString('ascii', 8, 12)),
+    },
+    {
+        mime: 'image/heif',
+        test: (b) =>
+            b.length >= 12 &&
+            b.toString('ascii', 4, 8) === 'ftyp' &&
+            ['mif1', 'msf1', 'heif'].includes(b.toString('ascii', 8, 12)),
+    },
 ];
+
+/**
+ * A URL safe to quote in an error message: origin and path only. Query strings
+ * carry signed tokens (S3 presigns, SAS signatures) that must not travel into
+ * meta.attempts, model contexts, or logs.
+ */
+function safeUrl(url: string): string {
+    try {
+        const u = new URL(url);
+        return `${u.origin}${u.pathname}`;
+    } catch {
+        return '<unparseable url>';
+    }
+}
 
 /** Confirm an image type from its file header, or null if unrecognized. */
 export function sniffImageMime(buffer: Buffer): string | null {
@@ -90,31 +120,21 @@ export function mimeTypeFor(source: string): string {
     return extMime(source) ?? 'image/jpeg';
 }
 
-// The only types the sniffer cannot recognize; everything else must prove
-// itself through its file header.
-const UNSNIFFABLE_MIME = new Set(['image/heic', 'image/heif']);
-
 /**
- * Decide the media type from the bytes first. The file header wins because it
- * cannot be faked by renaming a file or by a lying server, so when sniffing
- * fails, a sniffable type is refused outright: content that does not carry a
- * PNG/JPEG/GIF/WebP header is not that type no matter what the URL extension
- * or content-type claims (an `.png` URL serving HTML must not be encoded and
- * uploaded as an image). Only heic/heif, which this sniffer cannot identify,
- * may ride on the extension or the declared type.
+ * Decide the media type from the bytes alone. The file header wins because it
+ * cannot be faked by renaming a file or by a lying server, and every allowed
+ * type (heic/heif included, via their ftyp box) is identifiable from its
+ * header, so there is no extension or content-type fallback left: content
+ * whose bytes match no known image header is refused, whatever the URL
+ * extension or the server claims.
  */
-export function resolveImageMime(buffer: Buffer, source: string, contentType?: string): string {
+export function resolveImageMime(buffer: Buffer, source: string, _contentType?: string): string {
     const sniffed = sniffImageMime(buffer);
     if (sniffed) {
         return sniffed;
     }
-    const declared = contentType?.split(';')[0]?.trim().toLowerCase();
-    const candidate = extMime(source) ?? (declared?.startsWith('image/') ? declared : null);
-    if (candidate && UNSNIFFABLE_MIME.has(candidate)) {
-        return candidate;
-    }
     throw new Error(
-        `Content of ${source} does not look like a supported image (its bytes match none of: png, jpeg, gif, webp; heic/heif pass by extension). Allowed types: ${[...ALLOWED_MIME].join(', ')}.`,
+        `Content of ${source} does not look like a supported image (its bytes match no known image header). Allowed types: ${[...ALLOWED_MIME].join(', ')}.`,
     );
 }
 
@@ -170,12 +190,12 @@ export async function fetchRemoteImageBase64(
                 const location = response.headers.get('location');
                 if (!location) {
                     throw new Error(
-                        `Redirect response (${response.status}) missing location header: ${current}`,
+                        `Redirect response (${response.status}) missing location header: ${safeUrl(current.toString())}`,
                     );
                 }
                 await response.body?.cancel();
                 if (hop === MAX_REDIRECTS) {
-                    throw new Error(`Too many redirects (max ${MAX_REDIRECTS}): ${url}`);
+                    throw new Error(`Too many redirects (max ${MAX_REDIRECTS}): ${safeUrl(url)}`);
                 }
                 // The next hop is a fresh target: re-normalized, re-validated,
                 // re-pinned at the top of the loop.
@@ -184,7 +204,9 @@ export async function fetchRemoteImageBase64(
             }
 
             if (!response.ok) {
-                throw new Error(`Failed to download image (${response.status}): ${current}`);
+                throw new Error(
+                    `Failed to download image (${response.status}): ${safeUrl(current.toString())}`,
+                );
             }
 
             // Trust the advertised size to reject an oversized download before
@@ -193,7 +215,7 @@ export async function fetchRemoteImageBase64(
             const declaredLength = Number(response.headers.get('content-length'));
             if (Number.isFinite(declaredLength) && declaredLength > MAX_REMOTE_IMAGE_BYTES) {
                 throw new Error(
-                    `Remote image is ${declaredLength} bytes, over the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${current}`,
+                    `Remote image is ${declaredLength} bytes, over the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${safeUrl(current.toString())}`,
                 );
             }
 
@@ -203,7 +225,7 @@ export async function fetchRemoteImageBase64(
             const mimeType = resolveImageMime(buffer, finalUrl, contentType);
             return { data: buffer.toString('base64'), mimeType };
         }
-        throw new Error(`Too many redirects (max ${MAX_REDIRECTS}): ${url}`);
+        throw new Error(`Too many redirects (max ${MAX_REDIRECTS}): ${safeUrl(url)}`);
     } finally {
         for (const dispatcher of dispatchers) {
             void dispatcher.close();
@@ -248,7 +270,7 @@ async function readCapped(response: Response, url: string): Promise<Buffer> {
         const buffer = Buffer.from(await response.arrayBuffer());
         if (buffer.length > MAX_REMOTE_IMAGE_BYTES) {
             throw new Error(
-                `Remote image exceeds the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${url}`,
+                `Remote image exceeds the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${safeUrl(url)}`,
             );
         }
         return buffer;
@@ -266,7 +288,7 @@ async function readCapped(response: Response, url: string): Promise<Buffer> {
         if (total > MAX_REMOTE_IMAGE_BYTES) {
             await reader.cancel();
             throw new Error(
-                `Remote image exceeds the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${url}`,
+                `Remote image exceeds the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${safeUrl(url)}`,
             );
         }
         chunks.push(Buffer.from(value));

@@ -165,7 +165,9 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
                 provider: provider.name,
                 ok: false,
                 durationSeconds: (Date.now() - startedAt) / 1000,
-                error: message.slice(0, 300),
+                // Providers redact their own errors, but attempts travel into
+                // output and model contexts, so the record gets the belt too.
+                error: redactSecrets(message).slice(0, 300),
             });
         }
     }

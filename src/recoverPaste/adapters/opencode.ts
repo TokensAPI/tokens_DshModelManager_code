@@ -12,11 +12,6 @@ export function opencodeDbPath(): string {
     return path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db');
 }
 
-/** LIKE reads _ and % as wildcards, so a literal path must escape them. */
-export function escapeLikePattern(value: string): string {
-    return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-
 interface SqliteRow {
     data: string;
     time_created: number;
@@ -40,22 +35,28 @@ interface SqliteRow {
  * session id or slug narrows that directory match rather than replacing it,
  * since neither is unique across projects.
  *
- * Only the cwd-as-prefix direction may use LIKE, because only there is the
- * pattern our own escaped literal. The reverse direction (db directory as an
- * ancestor of the cwd) compares with SUBSTR instead: a LIKE pattern built
- * from the database column would let `_`/`%` inside another project's path
- * act as wildcards and match across projects.
+ * No LIKE anywhere: a pattern built from the database column would let `_`/`%`
+ * in another project's path act as wildcards, and SQLite's LIKE is also
+ * case-insensitive for ASCII, which would cross projects on case-sensitive
+ * filesystems (/tmp/Project vs /tmp/project). Both directions compare exact
+ * SUBSTR prefixes instead. Case sensitivity follows the platform: paths are
+ * identity-relevant case-sensitive on POSIX, case-insensitive on Windows,
+ * where both sides go through LOWER.
  */
-export function opencodeDirectoryFilter(resolvedCwd: string): {
+export function opencodeDirectoryFilter(
+    resolvedCwd: string,
+    caseInsensitive: boolean = process.platform === 'win32',
+): {
     clause: string;
-    params: string[];
+    params: Array<string | number>;
 } {
     const normalized = resolvedCwd.replace(/\\/g, '/');
-    const escaped = escapeLikePattern(normalized);
-    const dir = `REPLACE(session.directory, '\\', '/')`;
+    const cwd = caseInsensitive ? normalized.toLowerCase() : normalized;
+    const rawDir = `REPLACE(session.directory, '\\', '/')`;
+    const dir = caseInsensitive ? `LOWER(${rawDir})` : rawDir;
     return {
-        clause: `(${dir} = ? OR ${dir} LIKE ? || '/%' ESCAPE '\\' OR SUBSTR(?, 1, LENGTH(${dir}) + 1) = ${dir} || '/')`,
-        params: [normalized, escaped, normalized],
+        clause: `(${dir} = ? OR SUBSTR(${dir}, 1, ?) = ? OR SUBSTR(?, 1, LENGTH(${dir}) + 1) = ${dir} || '/')`,
+        params: [cwd, cwd.length + 1, `${cwd}/`, cwd],
     };
 }
 

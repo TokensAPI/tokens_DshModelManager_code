@@ -61,9 +61,26 @@ describe('resolveImageMime', () => {
         );
     });
 
-    it('lets only the unsniffable heic/heif ride on extension or declared type', () => {
-        expect(resolveImageMime(html, '/tmp/photo.heic')).toBe('image/heic');
-        expect(resolveImageMime(html, 'https://x/pic', 'image/heif')).toBe('image/heif');
+    it('identifies heic/heif from the ftyp box and refuses fakes wearing the extension', () => {
+        const heic = Buffer.concat([
+            Buffer.from([0, 0, 0, 24]),
+            Buffer.from('ftypheic'),
+            Buffer.from([0, 0, 0, 0]),
+        ]);
+        const heif = Buffer.concat([
+            Buffer.from([0, 0, 0, 24]),
+            Buffer.from('ftypmif1'),
+            Buffer.from([0, 0, 0, 0]),
+        ]);
+        expect(resolveImageMime(heic, '/tmp/photo.heic')).toBe('image/heic');
+        expect(resolveImageMime(heif, 'https://x/pic')).toBe('image/heif');
+        // HTML wearing .heic or a lying content-type no longer passes.
+        expect(() => resolveImageMime(html, '/tmp/photo.heic')).toThrow(
+            /does not look like a supported image/,
+        );
+        expect(() => resolveImageMime(html, 'https://x/pic', 'image/heif')).toThrow(
+            /does not look like a supported image/,
+        );
     });
 
     it('trusts the header over everything when it matches', () => {

@@ -17,8 +17,11 @@ const TOKEN_SHAPES: RegExp[] = [
     /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
     // JWTs (three base64url segments, the first spelling {"alg" or {"typ").
     /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b/g,
-    // Labeled bearers and keys: "Bearer xyz", "api_key=xyz", "token: xyz".
-    /\b(?:bearer|token|api[-_]?key|authorization)\b[=:\s]+"?[A-Za-z0-9._~+/-]{12,}"?/gi,
+    // Auth headers: "Bearer xyz" / "Authorization: xyz" (space form is real).
+    /\b(?:bearer|authorization)\b[=:\s]+"?[A-Za-z0-9._~+/-]{12,}"?/gi,
+    // Labeled keys need an explicit = or : separator; prose like
+    // "token limit_exceeded" is diagnostics, not a credential.
+    /\b(?:token|api[-_]?key)\b\s*[=:]\s*"?[A-Za-z0-9._~+/-]{12,}"?/gi,
 ];
 
 /**

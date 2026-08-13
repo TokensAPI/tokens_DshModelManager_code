@@ -54,6 +54,7 @@ describe('buildDoctorReport: provider readiness', () => {
         const missing = buildDoctorReport({ config: {}, env: { PATH: '' } });
         const agyMissing = providerNamed(missing, 'antigravity-cli');
         expect(agyMissing.ready).toBe(false);
+        expect(agyMissing.status).toBe('missing');
         expect(agyMissing.fix).toContain('antigravity.google');
 
         const { dir, PATH } = pathWith(['agy']);
@@ -61,6 +62,10 @@ describe('buildDoctorReport: provider readiness', () => {
             const found = buildDoctorReport({ config: {}, env: { PATH } });
             const agy = providerNamed(found, 'antigravity-cli');
             expect(agy.ready).toBe(true);
+            // On PATH proves installation, not a working login: the machine
+            // status says 'installed', never 'ready', for subprocess CLIs.
+            expect(agy.status).toBe('installed');
+            expect(agy.authUnverified).toBe(true);
             expect(agy.binaryPath).toBe(path.join(dir, 'agy'));
             expect(agy.fix).toBeUndefined();
         } finally {
@@ -76,6 +81,7 @@ describe('buildDoctorReport: provider readiness', () => {
         });
         const gemini = providerNamed(report, 'gemini-api');
         expect(gemini.ready).toBe(true);
+        expect(gemini.status).toBe('ready');
         expect(gemini.settings?.[0]).toMatchObject({ field: 'apiKey', source: 'env' });
     });
 

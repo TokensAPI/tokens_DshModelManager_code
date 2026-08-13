@@ -74,6 +74,16 @@ describe('analyze argument validation', () => {
 });
 
 describe('recover-paste argument validation', () => {
+    it('rejects trailing garbage in numeric flags (the parseInt footgun)', () => {
+        // parseInt("3x") returns 3; the strict parser must refuse it instead.
+        const count = run(['recover-paste', '--count', '3x']);
+        expect(count.code).toBe(1);
+        expect(count.stderr).toMatch(/Invalid --count/);
+        const timeout = run(['-i', 'nope.png', '--timeout', '10oops']);
+        expect(timeout.code).toBe(1);
+        expect(timeout.stderr).toMatch(/Invalid --timeout/);
+    });
+
     it('rejects a non-positive --count', () => {
         const { code, stderr } = run(['recover-paste', '--count', '0']);
         expect(code).toBe(1);
