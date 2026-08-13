@@ -47,3 +47,13 @@ Windows runs the same CI matrix. Detection there skips the process-ancestry pass
 ## Gateway setups
 
 OpenCode with DeepSeek: `opencode auth login`, pick DeepSeek and paste the key (it lands in `~/.local/share/opencode/auth.json`), then set the default model in `~/.config/opencode/opencode.jsonc` to `deepseek/deepseek-v4-flash`. Pi reads its key from `~/.pi/agent/auth.json`.
+
+## DeepSeek Harness (dsh)
+
+dsh is different from the other harnesses: modlens plugs in as a native tool, not a prompt-triggered skill. The package itself is a dsh bundle, so one command installs it into a profile:
+
+```sh
+dsh plugin --profile web add @liustack/modlens
+```
+
+This registers a `read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin touches only `ctx.tools.register` to keep that surface minimal.
