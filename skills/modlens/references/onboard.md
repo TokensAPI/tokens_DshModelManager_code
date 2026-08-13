@@ -24,7 +24,7 @@ Do not dump the raw doctor output on the user; summarize it. Do not describe opt
 
 Consent rules:
 
-- One question per decision, never a bundled yes. Borrowing Codex and reusing pi credentials are two questions (or one question with independent options), not one.
+- One question per decision, never a bundled yes. Reusing Codex and reusing pi credentials are two questions (or one question with independent options), not one.
 - Each question names the harness, whose quota it spends, and the accounting promise. Example wording: "Allow modlens to reuse your signed-in Codex CLI for image reads? Every reused read is labeled in the result so you always see whose quota was spent."
 - The do-nothing outcome must be safe and stated: "If you skip this, modlens just uses the engines you configure yourself."
 - If the user offers an API key, take exactly that key; never go looking for keys they did not hand over.
