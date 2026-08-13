@@ -143,8 +143,20 @@ function probeCodex(env: NodeJS.ProcessEnv, home: string): HarnessProbe {
             // TOML dependency for this.
             const toml = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf-8');
             const catalogPath = toml.match(/^model_catalog_json\s*=\s*"([^"]+)"/m)?.[1];
+            const thirdParty = /^model_provider\s*=/m.test(toml);
             if (!catalogPath) {
-                return { ...base, cliPath, loggedIn, visionModels: [], source: 'none' as const };
+                // A stock install routes to OpenAI's own lineup, whose default
+                // model reads images; only a third-party model_provider with no
+                // catalog leaves capability unknowable.
+                return thirdParty
+                    ? { ...base, cliPath, loggedIn, visionModels: [], source: 'none' as const }
+                    : {
+                          ...base,
+                          cliPath,
+                          loggedIn,
+                          visionModels: ['default'],
+                          source: 'builtin-table' as const,
+                      };
             }
             const catalog = readJson(catalogPath) as {
                 models?: Array<{ slug?: string; input_modalities?: string[] }>;

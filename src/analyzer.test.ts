@@ -366,6 +366,93 @@ describe.skipIf(onWindows)('provider failover', () => {
         ).rejects.toThrow(/Every configured vision provider failed.*antigravity-cli.*gemini-api/s);
     }, 30_000);
 
+    it('auto mode prepends borrowed routes: a discovered codex answers first and is accounted for', async () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-auto-e2e-'));
+        cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+        fs.mkdirSync(path.join(home, '.codex'));
+        fs.writeFileSync(path.join(home, '.codex', 'config.toml'), 'approval_policy = "never"\n');
+        fs.writeFileSync(path.join(home, '.codex', 'auth.json'), '{}');
+        const events = [
+            JSON.stringify({ type: 'thread.started', thread_id: 't-auto' }),
+            JSON.stringify({
+                type: 'item.completed',
+                item: { type: 'agent_message', text: JSON.stringify(CONTRACT_RESULT) },
+            }),
+            JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } }),
+        ].join('\n');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-fo-'));
+        cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+        // PATH holds only the fake bin dir, so the script sticks to shell
+        // builtins (no cat) and the events carry no single quotes (JSON).
+        fs.writeFileSync(
+            path.join(dir, 'codex'),
+            `#!/bin/sh\n${events
+                .split('\n')
+                .map((line) => `echo '${line}'`)
+                .join('\n')}\n`,
+            { mode: 0o755 },
+        );
+        const image = path.join(dir, 'shot.png');
+        fs.writeFileSync(image, 'not-a-real-png');
+        vi.stubEnv('PATH', dir);
+
+        const result = await analyzeImage({
+            input: image,
+            config: { auto: true },
+            autoOptions: { home, env: { PATH: dir } },
+            timeoutMs: 20_000,
+        });
+        expect(result.provider).toBe('codex-cli');
+        expect(result.meta.attempts[0]).toMatchObject({ provider: 'codex-cli', ok: true });
+        expect(result.meta.warnings.join(' ')).toContain('borrowed');
+    }, 30_000);
+
+    it('without the auto switch the same machine has no chain at all', async () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-auto-e2e-'));
+        cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-fo-'));
+        cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+        fs.writeFileSync(path.join(dir, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        const image = path.join(dir, 'shot.png');
+        fs.writeFileSync(image, 'not-a-real-png');
+        vi.stubEnv('PATH', dir);
+
+        await expect(
+            analyzeImage({
+                input: image,
+                config: {},
+                autoOptions: { home, env: { PATH: dir } },
+                timeoutMs: 20_000,
+            }),
+        ).rejects.toThrow(/No vision provider is set up/);
+    });
+
+    it('an explicit -p pin ignores auto routes entirely', async () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-auto-e2e-'));
+        cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+        fs.mkdirSync(path.join(home, '.codex'));
+        fs.writeFileSync(path.join(home, '.codex', 'config.toml'), 'approval_policy = "never"\n');
+        fs.writeFileSync(path.join(home, '.codex', 'auth.json'), '{}');
+        const { dir, image } = fakeAgyDir('#!/bin/sh\necho "agy exploded" >&2\nexit 1\n');
+        fs.writeFileSync(path.join(dir, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        vi.stubEnv('PATH', dir);
+
+        let thrown: Error | null = null;
+        try {
+            await analyzeImage({
+                input: image,
+                provider: 'antigravity-cli',
+                config: { auto: true },
+                autoOptions: { home, env: { PATH: dir } },
+                timeoutMs: 20_000,
+            });
+        } catch (error) {
+            thrown = error as Error;
+        }
+        expect(thrown?.message).toMatch(/agy|antigravity-cli/);
+        expect(thrown?.message).not.toContain('codex');
+    }, 30_000);
+
     it('sends extraBody from config, and --extra-body replaces it for the run', async () => {
         const { dir, image } = fakeAgyDir('#!/bin/sh\nexit 1\n');
         vi.stubEnv('PATH', dir);

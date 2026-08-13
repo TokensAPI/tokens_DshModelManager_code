@@ -88,6 +88,21 @@ describe('discoverAuto probes', () => {
         fs.rmSync(home, { recursive: true, force: true });
     });
 
+    it('treats an official codex (no third-party provider) as vision-capable by default', () => {
+        const home = fakeHome();
+        fs.mkdirSync(path.join(home, '.codex'));
+        // No model_provider and no model_catalog_json: the stock install, whose
+        // default model reads images.
+        fs.writeFileSync(path.join(home, '.codex', 'config.toml'), 'approval_policy = "never"\n');
+        fs.writeFileSync(path.join(home, '.codex', 'auth.json'), '{}');
+        const result = discoverAuto({ env: { PATH: pathWith(['codex']) }, home, fresh: true });
+        const codex = probeOf(result, 'codex');
+        expect(codex.loggedIn).toBe(true);
+        expect(codex.visionModels).toEqual(['default']);
+        expect(codex.source).toBe('builtin-table');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
     it('reads the pi models store and keeps vision models whose provider has credentials', () => {
         const home = fakeHome();
         fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });

@@ -61,6 +61,8 @@ Failover is automatic: a run tries every provider that is set up on this machine
 
 In the result, the top-level `provider` names who actually answered, `meta.attempts` lists every provider tried with timings and failure reasons, and `meta.warnings` carries failover notices. Relay a failover warning when the answer's provider surprised the user.
 
+Auto mode (off by default): `modlens config set auto true` lets a run borrow vision from other harness CLIs already on this machine, ahead of the configured providers. Borrowed API credentials (from pi) run through the inline path first, then borrowed agent CLIs (a signed-in Codex via `codex exec`, an OpenCode vision model via `opencode run`); remote URLs never ride borrowed agents. Turning the switch on is the user's consent to spend those logins, and every borrowed answer carries a `meta.warnings` line naming whose quota it spent: relay that line. `modlens doctor` shows what auto can see in its Auto section.
+
 ## Guard before you read
 
 Before the first image read of a session, ask the guard whether the engine should run at all (through the launcher, like every command):

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { type AutoRouteOptions, autoProviders } from './auto/routes.ts';
 import { loadConfigFile, type ModlensConfig, resolveProviderSettings } from './config.ts';
 import { providerChain } from './providers/availability.ts';
 import {
@@ -25,6 +26,8 @@ export interface AnalyzeOptions {
     /** --extra-body: replaces the configured extraBody for this run. */
     extraBody?: Record<string, unknown>;
     config?: ModlensConfig;
+    /** Auto-mode discovery overrides (home, env, discovery), mainly for tests. */
+    autoOptions?: AutoRouteOptions;
 }
 
 export interface AnalyzeAttempt {
@@ -81,11 +84,19 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
     // modsearch's -e). The providerBin test double pins the agent the same
     // way. Otherwise the failover chain: every provider that is set up on
     // this machine, ordered for the input kind (see providers/availability).
+    // With the auto switch on, routes borrowed from other local harnesses
+    // lead the chain; turning the switch on is the user's explicit consent
+    // to spend those logins first (see auto/routes).
     const chain = options.provider
         ? [resolveProvider(options.provider)]
         : options.providerBin
           ? [resolveProvider('antigravity-cli')]
-          : providerChain(resolvedInput.kind, config);
+          : [
+                ...(config.auto === true
+                    ? autoProviders(resolvedInput.kind, options.autoOptions)
+                    : []),
+                ...providerChain(resolvedInput.kind, config),
+            ];
     if (chain.length === 0) {
         throw new Error(
             'No vision provider is set up on this machine. Install Antigravity CLI (curl -fsSL https://antigravity.google/cli/install.sh | bash, then run agy once to sign in), or configure a key: modlens config set gemini-api.apiKey <key>. Run modlens doctor for the full picture.',
@@ -121,6 +132,9 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
                 ok: true,
                 durationSeconds: (Date.now() - startedAt) / 1000,
             });
+            if (provider.borrowedNote) {
+                warnings.push(provider.borrowedNote);
+            }
             if (attempts.length > 1) {
                 const failed = attempts.slice(0, -1);
                 warnings.push(
