@@ -68,6 +68,7 @@
     "vitest": "^3.2.7"
   },
   "exports": {
+    ".": "./dsh/index.js",
     "./dsh": "./dsh/index.js",
     "./package.json": "./package.json"
   },

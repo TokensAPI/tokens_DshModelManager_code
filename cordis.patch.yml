@@ -1,4 +1,5 @@
-# dsh bundle layer: mount the modlens vision plugin (see dsh/index.js).
+# dsh bundle layer: mount the modlens vision plugin (dsh/index.js via the
+# package root export; bin stays the CLI, nothing imports the root otherwise).
 - insert:
     - id: modlens
-      name: '@liustack/modlens/dsh'
+      name: '@liustack/modlens'
