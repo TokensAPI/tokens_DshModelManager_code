@@ -150,6 +150,17 @@ describe('guards config', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
+    it('renders reuse decisions and allowModels in the effective config', async () => {
+        const { renderEffectiveConfig } = await import('./config.ts');
+        const rendered = renderEffectiveConfig(
+            { reuse: { codex: false, pi: true }, guards: { allowModels: ['deepseek-v4-*'] } },
+            {},
+        );
+        expect(rendered).toContain('"codex": "false (file)"');
+        expect(rendered).toContain('"pi": "true (file)"');
+        expect(rendered).toContain('allowModels');
+    });
+
     it('parses guards.denyWhenUnknown as a boolean and rejects other fields', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
         const file = path.join(dir, 'config.json');
