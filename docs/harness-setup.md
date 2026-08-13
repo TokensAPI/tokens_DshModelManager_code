@@ -18,7 +18,7 @@ One catch with text-only models: once `models.json` declares `input_modalities: 
 
 ## Claude Code, Pi, OpenCode
 
-None of them writes a pasted image to a regular temp file, but all three persist the user message locally before any gateway strips it:
+None of them hands the model a usable temp-file path the way Codex does (newer Claude Code builds do write pastes to their own `~/.claude/image-cache/`, injected as a path line only in the terminal entrypoint), but all three persist the user message locally before any gateway strips it:
 
 | Harness | Storage | Notes |
 | :-- | :-- | :-- |
@@ -56,4 +56,4 @@ dsh is different from the other harnesses: modlens plugs in as a native tool, no
 npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens
 ```
 
-This registers a `read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin touches only `ctx.tools.register` to keep that surface minimal.
+This registers a `read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin keeps its touch small (raw tool registration, the llm adapter surface for the vision variants, the attachment reader, and one agent pre-step hook) and degrades loudly if any of them moves.

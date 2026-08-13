@@ -22,7 +22,15 @@ The `claude-cli` provider runs with `--allowedTools Read` only, so it can read l
 
 Both subprocess providers also run in a throwaway directory created fresh per call and removed afterward. For a local image it holds a private copy of that one image and nothing else, and it is a real copy, never a hardlink, so a provider writing to its temp path cannot touch the original. For a remote image the directory is empty and the agent downloads into it. Without this, text inside an image could steer a broadly-permissioned agent into reading files next to the original, or whatever project the caller happened to be in. Passing `--workdir` opts out and runs where you point it.
 
-This is exposure reduction, not an OS sandbox: the agent can still read absolute paths, reach the network, and spawn processes. Treat it as a narrower default, not a security boundary. For images you do not trust, prefer an inline API provider (`-p gemini-api`), which hands the bytes to an HTTP endpoint and runs no local agent. Remote URLs already prefer that path: the failover chain for a remote URL tries the inline API providers first and the agent last, because the inline path downloads the image itself, behind the private-address guards, the magic-byte image check, and the size cap, none of which apply when an agent fetches the URL on its own. An explicit `-p` pins one provider and overrides the chain.
+This is exposure reduction, not an OS sandbox: the agent can still read absolute paths, reach the network, and spawn processes. Treat it as a narrower default, not a security boundary. For images you do not trust, prefer `-p gemini-api`, which downloads the bytes itself and runs no local agent. Remote URLs already prefer the inline region: the failover chain for a remote URL tries the inline API providers first and the agents last. Who actually fetches a remote URL differs per provider, and only a local download can be guarded locally:
+
+| Provider | Who fetches a remote URL | Local guards |
+| :-- | :-- | :-- |
+| `gemini-api` | modlens downloads, sends bytes inline | private-address guards, magic-byte check, 25 MB cap |
+| `openai`, `anthropic` | the URL is passed to the vendor, which fetches it | none locally; the vendor's own fetching policy applies |
+| `antigravity-cli`, agent CLIs | the agent fetches on its own | none locally |
+
+So the private-address guards, the magic-byte check, and the size cap protect exactly the paths where modlens itself downloads: every local file read, and gemini-api's remote fetch. An explicit `-p` pins one provider and overrides the chain.
 
 ## Image content is untrusted input
 
