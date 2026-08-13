@@ -272,6 +272,75 @@ describe('piCliRoute', () => {
     });
 });
 
+describe('pi credential safety and shape mapping', () => {
+    function homeWith(models: object, auth: object): string {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
+        fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
+        fs.writeFileSync(
+            path.join(home, '.pi', 'agent', 'models-store.json'),
+            JSON.stringify(models),
+        );
+        fs.writeFileSync(path.join(home, '.pi', 'agent', 'auth.json'), JSON.stringify(auth));
+        return home;
+    }
+    const visionModel = (api: string) => ({
+        openai: {
+            models: [
+                {
+                    id: 'gpt-5.6-sol',
+                    provider: 'openai',
+                    api,
+                    baseUrl: 'https://api.example.com/v1',
+                    input: ['text', 'image'],
+                },
+            ],
+        },
+    });
+
+    it('never forwards the key-fetch stderr into the error (credential leak)', async () => {
+        const home = homeWith(visionModel('openai-completions'), { openai: { type: 'api_key' } });
+        const env = {
+            PATH: pathWith({ pi: '#!/bin/sh\necho "boom AIzaFAKESECRET" >&2\nexit 1\n' }),
+        };
+        const fakeTarget: VisionProvider = {
+            name: 'openai',
+            defaultModel: 'x',
+            execute: async () => {
+                throw new Error('unreachable');
+            },
+        };
+        const routes = piRoutes(home, env, { openai: fakeTarget }).inline;
+        expect(routes).toHaveLength(1);
+        let thrown: Error | null = null;
+        try {
+            await routes[0].execute?.(BUILD_BASE);
+        } catch (error) {
+            thrown = error as Error;
+        }
+        expect(thrown?.message).toContain('could not print an API key');
+        expect(thrown?.message).not.toContain('AIzaFAKESECRET');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('routes an unmapped api shape (openai-responses) through pi-cli, not inline', () => {
+        const home = homeWith(visionModel('openai-responses'), { openai: { type: 'api_key' } });
+        const env = { PATH: pathWith({ pi: '#!/bin/sh\necho k\n' }) };
+        const routes = piRoutes(home, env);
+        expect(routes.inline).toEqual([]);
+        expect(routes.agents.map((r) => r.name)).toEqual(['pi-cli']);
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('routes an OAuth credential through pi-cli even on a supported api shape', () => {
+        const home = homeWith(visionModel('openai-completions'), { openai: { type: 'oauth' } });
+        const env = { PATH: pathWith({ pi: '#!/bin/sh\necho k\n' }) };
+        const routes = piRoutes(home, env);
+        expect(routes.inline).toEqual([]);
+        expect(routes.agents.map((r) => r.name)).toEqual(['pi-cli']);
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+});
+
 describe('reuseProviders', () => {
     const discovery: AutoDiscovery = {
         cachedAt: new Date().toISOString(),

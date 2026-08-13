@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { analyzeImage, resolveInput, runCommand } from './analyzer.ts';
+import { analyzeImage, composeChain, resolveInput, runCommand } from './analyzer.ts';
 
 const onWindows = process.platform === 'win32';
 
@@ -41,6 +41,79 @@ describe('resolveInput', () => {
 // `#!/bin/sh` fake providers, which a POSIX shell has to run. Windows has no
 // equivalent for `trap '' TERM` or a backgrounded `sleep`, so the suite is scoped
 // to POSIX; the CLI's argument wiring is covered cross-platform in main.test.ts.
+describe('composeChain preferences', () => {
+    const discovery = {
+        cachedAt: new Date().toISOString(),
+        fromCache: false,
+        probes: [
+            {
+                harness: 'codex' as const,
+                cliFound: true,
+                loggedIn: true,
+                visionModels: ['default'],
+                source: 'builtin-table' as const,
+                elapsedMs: 0,
+            },
+        ],
+    };
+
+    function binDir(bins: string[]): string {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-chain-bin-'));
+        for (const bin of bins) {
+            fs.writeFileSync(path.join(dir, bin), '#!/bin/sh\n', { mode: 0o755 });
+        }
+        return dir;
+    }
+
+    it('keeps a preferred claude-cli ahead of reused agents', () => {
+        const dir = binDir(['claude', 'codex']);
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-chain-home-'));
+        const chain = composeChain(
+            'local',
+            { provider: 'claude-cli', reuse: { codex: true } },
+            { env: { PATH: dir }, home, discovery },
+        );
+        expect(chain.map((p) => p.name)).toEqual(['claude-cli', 'codex-cli']);
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('keeps a preferred agent ahead of reused inline keys when no base inline exists', () => {
+        const dir = binDir(['agy', 'pi']);
+        fs.writeFileSync(path.join(dir, 'pi'), '#!/bin/sh\necho k\n', { mode: 0o755 });
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-chain-home-'));
+        fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
+        fs.writeFileSync(
+            path.join(home, '.pi', 'agent', 'models-store.json'),
+            JSON.stringify({
+                openai: {
+                    models: [
+                        {
+                            id: 'gpt-5.6-sol',
+                            provider: 'openai',
+                            api: 'openai-completions',
+                            baseUrl: 'https://x.example/v1',
+                            input: ['text', 'image'],
+                        },
+                    ],
+                },
+            }),
+        );
+        fs.writeFileSync(
+            path.join(home, '.pi', 'agent', 'auth.json'),
+            JSON.stringify({ openai: { type: 'api_key' } }),
+        );
+        const chain = composeChain(
+            'local',
+            { provider: 'antigravity-cli', reuse: { pi: true } },
+            { env: { PATH: dir }, home },
+        );
+        expect(chain.map((p) => p.name)).toEqual(['antigravity-cli', 'pi:openai']);
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+});
+
 describe.skipIf(onWindows)('provider subprocess handling', () => {
     const cleanups: Array<() => void> = [];
 
@@ -364,6 +437,25 @@ describe.skipIf(onWindows)('provider failover', () => {
         await expect(
             analyzeImage({ input: image, config: AGY_FIRST, timeoutMs: 20_000 }),
         ).rejects.toThrow(/Every configured vision provider failed.*antigravity-cli.*gemini-api/s);
+    }, 30_000);
+
+    it('a lone failing provider still hints at never-asked reusable vision', async () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-auto-e2e-'));
+        cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
+        fs.mkdirSync(path.join(home, '.codex'));
+        fs.writeFileSync(path.join(home, '.codex', 'auth.json'), '{}');
+        const { dir, image } = fakeAgyDir('#!/bin/sh\necho "agy exploded" >&2\nexit 1\n');
+        fs.writeFileSync(path.join(dir, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+        vi.stubEnv('PATH', dir);
+
+        await expect(
+            analyzeImage({
+                input: image,
+                config: {},
+                autoOptions: { home, env: { PATH: dir } },
+                timeoutMs: 20_000,
+            }),
+        ).rejects.toThrow(/not yet allowed to reuse/);
     }, 30_000);
 
     it('auto mode prepends borrowed routes: a discovered codex answers first and is accounted for', async () => {

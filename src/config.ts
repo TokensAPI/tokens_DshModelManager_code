@@ -297,6 +297,7 @@ export function renderEffectiveConfig(
         provider?: string;
         providers: Record<string, Record<string, string>>;
         guards?: Record<string, string>;
+        reuse?: Record<string, string>;
     } = {
         providers,
     };
@@ -308,12 +309,25 @@ export function renderEffectiveConfig(
         if (config.guards.denyModels !== undefined) {
             guards.denyModels = `${JSON.stringify(config.guards.denyModels)} (file)`;
         }
+        if (config.guards.allowModels !== undefined) {
+            guards.allowModels = `${JSON.stringify(config.guards.allowModels)} (file)`;
+        }
         if (config.guards.denyWhenUnknown !== undefined) {
             guards.denyWhenUnknown = `${config.guards.denyWhenUnknown} (file)`;
         }
         if (Object.keys(guards).length > 0) {
             effective.guards = guards;
         }
+    }
+    // The onboarding flow decides whether to ask by reading this view, so a
+    // recorded refusal must be visible or the user gets re-asked forever.
+    if (config.reuse && Object.keys(config.reuse).length > 0) {
+        effective.reuse = Object.fromEntries(
+            Object.entries(config.reuse).map(([harness, granted]) => [
+                harness,
+                `${granted} (file)`,
+            ]),
+        );
     }
     return JSON.stringify(effective, null, 2);
 }

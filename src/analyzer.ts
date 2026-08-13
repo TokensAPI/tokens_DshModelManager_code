@@ -173,6 +173,14 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
     // sign-in guidance, a provider's own fix text). Only a real multi-provider
     // exhaustion gets the aggregate.
     if (chain.length === 1) {
+        // A pinned provider keeps its error untouched; a lone auto-assembled
+        // provider still deserves the reuse hint, since more vision may exist.
+        if (!options.provider && !options.providerBin && lastError instanceof Error) {
+            const hint = reuseHint(config, options.autoOptions);
+            if (hint) {
+                lastError.message += hint;
+            }
+        }
         throw lastError;
     }
     throw new Error(
@@ -197,13 +205,28 @@ export function composeChain(
 ): VisionProvider[] {
     const chain = [...providerChain(kind, config, autoOptions?.env ?? process.env)];
     const borrowed = reuseProviders(kind, config, autoOptions);
+    let preferredName: string | null = null;
+    if (config.provider?.trim()) {
+        try {
+            preferredName = resolveProvider(config.provider.trim()).name;
+        } catch {
+            preferredName = null;
+        }
+    }
     if (borrowed.inline.length > 0) {
         const lastInline = chain.map((p) => INLINE_REGION.has(p.name)).lastIndexOf(true);
-        chain.splice(lastInline + 1, 0, ...borrowed.inline);
+        // With no inline members in the base chain, reused keys still queue
+        // behind a provider the user explicitly preferred to the front.
+        const insertAt =
+            lastInline >= 0 ? lastInline + 1 : preferredName === chain[0]?.name ? 1 : 0;
+        chain.splice(insertAt, 0, ...borrowed.inline);
     }
     if (borrowed.agents.length > 0) {
-        const claudeIndex = chain.findIndex((p) => p.name === 'claude-cli');
-        chain.splice(claudeIndex === -1 ? chain.length : claudeIndex, 0, ...borrowed.agents);
+        // claude-cli keeps its natural last place, but when the user preferred
+        // it to the front (or it is the whole chain) nothing cuts ahead of it.
+        const last = chain[chain.length - 1];
+        const beforeClaude = last?.name === 'claude-cli' && preferredName !== 'claude-cli';
+        chain.splice(beforeClaude ? chain.length - 1 : chain.length, 0, ...borrowed.agents);
     }
     return chain;
 }
@@ -232,7 +255,8 @@ function reuseHint(config: ModlensConfig, autoOptions: AutoRouteOptions | undefi
             if (key === undefined) {
                 continue;
             }
-            const usable = probe.cliFound && probe.visionModels.length > 0;
+            const usable =
+                probe.cliFound && probe.visionModels.length > 0 && probe.loggedIn !== false;
             if (grants[key] === undefined && usable) {
                 unasked.push(probe.harness);
             } else if (grants[key] === true && !usable) {

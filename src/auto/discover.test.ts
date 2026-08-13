@@ -103,6 +103,17 @@ describe('discoverAuto probes', () => {
         fs.rmSync(home, { recursive: true, force: true });
     });
 
+    it('treats a stock codex with auth but no config.toml as vision-capable', () => {
+        const home = fakeHome();
+        fs.mkdirSync(path.join(home, '.codex'));
+        fs.writeFileSync(path.join(home, '.codex', 'auth.json'), '{}');
+        const result = discoverAuto({ env: { PATH: pathWith(['codex']) }, home, fresh: true });
+        const codex = probeOf(result, 'codex');
+        expect(codex.loggedIn).toBe(true);
+        expect(codex.visionModels).toEqual(['default']);
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
     it('reads the pi models store and keeps vision models whose provider has credentials', () => {
         const home = fakeHome();
         fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
@@ -175,6 +186,16 @@ describe('discoverAuto cache', () => {
         // Served from cache: the emptied PATH did not change the answer.
         expect(second.fromCache).toBe(true);
         expect(probeOf(second, 'codex').cliFound).toBe(true);
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('rejects a cache whose timestamp does not parse instead of keeping it forever', () => {
+        const home = fakeHome();
+        const cachePath = path.join(home, '.modlens', 'auto-cache.json');
+        fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+        fs.writeFileSync(cachePath, JSON.stringify({ cachedAt: 'not-a-date', probes: [] }));
+        const result = discoverAuto({ env: { PATH: '' }, home });
+        expect(result.fromCache).toBe(false);
         fs.rmSync(home, { recursive: true, force: true });
     });
 

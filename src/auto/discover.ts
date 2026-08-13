@@ -138,6 +138,17 @@ function probeCodex(env: NodeJS.ProcessEnv, home: string): HarnessProbe {
         }
         const codexHome = path.join(home, '.codex');
         const loggedIn = fs.existsSync(path.join(codexHome, 'auth.json'));
+        // config.toml is optional; a stock install without one routes to the
+        // official lineup, whose default model reads images.
+        if (!fs.existsSync(path.join(codexHome, 'config.toml'))) {
+            return {
+                ...base,
+                cliPath,
+                loggedIn,
+                visionModels: ['default'],
+                source: 'builtin-table' as const,
+            };
+        }
         try {
             // Two known keys out of a TOML file: strict line-anchored reads, no
             // TOML dependency for this.
@@ -274,7 +285,10 @@ function readCache(cachePath: string, ttlMs: number): CacheFile | null {
         if (!cached.cachedAt || !Array.isArray(cached.probes)) {
             return null;
         }
-        if (Date.now() - Date.parse(cached.cachedAt) > ttlMs) {
+        const cachedAtMs = Date.parse(cached.cachedAt);
+        // NaN comparisons are always false, so an invalid timestamp would
+        // otherwise never expire.
+        if (!Number.isFinite(cachedAtMs) || Date.now() - cachedAtMs > ttlMs) {
             return null;
         }
         return cached;

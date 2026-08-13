@@ -196,11 +196,15 @@ export function opencodeCliRoute(modelId: string): VisionProvider {
     };
 }
 
-/** Which inline provider serves each api shape in pi's models-store. */
+/**
+ * Which inline provider serves each api shape in pi's models-store. Exact
+ * matches only: openai-responses, google-vertex, and friends are different
+ * wire protocols, and routing them onto a lookalike endpoint fails with
+ * 401/404s. Anything unmapped rides pi itself instead.
+ */
 const PI_API_TARGETS: Record<string, string> = {
-    openai: 'openai',
-    anthropic: 'anthropic',
-    google: 'gemini-api',
+    'openai-completions': 'openai',
+    'anthropic-messages': 'anthropic',
 };
 
 const DEFAULT_TARGETS: Record<string, VisionProvider> = {
@@ -341,12 +345,14 @@ export function piRoutes(
             ) {
                 continue;
             }
-            const targetName = PI_API_TARGETS[(model.api ?? '').split('-')[0]];
+            const credential = auth[model.provider] as { type?: string } | undefined;
+            const targetName = PI_API_TARGETS[model.api ?? ''];
             const target = targetName ? targets[targetName] : undefined;
             const targetExecute = target?.execute;
-            if (!target || !targetExecute) {
-                // Credentials the inline path cannot consume: let pi itself
-                // handle auth and drive it as an agent, one route per model.
+            // Inline reuse needs both an exactly-supported api shape and a
+            // printable API key. OAuth logins (print-api-key refuses them) and
+            // unmapped shapes ride pi itself as an agent, one route per model.
+            if (!target || !targetExecute || credential?.type !== 'api_key') {
                 if (agents.length < 2) {
                     agents.push(piCliRoute(model.provider, model.id));
                 }
@@ -364,7 +370,12 @@ export function piRoutes(
                 defaultModel: id,
                 reuseNote: `this read reused pi's ${provider} credentials for ${id} and spent that account's quota.`,
                 execute: async (options) => {
-                    const apiKey = fetchPiKey(piPath, id, provider);
+                    const apiKey = fetchPiKey(
+                        piPath,
+                        id,
+                        provider,
+                        Math.min(KEY_FETCH_TIMEOUT_MS, options.timeoutMs || KEY_FETCH_TIMEOUT_MS),
+                    );
                     return targetExecute({
                         ...options,
                         settings: {
@@ -382,22 +393,22 @@ export function piRoutes(
     return { inline: routes.slice(0, 2), agents };
 }
 
-function fetchPiKey(piPath: string, modelId: string, provider: string): string {
+function fetchPiKey(piPath: string, modelId: string, provider: string, timeoutMs: number): string {
     try {
         const key = execFileSync(
             piPath,
             ['auth', 'print-api-key', '--model', modelId, '--provider', provider],
-            { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], timeout: KEY_FETCH_TIMEOUT_MS },
+            { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs },
         ).trim();
         if (!key) {
-            throw new Error('pi printed an empty credential');
+            throw new Error('empty');
         }
         return key;
-    } catch (error) {
-        // Never let the key (or a partial one) travel inside an error message.
-        const message = error instanceof Error ? error.message : String(error);
+    } catch {
+        // The subprocess error carries stderr, and stderr can carry credential
+        // material in any vendor's format, so no part of it is forwarded.
         throw new Error(
-            `pi could not print a credential for ${provider}/${modelId}: ${truncate(message.replace(/sk-[\w-]+/g, 'sk-***'), 200)}`,
+            `pi could not print an API key for ${provider}/${modelId}. Run \`pi auth\` to check that credential.`,
         );
     }
 }
