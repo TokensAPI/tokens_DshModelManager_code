@@ -145,6 +145,25 @@ describe('discoverAuto probes', () => {
         fs.rmSync(home, { recursive: true, force: true });
     });
 
+    it('probes grok: auth evidence plus models_cache judged by the builtin table', () => {
+        const home = fakeHome();
+        fs.mkdirSync(path.join(home, '.grok'));
+        fs.writeFileSync(
+            path.join(home, '.grok', 'auth.json'),
+            JSON.stringify({ 'https://auth.x.ai::id': {} }),
+        );
+        fs.writeFileSync(
+            path.join(home, '.grok', 'models_cache.json'),
+            JSON.stringify({ models: { 'grok-4.5': {}, 'grok-code-mini': {} } }),
+        );
+        const result = discoverAuto({ env: { PATH: pathWith(['grok']) }, home, fresh: true });
+        const grok = probeOf(result, 'grok');
+        expect(grok.loggedIn).toBe(true);
+        expect(grok.visionModels).toEqual(['grok-4.5']);
+        expect(grok.source).toBe('builtin-table');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
     it('lists opencode models through the CLI and judges them by the builtin table', () => {
         const home = fakeHome();
         const result = discoverAuto({

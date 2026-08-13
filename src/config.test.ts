@@ -132,7 +132,7 @@ describe('guards config', () => {
         setConfigValue('reuse.codex', '', file);
         expect(loadConfigFile(file).reuse).toEqual({ pi: false });
         expect(() => setConfigValue('reuse.codex', 'maybe', file)).toThrow('true or false');
-        expect(() => setConfigValue('reuse.grok', 'true', file)).toThrow('Unknown reuse');
+        expect(() => setConfigValue('reuse.gemini', 'true', file)).toThrow('Unknown reuse');
         // auto never shipped; it is just an unknown key like any other.
         expect(() => setConfigValue('auto', 'true', file)).toThrow('Invalid config key');
         fs.rmSync(dir, { recursive: true, force: true });

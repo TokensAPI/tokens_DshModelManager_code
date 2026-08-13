@@ -26,7 +26,7 @@ export type ProviderStringField = 'apiKey' | 'baseUrl' | 'model';
 const STRING_FIELDS: ProviderStringField[] = ['apiKey', 'baseUrl', 'model'];
 
 /** Harnesses whose local logins modlens can be granted to borrow. */
-export const REUSE_HARNESSES = ['claude', 'codex', 'opencode', 'pi'] as const;
+export const REUSE_HARNESSES = ['claude', 'codex', 'opencode', 'pi', 'grok'] as const;
 export type ReuseHarness = (typeof REUSE_HARNESSES)[number];
 
 export interface ModlensConfig {
@@ -146,7 +146,7 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
         const dot = dottedKey.indexOf('.');
         if (dot <= 0 || dot === dottedKey.length - 1) {
             throw new Error(
-                `Invalid config key: ${dottedKey}. Use "provider", "reuse.<claude|codex|opencode|pi>", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
+                `Invalid config key: ${dottedKey}. Use "provider", "reuse.<claude|codex|opencode|pi|grok>", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
             );
         }
         const providerName = dottedKey.slice(0, dot);

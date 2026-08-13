@@ -4,7 +4,14 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import type { BuildProviderInvocationOptions, VisionProvider } from '../providers/index.ts';
 import type { AutoDiscovery } from './discover.ts';
-import { codexCliRoute, opencodeCliRoute, piCliRoute, piRoutes, reuseProviders } from './routes.ts';
+import {
+    codexCliRoute,
+    grokCliRoute,
+    opencodeCliRoute,
+    piCliRoute,
+    piRoutes,
+    reuseProviders,
+} from './routes.ts';
 
 function pathWith(bins: Record<string, string>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-bin-'));
@@ -272,6 +279,53 @@ describe('piCliRoute', () => {
     });
 });
 
+describe('grokCliRoute', () => {
+    it('builds a headless grok invocation: prompt, schema, Read-only tools', () => {
+        const route = grokCliRoute('grok-4.5');
+        const invocation = route.buildInvocation?.(BUILD_BASE);
+        expect(invocation?.command).toBe('grok');
+        const args = invocation?.args ?? [];
+        expect(args[0]).toBe('-p');
+        expect(args[1]).toContain('/tmp/shot.png');
+        expect(args[args.indexOf('--output-format') + 1]).toBe('json');
+        const schema = JSON.parse(args[args.indexOf('--json-schema') + 1]) as {
+            required?: string[];
+        };
+        expect(schema.required).toContain('ocr');
+        expect(args[args.indexOf('--allow') + 1]).toBe('Read');
+        expect(args[args.indexOf('-m') + 1]).toBe('grok-4.5');
+    });
+
+    it('omits -m for the default model and refuses remote URLs', () => {
+        const route = grokCliRoute('default');
+        expect(route.buildInvocation?.(BUILD_BASE).args).not.toContain('-m');
+        expect(() =>
+            route.buildInvocation?.({
+                ...BUILD_BASE,
+                imageKind: 'remote',
+                imageSource: 'https://x/y.png',
+            }),
+        ).toThrow(/local files only/);
+    });
+
+    it('parses the envelope: structuredOutput wins, session id and usage kept', () => {
+        const route = grokCliRoute('default');
+        const payload = { summary: 'seen' };
+        const parsed = route.parseOutput?.(
+            JSON.stringify({
+                text: 'prose echo',
+                structuredOutput: payload,
+                sessionId: 's-9',
+                usage: { total_tokens: 7 },
+            }),
+        );
+        expect(parsed?.result).toEqual(payload);
+        expect(parsed?.meta.conversationId).toBe('s-9');
+        expect(parsed?.meta.usage).toEqual({ total_tokens: 7 });
+        expect(() => route.parseOutput?.('not json at all')).toThrow(/no JSON envelope/);
+    });
+});
+
 describe('pi credential safety and shape mapping', () => {
     function homeWith(models: object, auth: object): string {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
@@ -369,6 +423,14 @@ describe('reuseProviders', () => {
                 elapsedMs: 0,
             },
             { harness: 'pi', cliFound: false, visionModels: [], source: 'none', elapsedMs: 0 },
+            {
+                harness: 'grok' as const,
+                cliFound: true,
+                loggedIn: true,
+                visionModels: ['grok-4.5'],
+                source: 'builtin-table' as const,
+                elapsedMs: 0,
+            },
         ],
     };
 
@@ -376,11 +438,11 @@ describe('reuseProviders', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
         const routes = reuseProviders(
             'local',
-            { reuse: { codex: true, opencode: true } },
+            { reuse: { codex: true, opencode: true, grok: true } },
             { env: { PATH: '' }, home, discovery },
         );
         expect(routes.inline).toEqual([]);
-        expect(routes.agents.map((r) => r.name)).toEqual(['codex-cli', 'opencode-cli']);
+        expect(routes.agents.map((r) => r.name)).toEqual(['codex-cli', 'opencode-cli', 'grok-cli']);
         fs.rmSync(home, { recursive: true, force: true });
     });
 

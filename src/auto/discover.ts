@@ -53,7 +53,7 @@ export function isVisionModel(modelId: string): boolean {
     return VISION_MODEL_PATTERNS.some((pattern) => globMatch(pattern, bare));
 }
 
-export type AutoHarness = 'claude-code' | 'codex' | 'opencode' | 'pi';
+export type AutoHarness = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'grok';
 
 export interface HarnessProbe {
     harness: AutoHarness;
@@ -195,6 +195,48 @@ function probeCodex(env: NodeJS.ProcessEnv, home: string): HarnessProbe {
     });
 }
 
+function probeGrok(env: NodeJS.ProcessEnv, home: string): HarnessProbe {
+    return timed(() => {
+        const cliPath = findOnPath('grok', env);
+        const base = { harness: 'grok' as const, cliFound: cliPath !== null };
+        if (!cliPath) {
+            return { ...base, visionModels: [], source: 'none' as const };
+        }
+        const grokHome = path.join(home, '.grok');
+        let loggedIn = false;
+        try {
+            const auth = readJson(path.join(grokHome, 'auth.json')) as Record<string, unknown>;
+            loggedIn = Object.keys(auth).length > 0;
+        } catch {
+            // no auth evidence; stays false
+        }
+        // models_cache.json lists the reachable model ids but carries no
+        // modality fields, so the builtin table judges them. A missing cache
+        // still means the official lineup, whose default model reads images.
+        try {
+            const cache = readJson(path.join(grokHome, 'models_cache.json')) as {
+                models?: Record<string, unknown>;
+            };
+            const vision = Object.keys(cache.models ?? {}).filter((id) => isVisionModel(id));
+            return {
+                ...base,
+                cliPath,
+                loggedIn,
+                visionModels: vision.length > 0 ? vision : ['default'],
+                source: 'builtin-table' as const,
+            };
+        } catch {
+            return {
+                ...base,
+                cliPath,
+                loggedIn,
+                visionModels: ['default'],
+                source: 'builtin-table' as const,
+            };
+        }
+    });
+}
+
 function probePi(env: NodeJS.ProcessEnv, home: string): HarnessProbe {
     return timed(() => {
         const cliPath = findOnPath('pi', env);
@@ -316,6 +358,7 @@ export function discoverAuto(options: DiscoverOptions = {}): AutoDiscovery {
         probeCodex(env, home),
         probeOpencode(env, runCli),
         probePi(env, home),
+        probeGrok(env, home),
     ];
     const cachedAt = new Date().toISOString();
     try {

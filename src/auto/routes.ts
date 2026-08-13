@@ -26,7 +26,8 @@ import type {
     VisionProvider,
 } from '../providers/index.ts';
 import { openaiCompatProvider } from '../providers/openaiCompat.ts';
-import { extractJson, truncate, tryParseJson } from '../util/json.ts';
+import { visionResultSchemaJson } from '../schema.ts';
+import { extractJson, parseJsonLoose, truncate, tryParseJson } from '../util/json.ts';
 import { type AutoDiscovery, discoverAuto } from './discover.ts';
 
 const KEY_FETCH_TIMEOUT_MS = 10_000;
@@ -191,6 +192,81 @@ export function opencodeCliRoute(modelId: string): VisionProvider {
             return {
                 result,
                 meta: { conversationId: sessionId, durationSeconds: null, usage },
+            };
+        },
+    };
+}
+
+/**
+ * `grok -p`: the claude-cli template. Grok Build has no image-attach flag in
+ * headless mode, but it is a tool-using agent, so the prompt names the local
+ * path, --allow Read scopes the tools, and --json-schema (verified to accept
+ * this schema as-is) constrains the answer; structuredOutput carries it.
+ */
+export function grokCliRoute(modelId: string): VisionProvider {
+    return {
+        name: 'grok-cli',
+        defaultModel: modelId,
+        isolateWorkdir: true,
+        reuseNote: "this read reused the local Grok CLI login and spent that account's quota.",
+        buildInvocation: (options: BuildProviderInvocationOptions) => {
+            if (options.imageKind === 'remote') {
+                throw new Error(
+                    'grok-cli route reads local files only. Remote URLs stay on the inline providers.',
+                );
+            }
+            const prompt = buildVisionPrompt({
+                imageSource: options.imageSource,
+                imageKind: 'local',
+                extraPrompt: options.extraPrompt,
+            });
+            const args = [
+                '-p',
+                prompt,
+                '--output-format',
+                'json',
+                '--json-schema',
+                visionResultSchemaJson(),
+                '--allow',
+                'Read',
+            ];
+            const model = options.model || modelId;
+            if (model && model !== 'default') {
+                args.push('-m', model);
+            }
+            return {
+                command: options.providerBin || 'grok',
+                args,
+                cwd: path.resolve(options.workdir || path.dirname(options.imageSource)),
+            };
+        },
+        parseOutput: (stdout: string): ProviderParsedOutput => {
+            const envelope = parseJsonLoose(stdout) as {
+                structuredOutput?: unknown;
+                text?: string;
+                sessionId?: string;
+                usage?: unknown;
+            } | null;
+            if (!envelope || typeof envelope !== 'object') {
+                throw new Error(
+                    'grok produced no JSON envelope. Check the Grok login (run: grok).',
+                );
+            }
+            const result =
+                envelope.structuredOutput ??
+                (typeof envelope.text === 'string' ? extractJson(envelope.text) : null);
+            if (result === null || result === undefined) {
+                throw new Error(
+                    `grok returned no structured output: ${truncate(envelope.text ?? '')}`,
+                );
+            }
+            return {
+                result,
+                meta: {
+                    conversationId: envelope.sessionId ?? null,
+                    durationSeconds: null,
+                    usage: envelope.usage ?? null,
+                },
             };
         },
     };
@@ -457,7 +533,10 @@ export function reuseProviders(
             // A broken pi store must not take the whole chain down.
         }
     }
-    if (kind === 'local' && (grants.codex === true || grants.opencode === true)) {
+    if (
+        kind === 'local' &&
+        (grants.codex === true || grants.opencode === true || grants.grok === true)
+    ) {
         try {
             const discovery = options.discovery ?? discoverAuto({ env, home });
             const codex = discovery.probes.find((probe) => probe.harness === 'codex');
@@ -472,6 +551,15 @@ export function reuseProviders(
             const opencode = discovery.probes.find((probe) => probe.harness === 'opencode');
             if (grants.opencode === true && opencode?.cliFound && opencode.visionModels[0]) {
                 agents.push(opencodeCliRoute(opencode.visionModels[0]));
+            }
+            const grok = discovery.probes.find((probe) => probe.harness === 'grok');
+            if (
+                grants.grok === true &&
+                grok?.cliFound &&
+                grok.loggedIn !== false &&
+                grok.visionModels[0]
+            ) {
+                agents.push(grokCliRoute(grok.visionModels[0]));
             }
         } catch {
             // Discovery trouble degrades to the base chain, never to a crash.

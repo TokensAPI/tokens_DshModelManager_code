@@ -236,10 +236,12 @@ describe('buildDoctorReport: reuse', () => {
             codex: 'granted',
             opencode: 'not asked',
             pi: 'refused',
+            grok: 'not asked',
         });
         expect(report.reuse.probes.map((p) => p.harness).sort()).toEqual([
             'claude-code',
             'codex',
+            'grok',
             'opencode',
             'pi',
         ]);
