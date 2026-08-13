@@ -29,6 +29,23 @@ describe('providerAvailable', () => {
         expect(providerAvailable('antigravity-cli', {}, { PATH: pathWith() })).toBe(false);
     });
 
+    // Real Windows installs ship agy.exe / claude.cmd, never a bare-named
+    // file; these run on the Windows CI matrix only.
+    it.skipIf(process.platform !== 'win32')('finds Windows binaries via PATHEXT', () => {
+        expect(providerAvailable('antigravity-cli', {}, { PATH: pathWith('agy.exe') })).toBe(true);
+        expect(
+            providerAvailable(
+                'claude-cli',
+                {},
+                {
+                    PATH: pathWith('claude.cmd'),
+                    PATHEXT: '.COM;.EXE;.BAT;.CMD',
+                },
+            ),
+        ).toBe(true);
+        expect(providerAvailable('antigravity-cli', {}, { PATH: pathWith('agy.xyz') })).toBe(false);
+    });
+
     it('requires every setting for openai, not just the key', () => {
         const env = { PATH: pathWith() };
         const partial = { providers: { openai: { apiKey: 'k', baseUrl: 'https://x' } } };

@@ -348,4 +348,96 @@ describe('dsh plugin request-time image conversion (v2)', () => {
             delete process.env.MODLENS_DSH_CLI;
         }
     });
+
+    async function adapterWithCli(cli: string) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const registered: Array<{ adapter: Record<string, CallableFunction> }> = [];
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {
+                    readImage: async () => ({
+                        data: new Uint8Array([1]),
+                        ref: { mediaType: 'image/png' },
+                    }),
+                },
+                on: () => {},
+                llm: {
+                    registerAdapter: (_p: string[], adapter: Record<string, CallableFunction>) => {
+                        registered.push({ adapter });
+                    },
+                    listModels: async () => [],
+                    resolveModelInfo: async () => ({}),
+                    stream: () => (async function* () {})(),
+                },
+            } as never,
+            {},
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        return registered[0].adapter;
+    }
+
+    const imageRequest = (id: string) => ({
+        provider: 'deepseek-modlens',
+        model: 'm',
+        messages: [{ role: 'user', content: [{ type: 'image', attachment: { id } }] }],
+    });
+
+    it('does not memoize a failed read: the next step retries', async () => {
+        const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-retry-'));
+        const marker = path.join(cliDir, 'runs');
+        const cli = path.join(cliDir, 'cli.js');
+        // First run fails (transient config error), later runs succeed.
+        fs.writeFileSync(
+            cli,
+            `const fs=require('fs');const n=(fs.existsSync(${JSON.stringify(marker)})?fs.readFileSync(${JSON.stringify(marker)},'utf8').length:0)+1;fs.appendFileSync(${JSON.stringify(marker)},'x');
+             if(n===1){console.error('quota exhausted');process.exit(1)}
+             console.log(JSON.stringify({result:{summary:'S',ocr:{full_text:'RECOVERED'},uncertainty:[]}}))`,
+        );
+        try {
+            const adapter = await adapterWithCli(cli);
+            for await (const _c of adapter.stream(
+                imageRequest('att-r'),
+            ) as AsyncIterable<unknown>) {
+                // drain
+            }
+            for await (const _c of adapter.stream(
+                imageRequest('att-r'),
+            ) as AsyncIterable<unknown>) {
+                // drain
+            }
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('xx');
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
+    it('joins concurrent readers of the same attachment into one CLI run', async () => {
+        const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-conc-'));
+        const marker = path.join(cliDir, 'runs');
+        const cli = path.join(cliDir, 'cli.js');
+        // Slow enough that both streams overlap the same in-flight read.
+        fs.writeFileSync(
+            cli,
+            `const fs=require('fs');fs.appendFileSync(${JSON.stringify(marker)},'x');
+             setTimeout(()=>console.log(JSON.stringify({result:{summary:'S',ocr:{full_text:'ONCE'},uncertainty:[]}})),150)`,
+        );
+        try {
+            const adapter = await adapterWithCli(cli);
+            const drain = async () => {
+                for await (const _c of adapter.stream(
+                    imageRequest('att-c'),
+                ) as AsyncIterable<unknown>) {
+                    // drain
+                }
+            };
+            await Promise.all([drain(), drain()]);
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
 });
