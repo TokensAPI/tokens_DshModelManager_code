@@ -141,6 +141,79 @@ program
         }
     });
 
+const clip = program
+    .command('clip')
+    .description(
+        'Two-phase clipboard reads: capture the clipboard once into an immutable snapshot, then consume it by id',
+    );
+
+clip.command('capture')
+    .description('Capture the clipboard image into a snapshot and analyze it')
+    .option('--prompt <text>', 'Extra focus for the reading')
+    .option('--timeout <ms>', 'Provider timeout in milliseconds', '180000')
+    .option('-o, --output <path>', 'Also write the JSON to a file')
+    .action(async (options) => {
+        try {
+            const { captureSnapshot, storeEvidence } = await import('./clipboard/index.ts');
+            const { meta, imagePath, dir } = captureSnapshot();
+            const analysis = await analyzeImage({
+                input: imagePath,
+                prompt: options.prompt,
+                timeoutMs: Number.parseInt(options.timeout, 10) || 180_000,
+                config: loadConfigFile(),
+            });
+            const output = {
+                ...analysis,
+                // The snapshot outlives this process while the working paths
+                // should not travel: the stable identity is the content hash.
+                image: `clipboard://sha256/${meta.sha256}`,
+                meta: { ...analysis.meta, clipboard: meta },
+            };
+            storeEvidence(dir, output);
+            const rendered = JSON.stringify(output, null, 2);
+            if (options.output) {
+                const fsm = await import('fs');
+                fsm.writeFileSync(options.output, `${rendered}\n`, { mode: 0o600 });
+            }
+            console.log(rendered);
+        } catch (error) {
+            console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+            process.exitCode = 1;
+        }
+    });
+
+clip.command('read')
+    .description('Consume an existing snapshot by id; never re-reads the clipboard')
+    .argument('<snapshotId>', 'Snapshot id from a previous capture')
+    .action(async (snapshotId) => {
+        try {
+            const { readSnapshot } = await import('./clipboard/index.ts');
+            const { meta, evidence } = readSnapshot(snapshotId);
+            console.log(JSON.stringify(evidence ?? { meta: { clipboard: meta } }, null, 2));
+        } catch (error) {
+            console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+            process.exitCode = 1;
+        }
+    });
+
+clip.command('drop')
+    .description('Delete one snapshot by id, or every snapshot with --all')
+    .argument('[snapshotId]', 'Snapshot id to delete')
+    .option('--all', 'Delete the whole snapshot store')
+    .action(async (snapshotId, options) => {
+        try {
+            const { dropSnapshots } = await import('./clipboard/index.ts');
+            if (!options.all && !snapshotId) {
+                throw new Error('Give a snapshot id, or pass --all.');
+            }
+            const dropped = dropSnapshots(options.all ? 'all' : snapshotId);
+            console.log(JSON.stringify({ dropped }));
+        } catch (error) {
+            console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+            process.exitCode = 1;
+        }
+    });
+
 program
     .command('guard')
     .description(
