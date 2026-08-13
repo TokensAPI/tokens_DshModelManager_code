@@ -22,7 +22,7 @@ const OUTPUT_SCHEMA = JSON.parse(
 const CLI_TIMEOUT_MS = 180_000
 
 export const name = 'modlens'
-export const inject = ['tools', 'agents', 'attachments']
+export const inject = ['tools', 'agents', 'attachments', 'llm']
 
 const MEDIA_EXT = {
   'image/png': '.png',
@@ -34,6 +34,9 @@ const MEDIA_EXT = {
 export function apply(ctx, config = {}) {
   if (config.autoRead !== false) {
     registerAutoRead(ctx)
+  }
+  if (config.visionProvider !== false) {
+    registerVisionProvider(ctx, config)
   }
   // Registered as a raw JSON-Schema tool definition (no dsh package imports:
   // the developer-preview registry accepts these and out-of-tree resolution
@@ -98,6 +101,57 @@ export function apply(ctx, config = {}) {
       return parsed.result
     },
   })
+}
+
+/**
+ * Phase 3: the paste unlock. dsh's image admission asks the selected
+ * provider's adapter for inputModalities, and the DeepSeek adapter hardcodes
+ * text-only, so pastes are refused before any plugin hook runs. This wrapper
+ * registers a NEW provider whose model metadata declares image input and
+ * whose stream() is a one-line delegation back to the real route. Pick the
+ * wrapped model in the model selector, paste, and the pre-step rewrite below
+ * turns the image into evidence text before the delegated request goes out;
+ * the upstream serializer's own image rejection stays as the fail-closed
+ * backstop. Guarded feature-detection: if the llm registration surface moved
+ * (developer preview), the plugin quietly stays a read_image-only tool.
+ */
+function registerVisionProvider(ctx, config) {
+  const upstream = config.upstream || 'deepseek-official'
+  const providerId = config.providerId || 'deepseek-modlens'
+  if (typeof ctx.llm?.registerAdapter !== 'function' || typeof ctx.llm?.stream !== 'function') {
+    return
+  }
+  const withVision = (info) => ({
+    ...info,
+    provider: providerId,
+    inputModalities: ['text', 'image'],
+  })
+  try {
+    ctx.llm.registerAdapter([providerId], {
+      async listModels(_provider, signal) {
+        try {
+          const models = await ctx.llm.listModels(upstream, signal)
+          return models.map((model) => ({
+            ...withVision(model),
+            name: `${model.name ?? model.id} (modlens vision)`,
+          }))
+        } catch {
+          return []
+        }
+      },
+      async resolveModel(_provider, model, signal) {
+        const info = await ctx.llm.resolveModelInfo(upstream, model, signal)
+        return { ...withVision(info), id: model }
+      },
+      stream(options) {
+        // By the time a request reaches here, the pre-step rewrite has already
+        // replaced every image block with evidence text.
+        return ctx.llm.stream({ ...options, provider: upstream })
+      },
+    })
+  } catch {
+    // DUPLICATE_ADAPTER or a preview-era surface change: degrade silently.
+  }
 }
 
 /**

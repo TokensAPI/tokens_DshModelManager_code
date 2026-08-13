@@ -138,3 +138,81 @@ describe('dsh plugin auto-read (phase 2)', () => {
         expect(off['agent/pre-step']).toBeUndefined();
     });
 });
+
+describe('dsh plugin vision provider (phase 3)', () => {
+    async function loadWith(llm: Record<string, unknown> | undefined, config = {}) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const ctx = {
+            tools: { register: () => {} },
+            attachments: {},
+            on: () => {},
+            llm,
+        };
+        plugin.apply(ctx as never, config);
+        return ctx;
+    }
+
+    it('registers a wrapper provider that declares image input and delegates', async () => {
+        const registered: Array<{
+            providers: string[];
+            adapter: Record<string, CallableFunction>;
+        }> = [];
+        const streamed: Array<Record<string, unknown>> = [];
+        const llm = {
+            registerAdapter: (providers: string[], adapter: Record<string, CallableFunction>) => {
+                registered.push({ providers, adapter });
+            },
+            listModels: async () => [
+                {
+                    provider: 'deepseek-official',
+                    id: 'deepseek-v4-flash',
+                    name: 'DeepSeek V4 Flash',
+                },
+            ],
+            resolveModelInfo: async (_p: string, model: string) => ({
+                provider: 'deepseek-official',
+                id: model,
+                name: 'DeepSeek V4 Flash',
+                inputModalities: ['text'],
+            }),
+            stream: (options: Record<string, unknown>) => {
+                streamed.push(options);
+                return (async function* () {})();
+            },
+        };
+        await loadWith(llm);
+        expect(registered[0].providers).toEqual(['deepseek-modlens']);
+        const adapter = registered[0].adapter;
+        const models = (await adapter.listModels('deepseek-modlens')) as Array<{
+            provider: string;
+            name: string;
+            inputModalities: string[];
+        }>;
+        expect(models[0].provider).toBe('deepseek-modlens');
+        expect(models[0].inputModalities).toContain('image');
+        expect(models[0].name).toContain('modlens vision');
+        const info = (await adapter.resolveModel('deepseek-modlens', 'deepseek-v4-flash')) as {
+            provider: string;
+            id: string;
+            inputModalities: string[];
+        };
+        expect(info.provider).toBe('deepseek-modlens');
+        expect(info.id).toBe('deepseek-v4-flash');
+        expect(info.inputModalities).toEqual(['text', 'image']);
+        adapter.stream({ provider: 'deepseek-modlens', model: 'deepseek-v4-flash', messages: [] });
+        expect(streamed[0].provider).toBe('deepseek-official');
+    });
+
+    it('degrades silently without the registration surface or when disabled', async () => {
+        await loadWith(undefined);
+        const registered: unknown[] = [];
+        await loadWith(
+            { registerAdapter: (...args: unknown[]) => registered.push(args), stream: () => {} },
+            { visionProvider: false },
+        );
+        expect(registered).toEqual([]);
+    });
+});
