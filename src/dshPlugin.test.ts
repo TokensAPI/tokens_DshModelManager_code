@@ -129,6 +129,53 @@ describe('dsh plugin auto-read (phase 2)', () => {
         expect(block?.text).toContain("no 'data' bytes");
     });
 
+    it('writes heic pastes with their real extension and refuses unknown types', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const cli = fakeCli(
+            `const f = process.argv[3];
+             if (!f.endsWith('.heic')) { console.error('wrong ext: ' + f); process.exit(9) }
+             console.log(JSON.stringify({ result: { summary: 'S', ocr: { full_text: 'HEIC-OK' }, uncertainty: [] } }))`,
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        try {
+            const load = (mediaType: string) => {
+                const handlers: Record<string, Handler> = {};
+                plugin.apply(
+                    {
+                        tools: { register: () => {} },
+                        attachments: {
+                            readImage: async () => ({
+                                data: new Uint8Array([1]),
+                                ref: { mediaType },
+                            }),
+                        },
+                        on: (event: string, fn: Handler) => {
+                            handlers[event] = fn;
+                        },
+                    } as never,
+                    { autoRead: true },
+                );
+                return handlers;
+            };
+            const messages = [imageMessage()];
+            const heic = await load('image/heic')['agent/pre-step'](
+                { messages, signal: undefined },
+                async () => ({ kind: 'enter', messages }),
+            );
+            expect(heic.messages?.[0].content[1].text).toContain('HEIC-OK');
+            const pdf = await load('application/pdf')['agent/pre-step'](
+                { messages, signal: undefined },
+                async () => ({ kind: 'enter', messages }),
+            );
+            expect(pdf.messages?.[0].content[1].text).toContain('unsupported pasted media type');
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
     it('degrades a failed read to an explanatory block instead of rejecting the step', async () => {
         const handlers = await load();
         const cli = fakeCli(`console.error('engine down'); process.exit(1)`);
@@ -439,5 +486,28 @@ describe('dsh plugin request-time image conversion (v2)', () => {
         } finally {
             delete process.env.MODLENS_DSH_CLI;
         }
+    });
+});
+
+describe('image format contract (CLI, skill, dsh in lockstep)', () => {
+    it('dsh MEDIA_EXT covers exactly the CLI allow-list', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            MEDIA_EXT: Record<string, string>;
+        };
+        const { ALLOWED_MIME } = await import('./imageInput.ts');
+        expect(new Set(Object.keys(plugin.MEDIA_EXT))).toEqual(ALLOWED_MIME);
+    });
+
+    it('the skill trigger extensions are exactly the CLI extension table', async () => {
+        const { MIME_BY_EXT } = await import('./imageInput.ts');
+        const skill = fs.readFileSync(
+            path.join(__dirname, '..', 'skills', 'modlens', 'SKILL.md'),
+            'utf-8',
+        );
+        const match = skill.match(/\(((?:\.\w+, )+\.\w+)\)/);
+        expect(match).toBeTruthy();
+        const skillExts = new Set((match as RegExpMatchArray)[1].split(', '));
+        expect(skillExts).toEqual(new Set(Object.keys(MIME_BY_EXT)));
     });
 });

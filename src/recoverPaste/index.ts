@@ -32,7 +32,6 @@ import type {
 } from './types.ts';
 
 export { claudeProjectSlug } from './adapters/claude.ts';
-export { escapeLikePattern } from './adapters/opencode.ts';
 export { piSessionSlug } from './adapters/pi.ts';
 export { harnessFromPsTable } from './detect.ts';
 export type {
@@ -163,7 +162,7 @@ export function locateSource(cwd: string, adapters: HarnessAdapter[] = ADAPTERS)
         const dirs = adapters.map((a) => a.describe(cwd)).join(' , ');
         const blocked = blockers.length > 0 ? `\nBlocked: ${blockers.join(' | ')}` : '';
         throw new Error(
-            `No pasted images found in any session storage for this directory (looked in: ${dirs}). The user may not have pasted any, or the storage format changed; ask for a file path instead.${blocked}`,
+            `No pasted images found in any session storage for this directory (looked in: ${dirs}). The user may not have pasted any, the storage format changed, or a legacy transcript records no cwd (ownership cannot be proven; an explicit --transcript path bypasses that check). Ask for a file path instead.${blocked}`,
         );
     }
     return best.ref;
@@ -248,7 +247,7 @@ export function recoverPastedImages(options: RecoverOptions = {}): RecoverResult
     const all = source.extract();
     if (all.length === 0) {
         throw new Error(
-            `No pasted images found in ${source.location}. The user may not have pasted any, or the storage format changed; ask for a file path instead.`,
+            `No pasted images found in ${source.location}. The user may not have pasted any, the storage format changed, or a legacy transcript records no cwd (ownership cannot be proven; an explicit --transcript path bypasses that check). Ask for a file path instead.`,
         );
     }
 

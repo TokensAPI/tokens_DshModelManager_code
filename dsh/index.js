@@ -24,7 +24,7 @@ const CLI_TIMEOUT_MS = 180_000
 export const name = 'modlens'
 export const inject = ['tools', 'agents', 'attachments', 'llm']
 
-const MEDIA_EXT = {
+export const MEDIA_EXT = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
   'image/webp': '.webp',
@@ -179,7 +179,7 @@ function registerVisionProvider(ctx, config) {
         // attachment, since the same history rides every later step.
         const self = this
         return (async function* () {
-          const messages = await convertImagesToEvidence(ctx, options.messages, options.signal, self)
+          const messages = await convertImagesToEvidence(ctx, options.messages, self)
           yield* ctx.llm.stream({ ...options, provider: upstream, messages })
         })()
       },
@@ -201,7 +201,7 @@ function registerVisionProvider(ctx, config) {
 // evidence text forever.
 const EVIDENCE_CACHE_LIMIT = 64
 
-function cachedEvidence(ctx, adapter, block, signal) {
+function cachedEvidence(ctx, adapter, block) {
   const key = JSON.stringify(block.attachment ?? block)
   const hit = adapter.evidenceCache.get(key)
   if (hit !== undefined) {
@@ -210,12 +210,33 @@ function cachedEvidence(ctx, adapter, block, signal) {
     adapter.evidenceCache.set(key, hit)
     return hit
   }
-  const pending = readImageBlock(ctx, block, signal).then((evidence) => {
-    if (!evidence.ok) {
-      adapter.evidenceCache.delete(key)
-    }
-    return evidence.block
-  })
+  // Deliberately no caller signal: a shared entry must not die with its first
+  // caller (their abort used to cancel every concurrent joiner). A cancelled
+  // caller simply stops awaiting; the read finishes and the cache keeps it.
+  const pending = readImageBlock(ctx, block, undefined).then(
+    (evidence) => {
+      // Only evict our own entry: this promise may have been LRU-evicted and
+      // the key re-populated by a newer read meanwhile.
+      if (!evidence.ok && adapter.evidenceCache.get(key) === pending) {
+        adapter.evidenceCache.delete(key)
+      }
+      return evidence.block
+    },
+    (error) => {
+      // readImageBlock never rejects by contract; this is the belt for a
+      // future refactor breaking that, so a rejected promise cannot lodge in
+      // the cache forever.
+      if (adapter.evidenceCache.get(key) === pending) {
+        adapter.evidenceCache.delete(key)
+      }
+      return {
+        type: 'text',
+        text: `[A pasted image could not be read by modlens: ${
+          error instanceof Error ? error.message.slice(0, 300) : String(error)
+        }]`,
+      }
+    },
+  )
   adapter.evidenceCache.set(key, pending)
   while (adapter.evidenceCache.size > EVIDENCE_CACHE_LIMIT) {
     adapter.evidenceCache.delete(adapter.evidenceCache.keys().next().value)
@@ -223,7 +244,7 @@ function cachedEvidence(ctx, adapter, block, signal) {
   return pending
 }
 
-async function convertImagesToEvidence(ctx, messages, signal, adapter) {
+async function convertImagesToEvidence(ctx, messages, adapter) {
   const out = []
   for (const message of messages) {
     if (!Array.isArray(message.content) || !message.content.some((b) => b?.type === 'image')) {
@@ -236,7 +257,7 @@ async function convertImagesToEvidence(ctx, messages, signal, adapter) {
         content.push(block)
         continue
       }
-      content.push(await cachedEvidence(ctx, adapter, block, signal))
+      content.push(await cachedEvidence(ctx, adapter, block))
     }
     out.push({ ...message, content })
   }

@@ -63,6 +63,27 @@ describe('executeOpenaiCompat', () => {
         expect(text).not.toContain('"type":"object"');
     });
 
+    it('redacts the api key and token shapes out of gateway error bodies', async () => {
+        vi.stubGlobal(
+            'fetch',
+            async () =>
+                new Response(
+                    'unauthorized: key sk-x rejected (sent Authorization: Bearer sk-proj-abc123DEF456ghi789)',
+                    { status: 401 },
+                ),
+        );
+        const error = await executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings: { ...settings, apiKey: 'sk-x-full-key-value' },
+        }).catch((e: Error) => e.message);
+        expect(error).toContain('401');
+        expect(error).not.toContain('sk-proj-abc123DEF456ghi789');
+        expect(error).not.toContain('sk-x-full-key-value');
+        expect(error).toContain('[redacted]');
+    });
+
     it('merges extraBody into the request and guards the fields it needs', async () => {
         const calls: Array<{ init: RequestInit }> = [];
         vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {

@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { recoverPastedImages } from '../index.ts';
-import { buildOpencodeQuery, escapeLikePattern } from './opencode.ts';
+import { buildOpencodeQuery, opencodeDirectoryFilter } from './opencode.ts';
 
 const onWindows = process.platform === 'win32';
 
@@ -17,12 +17,14 @@ afterEach(() => {
     delete process.env.MODLENS_HARNESS;
 });
 
-describe('escapeLikePattern', () => {
-    it('escapes SQL wildcards so a path with _ cannot match another project', () => {
-        // LIKE reads _ as "any character", so /tmp/proj_1 used to match projA1.
-        expect(escapeLikePattern('/tmp/proj_1')).toBe('/tmp/proj\\_1');
-        expect(escapeLikePattern('/tmp/100%/x')).toBe('/tmp/100\\%/x');
-        expect(escapeLikePattern('/tmp/plain')).toBe('/tmp/plain');
+describe('opencodeDirectoryFilter case handling', () => {
+    it('keeps POSIX comparisons case-sensitive and lowers both sides on Windows', () => {
+        const posix = opencodeDirectoryFilter('/tmp/Proj', false);
+        expect(posix.clause).not.toContain('LOWER');
+        expect(posix.params[0]).toBe('/tmp/Proj');
+        const win = opencodeDirectoryFilter('E:\\GitTest\\Proj', true);
+        expect(win.clause).toContain('LOWER');
+        expect(win.params[0]).toBe('e:/gittest/proj');
     });
 });
 
@@ -123,6 +125,38 @@ describe.skipIf(!DatabaseSync)('opencode Windows path normalization (issue #11)'
     it('still matches a genuine ancestor directory that contains _', () => {
         const db = dbWithSession('/tmp/proj_1', filePart);
         expect(runQuery(db, '/tmp/proj_1/sub')).toHaveLength(1);
+        db.close();
+    });
+
+    function runCaseQuery(
+        db: InstanceType<typeof Db>,
+        resolvedCwd: string,
+        caseInsensitive: boolean,
+    ): unknown[] {
+        const { clause, params } = opencodeDirectoryFilter(resolvedCwd, caseInsensitive);
+        return (
+            db.prepare(`SELECT session.id FROM session WHERE ${clause}`) as unknown as {
+                all: (...p: unknown[]) => unknown[];
+            }
+        ).all(...params);
+    }
+
+    it('case-sensitive on POSIX: /tmp/Project is not /tmp/project', () => {
+        // SQLite LIKE is ASCII case-insensitive, which the old query inherited;
+        // SUBSTR equality respects case, matching case-sensitive filesystems.
+        const db = dbWithSession('/tmp/Project', filePart);
+        expect(runCaseQuery(db, '/tmp/project/sub', false)).toHaveLength(0);
+        expect(runCaseQuery(db, '/tmp/Project/sub', false)).toHaveLength(1);
+        db.close();
+    });
+
+    it('case-insensitive on Windows: mixed-case ancestor still matches', () => {
+        const db = dbWithSession('E:/GitTest/Proj', filePart);
+        expect(runCaseQuery(db, 'e:\\gittest\\proj\\sub', true)).toHaveLength(1);
+        // Wildcards still do not work in either mode.
+        const wild = dbWithSession('E:/pro_j', filePart);
+        expect(runCaseQuery(wild, 'e:\\proXj\\sub', true)).toHaveLength(0);
+        wild.close();
         db.close();
     });
 });

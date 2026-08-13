@@ -53,7 +53,7 @@ OpenCode with DeepSeek: `opencode auth login`, pick DeepSeek and paste the key (
 dsh is different from the other harnesses: modlens plugs in as a native tool, not a prompt-triggered skill. The package itself is a dsh bundle, so one command installs it into a profile:
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens
+npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 ```
 
 This registers a `read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin keeps its touch small (raw tool registration, the llm adapter surface for the vision variants, the attachment reader, and one agent pre-step hook) and degrades loudly if any of them moves.

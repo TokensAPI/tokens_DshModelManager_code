@@ -123,33 +123,36 @@ Note that the hard refusal above only fires on an actual `denyModels` match agai
 
 The dsh profile installed an old modlens version. The `dsh.bundle` declaration
 exists since 3.9.0, and pnpm v11's release-age gate (`minimumReleaseAge`,
-quarantining versions published less than a day ago — dsh profiles may
-configure a longer window) silently falls back to an older version when every
+quarantining recently published versions; 10 days measured on pnpm 11.21) silently falls back to an older version when every
 recent one is inside the window. That old version has no bundle declaration,
 so dsh correctly treats it as a plain dependency and none of the tools appear.
-An exact version in the add command does not bypass the gate.
 
-The fix is a one-time exclusion in the profile. In
-`~/.dsh/profiles/<name>/pnpm-workspace.yaml`, add the bare package name (not
-`name@version` — a pinned version would need updating on every release):
+The fix: name the version explicitly. pnpm applies the age gate when resolving
+a range, but an explicit version or dist-tag skips it ([pnpm#9989](https://github.com/pnpm/pnpm/issues/9989), verified on pnpm 11.21), which is why the install
+command carries `@latest`:
+
+```sh
+npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@latest
+```
+
+dsh's reconcile notices the bundle declaration on the new version and
+activates it; restart dsh afterwards. Verify with
+`npx -y @deepseek-ai/dsh plugin --profile <name> list` — the version shown
+should be 3.9.0 or newer.
+
+If a future pnpm closes that skip, the durable alternative is a one-time
+exclusion in `~/.dsh/profiles/<name>/pnpm-workspace.yaml` — the bare package
+name, not `name@version`, so it survives future releases:
 
 ```yaml
 minimumReleaseAgeExclude:
   - '@liustack/modlens'
 ```
 
-then update inside the profile:
-
-```sh
-npx -y @deepseek-ai/dsh plugin --profile <name> update @liustack/modlens
-```
-
-dsh's reconcile notices the bundle declaration on the new version and
-activates it; restart dsh afterwards. Verify with
-`npx -y @deepseek-ai/dsh plugin --profile <name> list` — the version shown
-should be 3.9.0 or newer. The trade-off is honest: excluding modlens from the
-quarantine means new modlens releases install immediately, without the
-supply-chain cooling-off pnpm gives other packages.
+then `npx -y @deepseek-ai/dsh plugin --profile <name> update @liustack/modlens`.
+The trade-off is honest either way: an explicit `@latest` (or the exclusion)
+opts modlens out of pnpm's supply-chain cooling-off window, so new releases
+install immediately.
 
 ## Config file problems
 

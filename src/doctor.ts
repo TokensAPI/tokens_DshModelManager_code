@@ -38,6 +38,13 @@ export interface DoctorProvider {
     name: string;
     kind: 'subprocess' | 'api';
     ready: boolean;
+    /**
+     * Machine-readable readiness: 'ready' means every prerequisite verified,
+     * 'installed' means the binary exists but sign-in cannot be verified
+     * offline, 'missing' means not usable. Consumers should branch on this,
+     * not on the legacy boolean.
+     */
+    status: 'ready' | 'installed' | 'missing';
     /** subprocess only: on PATH, but sign-in cannot be verified offline. */
     authUnverified?: boolean;
     detail: string;
@@ -153,6 +160,7 @@ function inspectProvider(
             name: descriptor.name,
             kind: 'subprocess',
             ready: binaryPath !== null,
+            status: binaryPath !== null ? 'installed' : 'missing',
             // "On PATH" proves installation, not a working login: doctor runs
             // offline and spends nothing, so sign-in state stays unverified
             // here and the first real read is the auth check.
@@ -181,6 +189,7 @@ function inspectProvider(
         name: descriptor.name,
         kind: 'api',
         ready,
+        status: ready ? 'ready' : 'missing',
         settings: statuses,
         detail,
         fix: ready ? undefined : descriptor.fix,
