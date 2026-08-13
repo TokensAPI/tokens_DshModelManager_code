@@ -222,3 +222,37 @@ describe('buildDoctorReport: guard', () => {
         expect(rendered).toContain('gpt-5.6*');
     });
 });
+
+describe('buildDoctorReport: auto discovery', () => {
+    it('probes the four harnesses fresh and reports the enabled flag from config', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-doctor-home-'));
+        const report = buildDoctorReport({
+            config: { auto: true },
+            env: { PATH: '', MODLENS_HARNESS: 'none' },
+            auto: { home },
+        });
+        expect(report.auto.enabled).toBe(true);
+        expect(report.auto.probes.map((p) => p.harness).sort()).toEqual([
+            'claude-code',
+            'codex',
+            'opencode',
+            'pi',
+        ]);
+        expect(report.auto.probes.every((p) => p.cliFound === false)).toBe(true);
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('renders an Auto section with per-harness lines and the off-by-default hint', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-doctor-home-'));
+        const report = buildDoctorReport({
+            config: {},
+            env: { PATH: '', MODLENS_HARNESS: 'none' },
+            auto: { home },
+        });
+        const rendered = renderDoctorReport(report);
+        expect(rendered).toContain('Auto');
+        expect(rendered).toContain('enabled: false');
+        expect(rendered).toContain('codex: cli not found');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+});

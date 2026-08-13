@@ -3,6 +3,7 @@
 // local machine only (Node version, PATH, the config file, process ancestry).
 import * as fs from 'fs';
 import { createRequire } from 'module';
+import { type DiscoverOptions, discoverAuto, type HarnessProbe } from './auto/discover.ts';
 import { CONFIG_PATH, type ModlensConfig, resolveProviderSettings } from './config.ts';
 import { detectActiveModel } from './guard/index.ts';
 import { allowPatterns, denyPatterns, evaluateGuard, type ModelSource } from './guard/rules.ts';
@@ -71,6 +72,11 @@ export interface DoctorReport {
         permissionsOk: boolean;
         note?: string;
     };
+    /** Auto-mode discovery: what local harness vision could be borrowed. */
+    auto: {
+        enabled: boolean;
+        probes: HarnessProbe[];
+    };
 }
 
 export interface DoctorInput {
@@ -78,6 +84,8 @@ export interface DoctorInput {
     env?: NodeJS.ProcessEnv;
     providerFlag?: string;
     configPath?: string;
+    /** Discovery overrides (home, cachePath, runCli), mainly for tests. */
+    auto?: DiscoverOptions;
 }
 
 /** Parse "v24.13.0" or "22.13" into [major, minor]. */
@@ -265,6 +273,12 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
             reason: guardVerdict.reason,
         },
         config: inspectConfigFile(configPath),
+        // doctor is the "what would auto find" view, so it always probes fresh
+        // (and rewrites the cache); regular runs will read the cache instead.
+        auto: {
+            enabled: input.config.auto === true,
+            probes: discoverAuto({ env, fresh: true, ...input.auto }).probes,
+        },
     };
 }
 
@@ -329,6 +343,33 @@ export function renderDoctorReport(report: DoctorReport): string {
     lines.push(
         `  verdict: ${report.guard.verdict}${report.guard.matched ? ` (matched "${report.guard.matched}")` : ''}, ${report.guard.reason}`,
     );
+    lines.push('');
+
+    lines.push('Auto (borrowable local harness vision; off by default)');
+    lines.push(
+        `  enabled: ${report.auto.enabled}${report.auto.enabled ? '' : ' (turn on: modlens config set auto true)'}`,
+    );
+    for (const probe of report.auto.probes) {
+        if (!probe.cliFound) {
+            lines.push(`  ${probe.harness}: cli not found`);
+            continue;
+        }
+        const parts: string[] = [];
+        const shown = probe.visionModels.slice(0, 3).join(', ');
+        parts.push(
+            probe.visionModels.length === 0
+                ? 'no vision models'
+                : `${probe.visionModels.length} vision model(s): ${shown}${probe.visionModels.length > 3 ? ', ...' : ''}`,
+        );
+        if (probe.loggedIn !== undefined) {
+            parts.push(probe.loggedIn ? 'logged in' : 'no credentials found');
+        }
+        parts.push(`via ${probe.source}, ${probe.elapsedMs}ms`);
+        if (probe.error) {
+            parts.push(`error: ${probe.error}`);
+        }
+        lines.push(`  ${probe.harness}: ${parts.join(', ')}`);
+    }
     lines.push('');
 
     lines.push('Config file');
