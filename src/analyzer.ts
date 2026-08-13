@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { loadConfigFile, type ModlensConfig, resolveProviderSettings } from './config.ts';
 import { providerChain } from './providers/availability.ts';
 import {
@@ -277,8 +278,7 @@ export function resolveInput(input: string): ResolvedInput {
     }
 
     if (/^file:\/\//i.test(trimmed)) {
-        const localPath = decodeURI(trimmed.replace(/^file:\/\//i, ''));
-        return { source: path.resolve(localPath), kind: 'local' };
+        return { source: path.resolve(fileURLToPath(trimmed)), kind: 'local' };
     }
 
     return { source: path.resolve(trimmed), kind: 'local' };
