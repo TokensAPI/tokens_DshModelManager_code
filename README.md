@@ -67,6 +67,10 @@ Once installed, just chat. Paste an image or drop a path, ask anything, and the 
 
 Unedited runs, all driving a text-only DeepSeek-V4-Flash.
 
+The newest one first: pasting a screenshot straight into DeepSeek Harness on the `DeepSeek-V4-Flash (modlens vision)` variant. The paste keeps its native thumbnail, the trajectory shows the image arriving "already transcribed by the modlens vision bridge", and the answer walks the UI element by element.
+
+![Pasting an image straight into DeepSeek Harness, read through the modlens vision plugin](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-dsh-paste.jpg)
+
 A tweet screenshot in the Codex desktop app. It reads the author, the caption, the photo itself (down to what both people are wearing), the timestamp, and every engagement number: 5.4M views, 1.6K replies, 5.7K reposts, 116K likes.
 
 ![Text-only DeepSeek reading a tweet screenshot in full detail via ModLens](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.jpg)

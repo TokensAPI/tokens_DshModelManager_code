@@ -75,6 +75,10 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens
 
 以下均为原样记录，驱动的都是纯文本的 DeepSeek-V4-Flash。
 
+最新的一条放最前：在 DeepSeek Harness 里选 `DeepSeek-V4-Flash (modlens vision)` 变体直接粘贴截图。粘贴保留原生缩略图，轨迹里可见图片抵达时「已由 modlens 视觉桥转写」，回答逐个元素还原了界面。
+
+![在 DeepSeek Harness 中直接粘贴图片，经 modlens 视觉插件读取](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-dsh-paste.jpg)
+
 Codex 桌面 App 中识别一张推文截图。作者、配文、照片内容（连两人的穿着都在内）、发帖时间和全部互动数据（540 万浏览、1.6K 回复、5.7K 转发、11.6 万点赞）逐项读出。
 
 ![纯文本 DeepSeek 通过 ModLens 读出推文截图的全部细节](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.jpg)
