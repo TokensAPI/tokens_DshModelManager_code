@@ -18,7 +18,6 @@ modlens -i screenshot.png                       # local image
 modlens -i https://example.com/chart.png        # remote image
 modlens -i chart.png --prompt "focus on axes"   # extra focus
 modlens recover-paste                           # pull a pasted image into a file
-modlens clip capture                            # read the image on the clipboard (macOS)
 ```
 
 Output is a fixed JSON shape:
@@ -90,12 +89,6 @@ The default `-m` model depends on the provider:
 | `--cwd <path>` | Project directory the image was pasted in | current directory |
 
 Five providers: `antigravity-cli` (no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (uses your existing Claude subscription). Without `-p`, a run tries every provider that is set up, inline API providers first (5-10s), then the agents; the first good result wins and `meta.attempts` records the rest. Harnesses granted via `reuse.<harness>` contribute reused engines to the same regions (pi credentials inline, agent CLIs behind), with no priority over the user's own; details and the `guards` deny/allow lists are in [Configuration](configure.md).
-
-`modlens clip` reads the clipboard in two phases so a confirmed image can never be silently swapped:
-
-- `modlens clip capture [--prompt <text>] [--timeout <ms>] [-o <path>]`: freezes the clipboard image into an immutable snapshot (private dir under the system tmpdir, 30-minute TTL), analyzes it through the normal chain, and prints the evidence with `image: clipboard://sha256/<hash>` plus `meta.clipboard` (`snapshotId`, full `sha256`, `normalizedSha256` when TIFF was transcoded to PNG, `bytes`, mimes, `expiresAt`, macOS `revision`). A single capture process brackets the read with the pasteboard change count and discards torn reads (`CLIPBOARD_CAPTURE_RACE` after 3 attempts). Exactly one image is accepted: raw PNG/TIFF data or one copied image file (magic-byte checked); multiple items, text, or nothing each fail with their own identifier (`CLIPBOARD_MULTIPLE_IMAGES`, `CLIPBOARD_NO_IMAGE`, ...). macOS only for now; other platforms report `CLIPBOARD_TOOL_MISSING`.
-- `modlens clip read <snapshotId>`: returns the stored evidence for an earlier capture. Never re-reads the clipboard, so the same id always means the same image; expired or unknown ids fail with `CLIPBOARD_SNAPSHOT_EXPIRED`.
-- `modlens clip drop [<snapshotId>|--all]`: deletes snapshots now instead of waiting for the TTL sweep.
 
 Other subcommands:
 

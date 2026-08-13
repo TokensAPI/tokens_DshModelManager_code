@@ -28,8 +28,6 @@ The CLI prints one JSON object to stdout:
 
 `meta.attempts` lists every provider the failover chain tried this run, in order, with an `error` string on failures. `meta.warnings` carries routing notices: failovers, an ignored `extraBody`, and whose quota an auto-mode read spent.
 
-`modlens clip capture` emits the same shape with two provenance changes: `image` is the stable content identity `clipboard://sha256/<hash>` instead of a path (the working file lives inside the snapshot and should not travel), and `meta.clipboard` records the snapshot: `snapshotId`, `sha256` (raw bytes), `normalizedSha256` (only when TIFF was transcoded to PNG; never mixed with the raw hash), `bytes`, `sourceMime`, `normalizedMime`, `createdAt`, `expiresAt`, and on macOS the pasteboard `revision`. `modlens clip read <snapshotId>` replays this exact object.
-
 `result` is enforced by JSON schema where the provider supports it (agent CLIs via `--json-schema`, API providers via response-schema fields or a filled-in template), and the CLI verifies the shape itself before returning, so a structurally broken result fails over instead of reaching you:
 
 ```json

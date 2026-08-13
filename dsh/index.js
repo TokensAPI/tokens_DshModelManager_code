@@ -18,12 +18,6 @@ const CLI_PATH = fileURLToPath(new URL('../dist/main.js', import.meta.url))
 const OUTPUT_SCHEMA = JSON.parse(
   readFileSync(new URL('./vision-schema.json', import.meta.url), 'utf8'),
 )
-// Separate contract for clipboard reads: { snapshot, result } plus the
-// routing meta, not the bare vision result (a lockstep test pins its result
-// branch to the same source schema).
-const CLIPBOARD_SCHEMA = JSON.parse(
-  readFileSync(new URL('./clipboard-schema.json', import.meta.url), 'utf8'),
-)
 
 const CLI_TIMEOUT_MS = 180_000
 
@@ -46,17 +40,6 @@ export function apply(ctx, config = {}) {
   }
   if (config.visionProvider !== false) {
     registerVisionProvider(ctx, config)
-  }
-  // macOS is the only wired capture platform so far; on others the tool would
-  // be a guaranteed error and is better left out of the model's tool list.
-  if (config.readClipboard !== false && process.platform === 'darwin') {
-    try {
-      registerReadClipboard(ctx)
-    } catch (error) {
-      // Same stance as the vision provider: degrade loudly, never take the
-      // read_image tool down with a preview-era surface change.
-      console.error(`[modlens] read_clipboard registration skipped: ${error}`)
-    }
   }
   // Registered as a raw JSON-Schema tool definition (no dsh package imports:
   // the developer-preview registry accepts these and out-of-tree resolution
@@ -121,105 +104,6 @@ export function apply(ctx, config = {}) {
       return parsed.result
     },
   })
-}
-
-/**
- * Clipboard reads, gated behind the user's explicit approval. The system
- * clipboard is global mutable state outside the conversation, so every call
- * answers `ask` on dsh's native tools/pre-execute waterfall: with the
- * user-approval service composed the UI prompts, and with no approval channel
- * dsh itself denies (fail closed, verified against serviceAsk in the dsh
- * source). The two-phase protocol lives in the CLI: capture freezes the
- * clipboard into an immutable snapshot, and re-reads go by snapshotId,
- * never through the clipboard again. Concurrency stays default-serialized:
- * parallel captures would race each other over a single system slot.
- */
-function registerReadClipboard(ctx) {
-  ctx.on('tools/pre-execute', (exec, next) => {
-    if (exec.name !== 'read_clipboard') return next()
-    const snapshotId = exec.arguments?.snapshotId
-    return Promise.resolve({
-      kind: 'ask',
-      reason: typeof snapshotId === 'string' && snapshotId !== ''
-        ? `re-read the already-captured clipboard snapshot ${snapshotId}`
-        : 'read the image currently on your system clipboard',
-    })
-  })
-  ctx.tools.register({
-    name: 'read_clipboard',
-    description:
-      'Read the image on the user\'s system clipboard (a screenshot they just took, a copied image or image file) through the modlens vision bridge. Use when the user says the image is on the clipboard ("read my clipboard", "the screenshot I just took", 剪贴板, 我刚截的图) and no path or pasted image is in the conversation. Every call needs the user\'s approval. Returns { snapshot, result }: repeat result.summary back to the user first, since only they can confirm the right image was captured. For later reads of the SAME image pass snapshot.snapshotId instead of capturing again; a new image means a new capture. Errors name themselves: CLIPBOARD_NO_IMAGE means nothing is on the clipboard, CLIPBOARD_SNAPSHOT_EXPIRED means capture again and re-confirm.',
-    parameters: {
-      type: 'object',
-      properties: {
-        prompt: {
-          type: 'string',
-          description: 'Optional extra focus for the reading (capture only)',
-        },
-        snapshotId: {
-          type: 'string',
-          description:
-            'Re-read an existing snapshot by id; never touches the clipboard again',
-        },
-      },
-    },
-    output: {
-      schema: CLIPBOARD_SCHEMA,
-      render: (_args, value) => [{ type: 'text', text: renderClipboardEvidence(value) }],
-    },
-    timeoutMs: CLI_TIMEOUT_MS + 20_000,
-    presentCall: (args) => ({
-      card: 'generic',
-      title: 'read_clipboard',
-      kind: 'read',
-      rawInput: args,
-    }),
-    async execute(args, exec) {
-      const cli = process.env.MODLENS_DSH_CLI || CLI_PATH
-      const snapshotId = typeof args?.snapshotId === 'string' && args.snapshotId !== ''
-        ? args.snapshotId
-        : undefined
-      const cliArgs = snapshotId
-        ? [cli, 'clip', 'read', snapshotId]
-        : [cli, 'clip', 'capture', '--timeout', String(CLI_TIMEOUT_MS)]
-      if (!snapshotId && args?.prompt) {
-        cliArgs.push('--prompt', args.prompt)
-      }
-      const { stdout, stderr, code } = await run(process.execPath, cliArgs, exec.signal)
-      if (code !== 0) {
-        throw new Error(
-          `modlens clip failed (exit ${code}): ${(stderr || stdout).trim().slice(0, 500)}`,
-        )
-      }
-      let parsed
-      try {
-        parsed = JSON.parse(stdout)
-      } catch {
-        throw new Error(`modlens clip produced no JSON: ${stdout.trim().slice(0, 300)}`)
-      }
-      const { clipboard, ...meta } = parsed.meta ?? {}
-      if (!clipboard) {
-        throw new Error('modlens clip output carried no snapshot metadata')
-      }
-      if (!parsed.result) {
-        // A snapshot whose capture-time analysis failed has no stored
-        // evidence; only a fresh capture can produce some.
-        throw new Error(
-          `snapshot ${clipboard.snapshotId} holds no analysis evidence; capture the clipboard again`,
-        )
-      }
-      return { snapshot: clipboard, result: parsed.result, provider: parsed.provider, meta }
-    },
-  })
-}
-
-function renderClipboardEvidence(value) {
-  return [
-    renderEvidence(value.result),
-    '',
-    `[clipboard snapshot ${value.snapshot.snapshotId}, expires ${value.snapshot.expiresAt}; ` +
-      're-read the same image via read_clipboard with this snapshotId]',
-  ].join('\n')
 }
 
 /**

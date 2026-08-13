@@ -57,7 +57,3 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens
 ```
 
 This registers a `read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin touches only `ctx.tools.register` to keep that surface minimal.
-
-On macOS the plugin also registers `read_clipboard`: say "read my clipboard" (or 剪贴板 / 我刚截的图) to any wrapped-or-not model and it reads the image on the system clipboard through `modlens clip capture`, no model switch, no paste, no file. Every call goes through dsh's native approval gate — the UI asks before the clipboard is touched, and a session with no approval channel (plain headless) denies the read instead of running it silently. The result carries a `snapshot.snapshotId`; later reads of the same image go by that id and never touch the clipboard again. `readClipboard: false` in the plugin row turns the tool off.
-
-Three image paths, not one: pasting into the chat needs the `(modlens vision)` model variant selected (dsh's image admission checks the selected model's declared modalities before any plugin hook), while `read_image` (path/URL) and `read_clipboard` work under any model, native DeepSeek included, because the image never enters the message stream.
