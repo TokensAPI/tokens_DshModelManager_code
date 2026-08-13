@@ -1,6 +1,6 @@
 ---
 name: modlens
-description: "Plug-in vision for text-only models. Use whenever the user shares an image (local path, screenshot, photo, chart, document scan, or image URL) and the active model cannot see images or has no vision tool. Before the first read of a session, run `modlens guard`: a deny verdict means the active model has native vision and must read the image itself, not through this skill. Runs the modlens CLI to convert the image into structured JSON evidence: every word transcribed, layout regions, semantics, visual clues. Also use when the user asks how to install, configure, or switch modlens providers (Gemini API key, OpenAI-compatible endpoints, Claude API or Claude Code CLI)."
+description: "Plug-in vision for text-only models. Use whenever an image is in play and you cannot see its content: the user gives an image path, screenshot, photo, chart, document scan, or image URL, or a pasted image appears only as a placeholder such as `[Image #1]`, `[Unsupported Image]`, or an attachment you cannot view. Hard rule: a `[Image: source: <path>]` line with no visible image content means the harness stored the pasted image at that path and did not deliver it to you; run modlens on that path directly. If you can actually see the image, do not use this skill. When unsure, run `modlens guard` before the first read of a session: a deny verdict means the active model has native vision and must read the image itself. Runs the modlens CLI to convert the image into structured JSON evidence: every word transcribed, layout regions, semantics, visual clues. Also use when the user asks how to install, configure, or switch modlens providers (Gemini API key, OpenAI-compatible endpoints, Claude API or Claude Code CLI)."
 compatibility: Requires network access and one of node 22+/npx, bun/bunx, or a preinstalled modlens binary on PATH.
 allowed-tools: Bash
 ---
@@ -10,6 +10,7 @@ allowed-tools: Bash
 Use this skill when:
 
 - The user provides an image path or image URL and asks anything about it
+- A pasted image reaches you only as a placeholder: `[Image #1]`, `[Unsupported Image]`, a `[Image: source: <path>]` line, or an attachment whose content you cannot see
 - The active model has no native vision (text-only model in a coding agent)
 - You need the text inside an image, its layout, or a chart's structure as evidence before reasoning
 - The user asks how to configure modlens, get an API key for it, or switch its provider: follow `references/configure.md` and run the commands for them
@@ -110,9 +111,15 @@ Harnesses rarely hand you a clean path. First identify which harness you are in,
 
 - Extract the `path` value from the tag and run modlens on it. Pasted images live in a temp file Codex already created; a stripped image keeps its path tag next to the placeholder. Do NOT use `recover-paste` here: it detects Codex and refuses with this same guidance.
 
-**Claude Code, Pi, or OpenCode** (no path tag anywhere; the image reads as `[Unsupported Image]`, a bare `[Image #1]`, or an attachment you simply cannot see):
+**Claude Code with a `[Image: source: <path>]` line in the conversation**:
 
-- None of these harnesses writes pasted images to a regular temp file, but all of them persist user messages locally before any gateway strips them: Claude Code and Pi in session JSONL files (`~/.claude/projects/`, `~/.pi/agent/sessions/`), OpenCode in a SQLite database (`~/.local/share/opencode/opencode.db`, read via node:sqlite, needs Node 22.5+; Bun cannot load node:sqlite, so if the launcher resolved to bunx, OpenCode recovery needs a real Node install). Run `modlens recover-paste` from the project directory the conversation is happening in (add `--count <n>` for several images). It detects which harness it is running inside (process ancestry, then env fingerprints) and reads ONLY that harness's storage, so another tool's old sessions cannot leak in. In Claude Code it also targets your exact session automatically via the injected CLAUDE_CODE_SESSION_ID; `--session <id>` (e.g. from the ${CLAUDE_SESSION_ID} substitution) is only needed to override.
+- Newer Claude Code builds write every pasted image to `~/.claude/image-cache/<session-id>/` and, in the terminal (`cli`) entrypoint, inject that line as a user message. This is undocumented internal behavior (observed on 2.1.201 through 2.1.229; the VSCode and desktop entrypoints do not inject it), so treat it as a shortcut, not a guarantee.
+- If the file at that path exists, run modlens on it directly and skip `recover-paste` entirely. The file is Claude Code's own cache: read it, never delete or move it.
+- If the path is gone (the cache is cleaned after a while) or there is no such line, fall through to the next branch.
+
+**Claude Code, Pi, or OpenCode** (no usable path anywhere; the image reads as `[Unsupported Image]`, a bare `[Image #1]`, or an attachment you simply cannot see):
+
+- Whatever a gateway strips from the request, these harnesses persist user messages, image bytes included, in local session storage first: Claude Code and Pi in session JSONL files (`~/.claude/projects/`, `~/.pi/agent/sessions/`), OpenCode in a SQLite database (`~/.local/share/opencode/opencode.db`, read via node:sqlite, needs Node 22.5+; Bun cannot load node:sqlite, so if the launcher resolved to bunx, OpenCode recovery needs a real Node install). Run `modlens recover-paste` from the project directory the conversation is happening in (add `--count <n>` for several images). It detects which harness it is running inside (process ancestry, then env fingerprints) and reads ONLY that harness's storage, so another tool's old sessions cannot leak in. In Claude Code it also targets your exact session automatically via the injected CLAUDE_CODE_SESSION_ID; `--session <id>` (e.g. from the ${CLAUDE_SESSION_ID} substitution) is only needed to override.
 - The output is JSON with real file paths, ordered oldest to newest, so the LAST path is the user's most recent paste. Analyze that one first. Entries carry `filename` (the original attachment name) when the harness stored one; if the user's message or an error mentions a filename, match on it.
 - Run every command yourself: `recover-paste`, then `modlens -i <path>` on the recovered file, then answer from the JSON. Never ask the user to run modlens or to relay paths.
 - When the analysis is done, delete the recovered files: they are private copies of the user's pasted images sitting in the temp dir, and nothing cleans them up until the OS does. Remove the recovery output directory (each entry's `path` sits inside it), unless the user asked to keep the files.
