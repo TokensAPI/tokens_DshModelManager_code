@@ -1,6 +1,16 @@
 # Finding the image path in the chat
 
-Harnesses rarely hand you a clean path. Identify which harness you are in, then follow its branch. Never mix branches across harnesses.
+Harnesses rarely hand you a clean path. When the user says the image is on the clipboard, that branch comes first; otherwise identify which harness you are in and follow its branch. Never mix branches across harnesses.
+
+## The user says the image is on the clipboard
+
+"Read my clipboard", "the screenshot I just took", 我刚截的图, 剪贴板里的图: the image never entered the chat, so no recovery branch will find it. Read the clipboard directly:
+
+1. `modlens clip capture` (add `--prompt "<focus>"` when the user asked something specific). It freezes the clipboard into an immutable snapshot, analyzes it, and prints the evidence plus `meta.clipboard.snapshotId`.
+2. **Confirm before relying on it**: repeat `result.summary` back to the user in one line ("Your clipboard shows: ..."). The clipboard is global mutable state, and this readback is the only check that the captured image is the one the user meant. If they say it is the wrong image, ask them to re-copy and capture again.
+3. Later references to the SAME image go through `modlens clip read <snapshotId>`, never a second capture: the snapshot is immutable, so the evidence cannot drift even if the clipboard changed meanwhile. A `CLIPBOARD_SNAPSHOT_EXPIRED` error means the snapshot aged out (30 min): capture again and re-confirm.
+4. The user switching to a new image means a new `clip capture` plus a new confirmation, never reuse of the old snapshot.
+5. Every failure names itself (`CLIPBOARD_NO_IMAGE`, `CLIPBOARD_MULTIPLE_IMAGES`, `CLIPBOARD_CAPTURE_RACE`, ...): relay the message, it already says what to do. On platforms where capture is not wired yet (`CLIPBOARD_TOOL_MISSING`), ask the user to save the image to a file and analyze that path instead.
 
 ## Codex
 
