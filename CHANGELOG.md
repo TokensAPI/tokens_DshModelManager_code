@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.5.1 - 2026-08-13
+
+- `file://` inputs now resolve through Node's `fileURLToPath` instead of hand-stripping the prefix (issue #16). The old unwrap left a leading slash in front of Windows drive letters, so `file:///C:/Temp/shot.png` could resolve against the current working drive as `E:\C:\Temp\shot.png`, and `decodeURI` left reserved escapes such as the `%23` in a `#` filename undecoded. A URL produced by `pathToFileURL()` now round-trips back to the original local path, and a malformed file URL fails with Node's clear error instead of silently resolving to a wrong path. Thanks to @BruceWae for the report and a validated fix branch.
+
 ## 3.5.0 - 2026-08-12
 
 - The CLI no longer prints a `node:sqlite` ExperimentalWarning on every start. Bundling undici had hoisted its lazy `require('node:sqlite')` (for a cache store nothing here uses) into a top-level import. The build now keeps that require a runtime call.
