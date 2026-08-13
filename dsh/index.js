@@ -128,6 +128,15 @@ function registerVisionProvider(ctx, config) {
   })
   try {
     ctx.llm.registerAdapter([providerId], {
+      // Duck-typing LlmAdapter: providerInfo/providerRetryPolicy are base-class
+      // defaults a plain object must supply itself (their absence is exactly
+      // the silent registration failure this catch used to swallow).
+      providerInfo(provider) {
+        return { id: provider, name: 'DeepSeek (modlens vision)' }
+      },
+      providerRetryPolicy() {
+        return undefined
+      },
       async listModels(_provider, signal) {
         try {
           const models = await ctx.llm.listModels(upstream, signal)
@@ -149,8 +158,11 @@ function registerVisionProvider(ctx, config) {
         return ctx.llm.stream({ ...options, provider: upstream })
       },
     })
-  } catch {
-    // DUPLICATE_ADAPTER or a preview-era surface change: degrade silently.
+  } catch (error) {
+    // DUPLICATE_ADAPTER or a preview-era surface change: degrade to the
+    // read_image-only plugin, but say so in the harness log instead of
+    // vanishing (a swallowed TypeError here once hid a missing base method).
+    console.error(`[modlens] vision provider registration skipped: ${error}`)
   }
 }
 

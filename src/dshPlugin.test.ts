@@ -185,6 +185,13 @@ describe('dsh plugin vision provider (phase 3)', () => {
         };
         await loadWith(llm);
         expect(registered[0].providers).toEqual(['deepseek-modlens']);
+        const providerInfo = registered[0].adapter.providerInfo('deepseek-modlens') as {
+            id: string;
+            name: string;
+        };
+        expect(providerInfo.id).toBe('deepseek-modlens');
+        expect(providerInfo.name.length).toBeGreaterThan(0);
+        expect(registered[0].adapter.providerRetryPolicy('deepseek-modlens')).toBeUndefined();
         const adapter = registered[0].adapter;
         const models = (await adapter.listModels('deepseek-modlens')) as Array<{
             provider: string;
