@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { analyzeImage, resolveInput, runCommand } from './analyzer.ts';
 
@@ -20,8 +21,15 @@ describe('resolveInput', () => {
     });
 
     it('unwraps file:// URLs into local paths', () => {
-        const resolved = resolveInput('file:///tmp/shot.png');
-        expect(resolved).toEqual({ source: path.resolve('/tmp/shot.png'), kind: 'local' });
+        const filePath = path.join(os.tmpdir(), 'shot.png');
+        const resolved = resolveInput(pathToFileURL(filePath).href);
+        expect(resolved).toEqual({ source: path.resolve(filePath), kind: 'local' });
+    });
+
+    it('decodes escaped characters in file:// URLs', () => {
+        const filePath = path.join(os.tmpdir(), 'modlens shot #1.png');
+        const resolved = resolveInput(pathToFileURL(filePath).href);
+        expect(resolved).toEqual({ source: path.resolve(filePath), kind: 'local' });
     });
 
     it('rejects empty input', () => {
