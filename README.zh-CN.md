@@ -32,26 +32,26 @@ DeepSeek-V4-Flash 没有视觉能力，无法处理截图和图片。ModLens 借
 
 ## 亮点
 
-- **完全免费。** 默认走 Antigravity CLI 通道，无需 api key。配一个免费的 Gemini key 可将识别耗时降至 5 到 10 秒。
+- **从你机器上已有的开始。** 装着 Claude Code 且已登录的机器，装完即用，零配置：modlens 直接骑那个登录态。没有 Claude Code？Antigravity CLI 是免 key 的免费通道，配一个免费 Gemini key 可将识别耗时降至 5 到 10 秒。
 - **返回证据，而非印象。** 全文转录、按阅读顺序划分的版面区块、实体与关系列表，模型引用的是具体内容。
 - **一次安装，多端可用。** Claude Code、Codex、Pi、OpenCode 均经真机验证。
 
 ## 安装
 
-**第一步，准备一个视觉引擎（唯一需要你亲手做的）。** 推荐免费的 Gemini api key：到 [Google AI Studio](https://aistudio.google.com) 领取，约三分钟，无需信用卡。
+**第一步，交给你的 AI。** 把这句话发给它：
 
-也推荐申请其他平台免费的 openai api 兼容格式的 api key。
+> 按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill，完成后运行体检并把结果告诉我。
 
-想完全免注册就改装 Antigravity CLI，然后完成登录：
+安装会先盘点你机器上已有的东西。已登录的 Claude Code 就足够了：modlens 装完直接可用，零额外配置，体检报告会告诉你。
+
+**第二步，只在体检两手空空时，才需要你配一个免费引擎。** 推荐免费的 Gemini api key（到 [Google AI Studio](https://aistudio.google.com) 领取，约三分钟，无需信用卡），配上后每次识别 5 到 10 秒。其他平台的免费 openai 兼容 key 也行。想完全免注册就装 Antigravity CLI，然后完成登录：
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy                                                           # 浏览器完成登录后退出
 ```
 
-**第二步，剩下的交给你的 AI。** 把这句话发给它，用 Gemini api key 的话把 key 一起发：
-
-> 按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill，完成后运行体检并把结果告诉我。
+*预告：`modlens doctor` 现在还会盘点本机其他 harness CLI（Codex、OpenCode、Pi）里可触达的视觉模型，经由它们的自动路由开发中。*
 
 ## 用法
 
