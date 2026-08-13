@@ -52,11 +52,19 @@ export function opencodeDirectoryFilter(
 } {
     const normalized = resolvedCwd.replace(/\\/g, '/');
     const cwd = caseInsensitive ? normalized.toLowerCase() : normalized;
+    // Boundary prefix without doubling the separator: "/" stays "/", never
+    // "//" (filesystem roots are ancestors of everything under them). RTRIM
+    // mirrors the same rule for a stored root directory on the SQL side.
+    const prefix = `${cwd.replace(/\/+$/, '')}/`;
     const rawDir = `REPLACE(session.directory, '\\', '/')`;
     const dir = caseInsensitive ? `LOWER(${rawDir})` : rawDir;
+    const dirPrefix = `RTRIM(${dir}, '/') || '/'`;
     return {
-        clause: `(${dir} = ? OR SUBSTR(${dir}, 1, ?) = ? OR SUBSTR(?, 1, LENGTH(${dir}) + 1) = ${dir} || '/')`,
-        params: [cwd, cwd.length + 1, `${cwd}/`, cwd],
+        // SQLite SUBSTR counts Unicode characters while JS .length counts
+        // UTF-16 units, so the length parameter is measured in code points
+        // ([...str].length) or an emoji in a path would shift the boundary.
+        clause: `(${dir} = ? OR SUBSTR(${dir}, 1, ?) = ? OR SUBSTR(?, 1, LENGTH(${dirPrefix})) = ${dirPrefix})`,
+        params: [cwd, [...prefix].length, prefix, cwd],
     };
 }
 

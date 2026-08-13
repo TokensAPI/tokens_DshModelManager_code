@@ -179,7 +179,7 @@ function registerVisionProvider(ctx, config) {
         // attachment, since the same history rides every later step.
         const self = this
         return (async function* () {
-          const messages = await convertImagesToEvidence(ctx, options.messages, self)
+          const messages = await convertImagesToEvidence(ctx, options.messages, options.signal, self)
           yield* ctx.llm.stream({ ...options, provider: upstream, messages })
         })()
       },
@@ -244,7 +244,34 @@ function cachedEvidence(ctx, adapter, block) {
   return pending
 }
 
-async function convertImagesToEvidence(ctx, messages, adapter) {
+/**
+ * Wait on a shared promise without inheriting its lifetime: the caller's
+ * abort rejects THIS wait immediately, while the underlying read keeps
+ * running and lands in the cache for the retry.
+ */
+function abortableWait(promise, signal) {
+  if (!signal) return promise
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new Error('aborted'))
+      return
+    }
+    const onAbort = () => reject(signal.reason ?? new Error('aborted'))
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+async function convertImagesToEvidence(ctx, messages, signal, adapter) {
   const out = []
   for (const message of messages) {
     if (!Array.isArray(message.content) || !message.content.some((b) => b?.type === 'image')) {
@@ -257,7 +284,7 @@ async function convertImagesToEvidence(ctx, messages, adapter) {
         content.push(block)
         continue
       }
-      content.push(await cachedEvidence(ctx, adapter, block))
+      content.push(await abortableWait(cachedEvidence(ctx, adapter, block), signal))
     }
     out.push({ ...message, content })
   }

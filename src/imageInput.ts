@@ -222,7 +222,9 @@ export async function fetchRemoteImageBase64(
             const finalUrl = current.toString();
             const buffer = await readCapped(response, finalUrl);
             const contentType = response.headers.get('content-type') ?? undefined;
-            const mimeType = resolveImageMime(buffer, finalUrl, contentType);
+            // safeUrl: the sniff-failure error quotes its source, and the
+            // final URL can carry signed query tokens.
+            const mimeType = resolveImageMime(buffer, safeUrl(finalUrl), contentType);
             return { data: buffer.toString('base64'), mimeType };
         }
         throw new Error(`Too many redirects (max ${MAX_REDIRECTS}): ${safeUrl(url)}`);

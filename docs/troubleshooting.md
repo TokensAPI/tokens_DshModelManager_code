@@ -123,7 +123,7 @@ Note that the hard refusal above only fires on an actual `denyModels` match agai
 
 The dsh profile installed an old modlens version. The `dsh.bundle` declaration
 exists since 3.9.0, and pnpm v11's release-age gate (`minimumReleaseAge`,
-quarantining recently published versions; 10 days measured on pnpm 11.21) silently falls back to an older version when every
+quarantining recently published versions, with a 10-day window measured on pnpm 11.21) silently falls back to an older version when every
 recent one is inside the window. That old version has no bundle declaration,
 so dsh correctly treats it as a plain dependency and none of the tools appear.
 

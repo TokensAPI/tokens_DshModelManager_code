@@ -462,6 +462,48 @@ describe('dsh plugin request-time image conversion (v2)', () => {
         }
     });
 
+    it("one caller's abort neither kills the other waiter nor the shared read", async () => {
+        const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-abort-'));
+        const marker = path.join(cliDir, 'runs');
+        const cli = path.join(cliDir, 'cli.js');
+        fs.writeFileSync(
+            cli,
+            `const fs=require('fs');fs.appendFileSync(${JSON.stringify(marker)},'x');
+             setTimeout(()=>console.log(JSON.stringify({result:{summary:'S',ocr:{full_text:'SURVIVED'},uncertainty:[]}})),200)`,
+        );
+        try {
+            const adapter = await adapterWithCli(cli);
+            const controller = new AbortController();
+            const cancelled = (async () => {
+                for await (const _c of adapter.stream({
+                    ...imageRequest('att-a'),
+                    signal: controller.signal,
+                }) as AsyncIterable<unknown>) {
+                    // drain
+                }
+            })().then(
+                () => 'completed',
+                () => 'aborted',
+            );
+            const survivor = (async () => {
+                for await (const _c of adapter.stream(
+                    imageRequest('att-a'),
+                ) as AsyncIterable<unknown>) {
+                    // drain
+                }
+                return 'completed';
+            })();
+            setTimeout(() => controller.abort(), 30);
+            // The cancelled caller stops promptly; the other waiter and the
+            // underlying read are unaffected, and the read ran exactly once.
+            expect(await cancelled).toBe('aborted');
+            expect(await survivor).toBe('completed');
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
     it('joins concurrent readers of the same attachment into one CLI run', async () => {
         const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-conc-'));
         const marker = path.join(cliDir, 'runs');
@@ -509,5 +551,18 @@ describe('image format contract (CLI, skill, dsh in lockstep)', () => {
         expect(match).toBeTruthy();
         const skillExts = new Set((match as RegExpMatchArray)[1].split(', '));
         expect(skillExts).toEqual(new Set(Object.keys(MIME_BY_EXT)));
+    });
+});
+
+describe('format mapping lockstep', () => {
+    it('every MEDIA_EXT value maps back to its mime through the CLI table', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            MEDIA_EXT: Record<string, string>;
+        };
+        const { MIME_BY_EXT } = await import('./imageInput.ts');
+        for (const [mime, ext] of Object.entries(plugin.MEDIA_EXT)) {
+            expect(MIME_BY_EXT[ext]).toBe(mime);
+        }
     });
 });
