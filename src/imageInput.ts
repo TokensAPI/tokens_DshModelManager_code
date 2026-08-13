@@ -90,11 +90,18 @@ export function mimeTypeFor(source: string): string {
     return extMime(source) ?? 'image/jpeg';
 }
 
+// The only types the sniffer cannot recognize; everything else must prove
+// itself through its file header.
+const UNSNIFFABLE_MIME = new Set(['image/heic', 'image/heif']);
+
 /**
- * Decide the media type from the bytes first, then fall back to the extension
- * or the server's content-type. The file header wins because it cannot be
- * faked by renaming a file or by a lying server, and a type outside the allow
- * list is rejected rather than silently relabelled image/jpeg.
+ * Decide the media type from the bytes first. The file header wins because it
+ * cannot be faked by renaming a file or by a lying server, so when sniffing
+ * fails, a sniffable type is refused outright: content that does not carry a
+ * PNG/JPEG/GIF/WebP header is not that type no matter what the URL extension
+ * or content-type claims (an `.png` URL serving HTML must not be encoded and
+ * uploaded as an image). Only heic/heif, which this sniffer cannot identify,
+ * may ride on the extension or the declared type.
  */
 export function resolveImageMime(buffer: Buffer, source: string, contentType?: string): string {
     const sniffed = sniffImageMime(buffer);
@@ -103,11 +110,11 @@ export function resolveImageMime(buffer: Buffer, source: string, contentType?: s
     }
     const declared = contentType?.split(';')[0]?.trim().toLowerCase();
     const candidate = extMime(source) ?? (declared?.startsWith('image/') ? declared : null);
-    if (candidate && ALLOWED_MIME.has(candidate)) {
+    if (candidate && UNSNIFFABLE_MIME.has(candidate)) {
         return candidate;
     }
     throw new Error(
-        `Unsupported or unrecognized image type for ${source}. Allowed: ${[...ALLOWED_MIME].join(', ')}.`,
+        `Content of ${source} does not look like a supported image (its bytes match none of: png, jpeg, gif, webp; heic/heif pass by extension). Allowed types: ${[...ALLOWED_MIME].join(', ')}.`,
     );
 }
 

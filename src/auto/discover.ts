@@ -10,6 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { globMatch } from '../guard/rules.ts';
 import { findOnPath } from '../providers/availability.ts';
+import { redactSecrets } from '../util/redact.ts';
 
 /**
  * Mainstream vision-capable model names, as glob patterns against the bare
@@ -189,7 +190,10 @@ function probeCodex(env: NodeJS.ProcessEnv, home: string): HarnessProbe {
                 loggedIn,
                 visionModels: [],
                 source: 'none' as const,
-                error: error instanceof Error ? error.message : String(error),
+                error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(
+                    0,
+                    200,
+                ),
             };
         }
     });
@@ -278,7 +282,10 @@ function probePi(env: NodeJS.ProcessEnv, home: string): HarnessProbe {
                 cliPath,
                 visionModels: [],
                 source: 'none' as const,
-                error: error instanceof Error ? error.message : String(error),
+                error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(
+                    0,
+                    200,
+                ),
             };
         }
     });
@@ -310,7 +317,10 @@ function probeOpencode(
                 cliPath,
                 visionModels: [],
                 source: 'none' as const,
-                error: error instanceof Error ? error.message : String(error),
+                error: redactSecrets(error instanceof Error ? error.message : String(error)).slice(
+                    0,
+                    200,
+                ),
             };
         }
     });

@@ -15,6 +15,7 @@ import {
     type VisionProvider,
 } from './providers/index.ts';
 import { missingSchemaFields } from './schema.ts';
+import { redactSecrets } from './util/redact.ts';
 
 export interface AnalyzeOptions {
     input: string;
@@ -525,10 +526,14 @@ export function runCommand(
                 // exit code tells the user nothing actionable (issue #3).
                 const explained =
                     describeFailure?.({ stdout, stderr, code, startedAt: runStartedAt }) ?? null;
+                // Both branches can quote subprocess stderr, and a CLI in a
+                // broken auth state loves to print its token there.
                 reject(
                     new Error(
-                        explained ??
-                            `${providerName} provider failed with code ${code}.${stderr ? ` stderr: ${stderr.trim()}` : ''}`,
+                        redactSecrets(
+                            explained ??
+                                `${providerName} provider failed with code ${code}.${stderr ? ` stderr: ${stderr.trim()}` : ''}`,
+                        ),
                     ),
                 );
                 return;

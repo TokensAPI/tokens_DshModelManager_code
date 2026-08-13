@@ -10,7 +10,7 @@ let tmpImage: string;
 beforeAll(() => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-gem-'));
     tmpImage = path.join(dir, 'x.png');
-    fs.writeFileSync(tmpImage, Buffer.from('fake'));
+    fs.writeFileSync(tmpImage, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 });
 
 afterEach(() => {
@@ -53,7 +53,7 @@ describe('executeGeminiApi', () => {
         const body = JSON.parse(String(calls[0].init.body));
         expect(body.generationConfig.responseJsonSchema.required).toContain('summary');
         expect(body.contents[0].parts[0].inline_data.data).toBe(
-            Buffer.from('fake').toString('base64'),
+            Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64'),
         );
         expect(parsed.result).toEqual(structured);
         expect(parsed.meta.usage).toEqual({ totalTokenCount: 9 });

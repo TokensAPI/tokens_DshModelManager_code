@@ -7,6 +7,7 @@ import {
     MAX_REMOTE_IMAGE_BYTES,
     mimeTypeFor,
     readLocalImageBase64,
+    resolveImageMime,
 } from './imageInput.ts';
 
 // The download path resolves every hostname before fetching (see net/network),
@@ -42,6 +43,35 @@ describe('mimeTypeFor', () => {
     });
 });
 
+describe('resolveImageMime', () => {
+    const html = Buffer.from('<!doctype html><html>not an image</html>');
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+
+    it('refuses sniffable types whose bytes fail the header check', () => {
+        // An .png URL serving HTML must not be relabelled image/png by its
+        // extension or by a lying content-type header.
+        expect(() => resolveImageMime(html, 'https://x/not-image.png')).toThrow(
+            /does not look like a supported image/,
+        );
+        expect(() => resolveImageMime(html, 'https://x/not-image.png', 'image/png')).toThrow(
+            /does not look like a supported image/,
+        );
+        expect(() => resolveImageMime(html, '/tmp/renamed.jpg')).toThrow(
+            /does not look like a supported image/,
+        );
+    });
+
+    it('lets only the unsniffable heic/heif ride on extension or declared type', () => {
+        expect(resolveImageMime(html, '/tmp/photo.heic')).toBe('image/heic');
+        expect(resolveImageMime(html, 'https://x/pic', 'image/heif')).toBe('image/heif');
+    });
+
+    it('trusts the header over everything when it matches', () => {
+        expect(resolveImageMime(png, 'https://x/no-extension')).toBe('image/png');
+        expect(resolveImageMime(png, '/tmp/misnamed.jpg')).toBe('image/png');
+    });
+});
+
 describe('readLocalImageBase64', () => {
     const dirs: string[] = [];
     afterEach(() => {
@@ -57,10 +87,10 @@ describe('readLocalImageBase64', () => {
         return file;
     }
 
-    it('reads bytes and pairs them with the extension mime', () => {
-        const image = readLocalImageBase64(tmpFile('x.png', Buffer.from('bytes')));
+    it('reads bytes and pairs them with the sniffed mime', () => {
+        const image = readLocalImageBase64(tmpFile('x.png', PNG_MAGIC));
         expect(image.mimeType).toBe('image/png');
-        expect(Buffer.from(image.data, 'base64').toString()).toBe('bytes');
+        expect(Buffer.from(image.data, 'base64')).toEqual(PNG_MAGIC);
     });
 
     it('trusts the file header over a faked extension', () => {
@@ -79,7 +109,7 @@ describe('readLocalImageBase64', () => {
 
     it('rejects a type that is neither recognizable nor allow-listed', () => {
         expect(() => readLocalImageBase64(tmpFile('mystery.bin', Buffer.from('nope')))).toThrow(
-            /Unsupported or unrecognized image type/,
+            /does not look like a supported image/,
         );
     });
 });
@@ -199,7 +229,7 @@ describe('fetchRemoteImageBase64', () => {
                 }),
         );
         await expect(fetchRemoteImageBase64('https://x.example/doc', 1000)).rejects.toThrow(
-            /Unsupported or unrecognized image type/,
+            /does not look like a supported image/,
         );
     });
 });

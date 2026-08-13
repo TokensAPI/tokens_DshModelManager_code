@@ -30,8 +30,6 @@ export function cwdMatches(recorded: string, wanted: string, bothDirections = fa
  * directory match.
  */
 export function transcriptBelongsTo(lines: string[], cwd: string, bothDirections = false): boolean {
-    let sawCwd = false;
-
     for (const line of lines) {
         if (!line.includes('"cwd"')) {
             continue;
@@ -41,7 +39,6 @@ export function transcriptBelongsTo(lines: string[], cwd: string, bothDirections
             if (typeof recorded !== 'string') {
                 continue;
             }
-            sawCwd = true;
             // Any matching line is enough: a session can start in a
             // subdirectory and one early line must not settle the question,
             // which is what returning on the first cwd used to do.
@@ -53,8 +50,12 @@ export function transcriptBelongsTo(lines: string[], cwd: string, bothDirections
         }
     }
 
-    // No cwd recorded at all: the slug is the only evidence we have.
-    return !sawCwd;
+    // No cwd recorded at all: the slug is the only evidence left, and slugs
+    // collide (/tmp/a.b and /tmp/a-b are the same slug). Fail closed: a wrong
+    // recovery would hand another project's paste to the model, while a missed
+    // one only asks the user for the file. An explicit --transcript skips this
+    // check entirely, so the escape hatch for cwd-less transcripts survives.
+    return false;
 }
 
 /** Read a transcript once: callers need both its cwd lines and its images. */

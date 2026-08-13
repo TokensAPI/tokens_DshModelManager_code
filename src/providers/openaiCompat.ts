@@ -7,6 +7,7 @@ import { buildVisionPrompt, JSON_TEMPLATE_INSTRUCTION } from '../prompt.ts';
 import { missingSchemaFields } from '../schema.ts';
 import { mergeExtraBody } from '../util/extraBody.ts';
 import { extractJson, truncate } from '../util/json.ts';
+import { redactSecrets } from '../util/redact.ts';
 import type {
     BuildProviderInvocationOptions,
     ProviderParsedOutput,
@@ -70,7 +71,9 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
 
     if (!response.ok) {
         const body = await response.text();
-        throw new Error(`OpenAI-compatible API error ${response.status}: ${truncate(body)}`);
+        throw new Error(
+            `OpenAI-compatible API error ${response.status}: ${truncate(redactSecrets(body, [apiKey]))}`,
+        );
     }
 
     const payload = (await response.json()) as {

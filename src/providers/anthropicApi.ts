@@ -5,6 +5,7 @@ import { buildVisionPrompt } from '../prompt.ts';
 import { VISION_RESULT_SCHEMA } from '../schema.ts';
 import { mergeExtraBody } from '../util/extraBody.ts';
 import { truncate } from '../util/json.ts';
+import { redactSecrets } from '../util/redact.ts';
 import type {
     BuildProviderInvocationOptions,
     ProviderParsedOutput,
@@ -90,7 +91,9 @@ Report your findings by calling the ${TOOL_NAME} tool.`;
 
     if (!response.ok) {
         const body = await response.text();
-        throw new Error(`Anthropic API error ${response.status}: ${truncate(body)}`);
+        throw new Error(
+            `Anthropic API error ${response.status}: ${truncate(redactSecrets(body, [apiKey]))}`,
+        );
     }
 
     const payload = (await response.json()) as {
