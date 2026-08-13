@@ -133,7 +133,8 @@ describe('guards config', () => {
         expect(loadConfigFile(file).borrow).toEqual({ pi: false });
         expect(() => setConfigValue('borrow.codex', 'maybe', file)).toThrow('true or false');
         expect(() => setConfigValue('borrow.grok', 'true', file)).toThrow('Unknown borrow');
-        expect(() => setConfigValue('auto', 'true', file)).toThrow(/borrow/);
+        // auto never shipped; it is just an unknown key like any other.
+        expect(() => setConfigValue('auto', 'true', file)).toThrow('Invalid config key');
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
