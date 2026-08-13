@@ -1,3 +1,10 @@
+---
+summary: 'CLI manual: flags, the failover chain, guard and doctor subcommands, config keys'
+read_when:
+  - Running the CLI by hand instead of through the skill
+  - Looking up a flag, a default model, or a subcommand
+---
+
 # ModLens CLI manual
 
 The skill drives this CLI through its launcher. This page is for running it directly.
