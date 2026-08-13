@@ -105,17 +105,24 @@ your harness's skill directory): fall back to Path A, which needs only git.
 
 ## Step 3: Give it one vision engine
 
-ModLens needs exactly one working vision engine. The README asks the user to
-prepare one before handing you this install, so check what is already on the
-machine before setting anything up:
+ModLens needs exactly one working vision engine, and the machine often already
+has one, so always check before setting anything up:
 
 ```bash
 bash ~/.claude/skills/modlens/scripts/run.sh doctor   # replace with your TARGET
 ```
 
-If the report already shows a selected provider marked `[ok]`, an engine is
-ready: skip to Step 4. Otherwise pick one path below. If the user handed you a
-Gemini API key, use Path 1 with it now.
+If the report shows any provider marked `[ok]`, an engine is ready: skip to
+Step 4. In particular, a machine with Claude Code signed in always has
+`claude-cli` ready, so modlens works there with zero further setup. That route
+is the slow one (a 20-45 second agent loop that also spends the user's Claude
+subscription), which is fine as a starting point: tell the user it already
+works, and that a free Gemini key (Path 1) brings a read down to 5-10 seconds
+whenever they want the upgrade.
+
+If nothing is `[ok]`, pick one path below. If the user handed you a Gemini API
+key, use Path 1 with it now. If they already have an OpenAI-compatible
+endpoint, use Path 3.
 
 ### Path 1: Gemini API key (recommended; works in headless sessions)
 
@@ -184,6 +191,19 @@ those machines use Path 1 instead. Handle it in three idempotent steps:
 > agy is usable only if the tool ships a native Windows build on PATH (see
 > "Platform support" in the README). The Gemini key path is pure HTTP and works
 > the same on Windows.
+
+### Path 3: An OpenAI-compatible endpoint the user already has
+
+```bash
+bash ~/.claude/skills/modlens/scripts/run.sh config set openai.baseUrl <url>
+bash ~/.claude/skills/modlens/scripts/run.sh config set openai.apiKey <key>
+bash ~/.claude/skills/modlens/scripts/run.sh config set openai.model <model>
+bash ~/.claude/skills/modlens/scripts/run.sh config set provider openai
+```
+
+All three fields are required, and the model must accept image input (a
+text-only coding model on the same platform will not work). Recipes for common
+platforms live in the skill's `references/configure.md`.
 
 ---
 

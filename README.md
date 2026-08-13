@@ -32,26 +32,26 @@ Something broken, or something missing? [Open an issue](https://github.com/liust
 
 ## Highlights
 
-- **Completely free.** The default channel is Antigravity CLI, no API key needed. A free Gemini key brings a read down to 5-10 seconds.
+- **Starts with what you already have.** A machine with Claude Code signed in works immediately, zero setup: modlens rides that login. No Claude Code? Antigravity CLI is a free no-key channel, and a free Gemini key brings a read down to 5-10 seconds.
 - **Evidence, not an impression.** Full transcription, reading-order layout regions, entity and relation lists. The model quotes specifics.
 - **Install once, use everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
 
 ## Installation
 
-**Step 1, set up a vision engine (the only part that needs your hands).** The recommended choice is a free Gemini API key: get one at [Google AI Studio](https://aistudio.google.com), about three minutes, no credit card.
+**Step 1, hand it to your AI.** Send it this line:
 
-A free API key in the OpenAI-compatible format from another platform is also a good option.
+> Install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md, then run the health check and tell me the result.
 
-To avoid any sign-up, install Antigravity CLI instead, then sign in:
+The install starts by checking what your machine already has. An existing Claude Code login is enough: modlens works right away with zero extra setup, and the health check will say so.
+
+**Step 2, only if the health check comes back empty, set up a free engine.** The recommended choice is a free Gemini API key (about three minutes at [Google AI Studio](https://aistudio.google.com), no credit card), which also makes every read 5-10 seconds. A free OpenAI-compatible key from another platform works too. To avoid any sign-up, install Antigravity CLI instead, then sign in:
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy                                                           # sign in, then exit
 ```
 
-**Step 2, hand the rest to your AI.** Send it this line, along with the key if you chose the Gemini API key:
-
-> Install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md, then run the health check and tell me the result.
+*Preview: `modlens doctor` also inventories vision-capable models reachable through other local harness CLIs (Codex, OpenCode, Pi). Automatic routing through them is in development.*
 
 ## Usage
 
