@@ -44,7 +44,7 @@ DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助�
 
 > 按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill，完成后运行体检并把结果告诉我。
 
-安装会先盘点你机器上已有的东西。Claude Code、Codex、OpenCode 或 Pi 里任何一个已有的登录态都可能就够了：modlens 借用前一定先征得你同意，体检报告会说清现状。
+安装会先盘点你机器上已有的东西。Claude Code、Codex、OpenCode 或 Pi 里任何一个已有的登录态都可能就够了：modlens 复用前一定先征得你同意，体检报告会说清现状。
 
 **第二步，只在体检两手空空时，才需要你配一个免费引擎。** 推荐免费的 Gemini api key（到 [Google AI Studio](https://aistudio.google.com) 领取，约三分钟，无需信用卡），配上后每次识别 5 到 10 秒。其他平台的免费 openai 兼容 key 也行。想完全免注册就装 Antigravity CLI，然后完成登录：
 
@@ -53,7 +53,7 @@ curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy                                                           # 浏览器完成登录后退出
 ```
 
-安装还会盘点本机其他 harness CLI（Codex、OpenCode、Pi）里可触达的视觉能力，并逐个询问是否允许 modlens 借用。获准的登录态与你自己配的引擎平级入池，每次借用都会在结果里标明花的是谁的额度。
+安装还会盘点本机其他 harness CLI（Codex、OpenCode、Pi）里可触达的视觉能力，并逐个询问是否允许 modlens 复用。获准的登录态与你自己配的引擎平级入池，每次复用都会在结果里标明花的是谁的额度。
 
 ## 用法
 
