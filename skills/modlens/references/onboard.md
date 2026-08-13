@@ -33,7 +33,7 @@ Consent rules:
 
 | The user agreed to | Run |
 | :-- | :-- |
-| Reusing a harness CLI | `modlens config set reuse.<claude\|codex\|opencode\|pi> true` (one per consent) |
+| Reusing a harness CLI | `modlens config set reuse.<claude\|codex\|opencode\|pi\|grok> true` (one per consent) |
 | A Gemini key they handed over | `modlens config set gemini-api.apiKey <key>` |
 | An OpenAI-compatible endpoint | `config set openai.baseUrl / openai.apiKey / openai.model` |
 | Guard rules for their text-only model | `modlens config set guards.allowModels '["<pattern>"]'` (patterns: `references/configure.md`) |
