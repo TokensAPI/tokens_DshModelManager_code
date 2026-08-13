@@ -183,6 +183,24 @@ describe('fetchRemoteImageBase64', () => {
         ).rejects.toThrow(/embedded credentials/);
     });
 
+    it('never quotes query strings (signed tokens) in download errors', async () => {
+        vi.stubGlobal(
+            'fetch',
+            async () =>
+                new Response('<html>definitely not an image</html>', {
+                    status: 200,
+                    headers: { 'content-type': 'text/html' },
+                }),
+        );
+        const error = await fetchRemoteImageBase64(
+            'https://img.example/doc.png?X-Amz-Signature=TOP_SECRET_123',
+            1000,
+        ).catch((e: Error) => e.message);
+        expect(error).toContain('does not look like a supported image');
+        expect(error).toContain('https://img.example/doc.png');
+        expect(error).not.toContain('TOP_SECRET_123');
+    });
+
     it('rejects a download whose content-length is over the limit', async () => {
         vi.stubGlobal(
             'fetch',
