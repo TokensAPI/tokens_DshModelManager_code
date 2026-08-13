@@ -61,21 +61,21 @@ Once installed, just chat. Paste an image or drop a path, ask anything, and the 
 
 Unedited runs, all driving a text-only DeepSeek-V4-Flash.
 
-A tweet screenshot in the Codex desktop app. It reads the caption, the engagement numbers (2.9K replies, 270K likes, 5M views), even the image's alt text. Where the resolution runs out, it says so instead of guessing.
+A tweet screenshot in the Codex desktop app. It reads the author, the caption, the photo itself (down to what both people are wearing), the timestamp, and every engagement number: 5.4M views, 1.6K replies, 5.7K reposts, 116K likes.
 
-![Text-only DeepSeek reading a tweet screenshot in full detail via ModLens](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.png)
+![Text-only DeepSeek reading a tweet screenshot in full detail via ModLens](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.jpg)
 
-Three images pasted at once. The model queues them up and reads them one by one, design intent included.
+Three images pasted at once. The model reads them one by one, spots that they belong to one visual family, and describes each illustration's content and style.
 
-![Three images dropped together, read one by one](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-batch.png)
+![Three images dropped together, read one by one](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-batch.jpg)
 
-The stress test: a scatter plot of 128 models. It identifies the chart, both axes, the log scale, and picks the one highlighted point out of the crowd with its coordinates (about $0.028, intelligence score 50). Dense charts are where vision models most often fail.
+The stress test: a scatter plot comparing 128 AI models. It reads both axes, the log scale, the per-provider color coding, the highlighted region, and every DeepSeek model called out with dashed markers. Dense charts are where vision bridges most often fail.
 
-![The 128-model scatter plot, highlighted point read with exact coordinates](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.png)
+![The 128-model scatter plot read in full: axes, log scale, and highlighted region](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.jpg)
 
-And the paste path, end to end: Claude Code on a DeepSeek gateway, two images pasted straight into the chat. The UI shows nothing but placeholders, the skill recovers both from session storage and reads them, down to the color values on a slide cover.
+And the paste path, end to end, in a Claude Code terminal on DeepSeek. The pasted image arrives as a path rather than pixels, the skill triggers on its own, the guard confirms the model truly has no vision, and the slide's full content comes back: titles, layout, background, plus an honestly stated uncertainty about the truncated filename.
 
-![Two pasted images recovered from session storage and read in a gateway Claude Code session](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.png)
+![The skill triggering on its own in a DeepSeek Claude Code session and reading a pasted slide](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.jpg)
 
 ## Documentation
 

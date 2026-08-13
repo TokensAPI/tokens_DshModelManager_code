@@ -61,21 +61,21 @@ agy                                                           # 浏览器完成�
 
 以下均为原样记录，驱动的都是纯文本的 DeepSeek-V4-Flash。
 
-Codex 桌面 App 中识别一张推文截图。配文、互动数据（2.9K 回复、270K 点赞、5M 浏览）以及图片的 alt 文字全部读出。分辨率不足的部分明确说明无法确认，没有编造。
+Codex 桌面 App 中识别一张推文截图。作者、配文、照片内容（连两人的穿着都在内）、发帖时间和全部互动数据（540 万浏览、1.6K 回复、5.7K 转发、11.6 万点赞）逐项读出。
 
-![纯文本 DeepSeek 通过 ModLens 读出推文截图的全部细节](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.png)
+![纯文本 DeepSeek 通过 ModLens 读出推文截图的全部细节](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.jpg)
 
-一次粘贴三张图。模型依次读取，包括对设计意图的判断。
+一次粘贴三张图。模型逐张读取，认出三张同属一个视觉家族，并分别描述每张插画的内容和风格。
 
-![一次粘贴三张图，逐张读取](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-batch.png)
+![一次粘贴三张图，逐张读取](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-batch.jpg)
 
-压力测试：128 个模型的散点图。图表类型、双轴定义、对数刻度全部识别，并从密集点群中准确读出高亮点的位置（成本约 $0.028，智能指数 50）。密集图表是视觉模型最容易出错的场景。
+压力测试：128 个模型的对比散点图。双轴定义、对数刻度、按厂商的配色、高亮区域，以及虚线标注的每一个 DeepSeek 型号全部识别。密集图表是视觉方案最容易出错的场景。
 
-![128 个模型的散点图，精确读出高亮点的坐标](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.png)
+![128 个模型的散点图完整读出：双轴、对数刻度与高亮区域](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.jpg)
 
-粘贴链路的端到端记录：接入 DeepSeek 的 Claude Code，两张图直接粘贴进对话。界面中只显示占位符，skill 从会话存储恢复两张图片并逐一读出，包括 PPT 封面的配色色值。
+粘贴链路的端到端记录：接入 DeepSeek 的 Claude Code 终端里，粘贴的图片以路径而非像素到达，skill 自动触发，guard 确认当前模型确实没有视觉后才开读，PPT 封面幻灯的标题、版式、背景逐项读出，连文件名被截断这个不确定点都如实说明。
 
-![接入 DeepSeek 的 Claude Code 中，粘贴的两张图被恢复并逐张读出](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.png)
+![接入 DeepSeek 的 Claude Code 会话中 skill 自动触发并读出粘贴的幻灯片](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.jpg)
 
 ## 文档
 
