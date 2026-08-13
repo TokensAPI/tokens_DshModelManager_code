@@ -52,8 +52,8 @@ describe('dsh plugin auto-read (phase 2)', () => {
             tools: { register: () => {} },
             attachments: {
                 readImage: async () => ({
-                    bytes: new Uint8Array([1, 2, 3]),
-                    mediaType: 'image/png',
+                    data: new Uint8Array([1, 2, 3]),
+                    ref: { mediaType: 'image/png' },
                 }),
             },
             on: (event: string, fn: Handler) => {
