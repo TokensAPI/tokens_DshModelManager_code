@@ -51,7 +51,8 @@ describe('codexCliRoute', () => {
         expect(args[args.indexOf('--') + 1]).toBe(args[args.length - 1]);
         expect(args[args.length - 1]).toContain('attached');
         expect(args[args.length - 1]).toContain('"ocr"');
-        expect(invocation?.cwd).toBe('/tmp/work');
+        // The route resolves workdir, so on Windows '/tmp/work' gains a drive.
+        expect(invocation?.cwd).toBe(path.resolve('/tmp/work'));
     });
 
     it('omits -m for the official default model and refuses remote URLs', () => {
@@ -165,35 +166,41 @@ describe('piReusedRoutes', () => {
         return home;
     }
 
-    it('wraps a credentialed vision model over the matching inline provider', async () => {
-        const home = piHome();
-        const env = { PATH: pathWith({ pi: '#!/bin/sh\necho sk-borrowed-key\n' }) };
-        const seen: BuildProviderInvocationOptions[] = [];
-        const fakeTarget: VisionProvider = {
-            name: 'openai',
-            defaultModel: 'x',
-            execute: async (options) => {
-                seen.push(options);
-                return {
-                    result: { summary: 'done' },
-                    meta: { conversationId: null, durationSeconds: null, usage: null },
-                };
-            },
-        };
-        const { inline: routes } = piRoutes(home, env, { openai: fakeTarget });
-        expect(routes).toHaveLength(1);
-        expect(routes[0].name).toBe('pi:openai');
-        expect(routes[0].defaultModel).toBe('gpt-5.6-sol');
-        expect(routes[0].reuseNote).toContain('pi');
+    // The fake pi is a sh script; execFileSync cannot spawn it on Windows.
+    // The logic under test (key fetch + settings injection) is platform-free
+    // and stays covered by the POSIX matrix.
+    it.skipIf(process.platform === 'win32')(
+        'wraps a credentialed vision model over the matching inline provider',
+        async () => {
+            const home = piHome();
+            const env = { PATH: pathWith({ pi: '#!/bin/sh\necho sk-borrowed-key\n' }) };
+            const seen: BuildProviderInvocationOptions[] = [];
+            const fakeTarget: VisionProvider = {
+                name: 'openai',
+                defaultModel: 'x',
+                execute: async (options) => {
+                    seen.push(options);
+                    return {
+                        result: { summary: 'done' },
+                        meta: { conversationId: null, durationSeconds: null, usage: null },
+                    };
+                },
+            };
+            const { inline: routes } = piRoutes(home, env, { openai: fakeTarget });
+            expect(routes).toHaveLength(1);
+            expect(routes[0].name).toBe('pi:openai');
+            expect(routes[0].defaultModel).toBe('gpt-5.6-sol');
+            expect(routes[0].reuseNote).toContain('pi');
 
-        await routes[0].execute?.(BUILD_BASE);
-        expect(seen[0].settings).toMatchObject({
-            apiKey: 'sk-borrowed-key',
-            baseUrl: 'https://api.example.com/v1',
-            model: 'gpt-5.6-sol',
-        });
-        fs.rmSync(home, { recursive: true, force: true });
-    });
+            await routes[0].execute?.(BUILD_BASE);
+            expect(seen[0].settings).toMatchObject({
+                apiKey: 'sk-borrowed-key',
+                baseUrl: 'https://api.example.com/v1',
+                model: 'gpt-5.6-sol',
+            });
+            fs.rmSync(home, { recursive: true, force: true });
+        },
+    );
 
     it('returns no routes without credentials, a store, or a pi binary', () => {
         const home = piHome();
