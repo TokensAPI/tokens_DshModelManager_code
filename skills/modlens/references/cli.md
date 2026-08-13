@@ -30,12 +30,14 @@ Output is a fixed JSON shape:
     "model": "gemini-3.6-flash",
     "conversationId": null,
     "durationSeconds": 6.4,
-    "usage": { "promptTokenCount": 1234, "candidatesTokenCount": 567 }
+    "usage": { "promptTokenCount": 1234, "candidatesTokenCount": 567 },
+    "attempts": [{ "provider": "gemini-api", "ok": true, "durationSeconds": 6.4 }],
+    "warnings": []
   }
 }
 ```
 
-`meta` records how the result was produced: when (`generatedAt`), which `model`, the provider's `conversationId` when it has one, wall-clock `durationSeconds`, and the raw `usage` the provider reported (shape varies by provider, `null` when none).
+`meta` records how the result was produced: when (`generatedAt`), which `model`, the provider's `conversationId` when it has one, wall-clock `durationSeconds`, and the raw `usage` the provider reported (shape varies by provider, `null` when none). `attempts` lists every provider the failover chain tried, in order, with failure reasons; `warnings` carries routing notices (failovers, ignored extraBody, whose quota an auto-mode read spent).
 
 ## Flags
 
@@ -44,7 +46,7 @@ Output is a fixed JSON shape:
 | Flag | Meaning | Default |
 | :-- | :-- | :-- |
 | `-i, --input <path\|url>` | Image to analyze (required) | |
-| `-p, --provider <name>` | Vision provider | `antigravity-cli` |
+| `-p, --provider <name>` | Pin exactly one provider, no fallback | the failover chain (below) |
 | `-m, --model <name>` | Provider model | per provider (below) |
 | `-o, --output <path>` | Also write JSON to a file | |
 | `--prompt <text>` | Extra focus | |
@@ -79,5 +81,11 @@ The default `-m` model depends on the provider:
 | `--harness <name>` | Force storage scope: `claude-code`, `pi`, `opencode`, `none` | auto-detect |
 | `--cwd <path>` | Project directory the image was pasted in | current directory |
 
-Five providers: `antigravity-cli` (default, no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (uses your existing Claude subscription). Two more subcommands: `modlens config <init|set|show>`, and `modlens doctor` (checks Node, provider readiness, which provider will be selected and why, and the detected harness, without spending quota or touching the network. Add `--json` for a machine-readable report).
+Five providers: `antigravity-cli` (no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (uses your existing Claude subscription). Without `-p`, a run tries every provider that is set up, inline API providers first (5-10s), then the agents; the first good result wins and `meta.attempts` records the rest. With `auto` enabled in the config, vision borrowed from other local harness CLIs (pi credentials, a signed-in Codex, an OpenCode vision model) leads the chain; details and the `guards` deny/allow lists are in [Configuration](configure.md).
+
+Other subcommands:
+
+- `modlens guard [--model <id>]`: should the engine run for the active model at all? Exit 0 allow, 1 deny, verdict as JSON.
+- `modlens config <init|set|show>`: keys are `provider`, `auto`, `guards.<denyModels|allowModels|denyWhenUnknown>`, and `<provider>.<apiKey|baseUrl|model|extraBody>`.
+- `modlens doctor`: Node and node:sqlite, provider readiness, the failover chains for this machine, the detected harness, the guard's rules with a live verdict, and the Auto section listing borrowable harness vision. Spends no quota; `--json` for a machine-readable report.
 

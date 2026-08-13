@@ -12,12 +12,16 @@ The CLI prints one JSON object to stdout:
     "model": "gemini-3.6-flash-low",
     "conversationId": "string|null",
     "durationSeconds": 25.4,
-    "usage": {}
+    "usage": {},
+    "attempts": [{ "provider": "antigravity-cli", "ok": true, "durationSeconds": 25.4 }],
+    "warnings": []
   }
 }
 ```
 
-`result` is enforced by JSON schema on the provider side (`--json-schema`):
+`meta.attempts` lists every provider the failover chain tried this run, in order, with an `error` string on failures. `meta.warnings` carries routing notices: failovers, an ignored `extraBody`, and whose quota an auto-mode read spent.
+
+`result` is enforced by JSON schema where the provider supports it (agent CLIs via `--json-schema`, API providers via response-schema fields or a filled-in template), and the CLI verifies the shape itself before returning, so a structurally broken result fails over instead of reaching you:
 
 ```json
 {
