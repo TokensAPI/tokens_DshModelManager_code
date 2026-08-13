@@ -120,10 +120,6 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
 
     if (dottedKey === 'provider') {
         config.provider = value;
-    } else if (dottedKey === 'auto') {
-        throw new Error(
-            'The auto switch was replaced by per-harness grants. Use: modlens config set borrow.<claude|codex|opencode|pi> true|false',
-        );
     } else if (dottedKey.startsWith('borrow.')) {
         const harness = dottedKey.slice('borrow.'.length);
         if (!(BORROW_HARNESSES as readonly string[]).includes(harness)) {

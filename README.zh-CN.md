@@ -24,7 +24,7 @@
   <img src="https://img.shields.io/badge/users-unknown-lightgrey?style=flat-square" alt="Users unknown">
 </p>
 
-DeepSeek-V4-Flash 没有视觉能力，无法处理截图和图片。ModLens 借助外挂视觉引擎，为纯文本模型补上视觉能力。**ModLens 支持直接粘贴图片识别**，无需先保存成文件再提供路径。
+DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助外挂视觉引擎，为纯文本模型补上视觉能力。**ModLens 支持直接粘贴图片识别**，无需先保存成文件再提供路径。
 
 ## 交流
 
