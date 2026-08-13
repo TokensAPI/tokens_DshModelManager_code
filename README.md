@@ -32,7 +32,7 @@ Issues are welcome any time: [open one](https://github.com/liustack/modlens/issu
 
 ## Highlights
 
-**🥇 The first plug-in vision plugin for DeepSeek Harness (dsh):** one command, `dsh plugin --profile web add @liustack/modlens`, and the text-only DeepSeek model behind dsh reads images, as a native `read_image` tool plus automatic reading of pasted images.
+**🥇 The first plug-in vision plugin for DeepSeek Harness (dsh):** one command, `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`, and the text-only DeepSeek model behind dsh reads images, as a native `read_image` tool plus automatic reading of pasted images.
 
 **Paste an image and it reads it.** No saving to a file and passing a path first.
 
