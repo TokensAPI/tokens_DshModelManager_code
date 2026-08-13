@@ -30,6 +30,8 @@ export interface ModlensConfig {
     providers?: Record<string, ProviderSettings>;
     /** Invocation guard: when the active model already sees images, skip the engine. */
     guards?: GuardsConfig;
+    /** Auto mode: discover local harness CLIs and their vision models (default off). */
+    auto?: boolean;
 }
 
 export const CONFIG_DIR = path.join(os.homedir(), '.modlens');
@@ -108,13 +110,19 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
 
     if (dottedKey === 'provider') {
         config.provider = value;
+    } else if (dottedKey === 'auto') {
+        const normalized = value.trim().toLowerCase();
+        if (normalized !== 'true' && normalized !== 'false') {
+            throw new Error('auto must be true or false.');
+        }
+        config.auto = normalized === 'true';
     } else if (dottedKey.startsWith('guards.')) {
         setGuardsValue(config, dottedKey.slice('guards.'.length), value);
     } else {
         const dot = dottedKey.indexOf('.');
         if (dot <= 0 || dot === dottedKey.length - 1) {
             throw new Error(
-                `Invalid config key: ${dottedKey}. Use "provider", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
+                `Invalid config key: ${dottedKey}. Use "provider", "auto", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
             );
         }
         const providerName = dottedKey.slice(0, dot);

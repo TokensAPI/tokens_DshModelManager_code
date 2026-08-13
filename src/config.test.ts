@@ -123,6 +123,17 @@ describe('guards config', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
+    it('parses the top-level auto switch as a strict boolean', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
+        const file = path.join(dir, 'config.json');
+        setConfigValue('auto', 'true', file);
+        expect(loadConfigFile(file).auto).toBe(true);
+        setConfigValue('auto', 'false', file);
+        expect(loadConfigFile(file).auto).toBe(false);
+        expect(() => setConfigValue('auto', 'maybe', file)).toThrow('true or false');
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
     it('round-trips guards.allowModels the same way', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
         const file = path.join(dir, 'config.json');
