@@ -103,6 +103,28 @@ describe.skipIf(!DatabaseSync)('opencode Windows path normalization (issue #11)'
         expect(runQuery(db, 'E:\\gitTest\\proj')).toHaveLength(0);
         db.close();
     });
+
+    // The ancestor direction compares the stored directory against the cwd.
+    // That stored value comes from the database, so it must never act as a
+    // LIKE pattern: `_`/`%` inside another project's path would otherwise
+    // match across projects.
+    it('does not let _ in a stored directory wildcard-match another project', () => {
+        const db = dbWithSession('/tmp/proj_1', filePart);
+        expect(runQuery(db, '/tmp/projA1/sub')).toHaveLength(0);
+        db.close();
+    });
+
+    it('does not let % in a stored directory wildcard-match another project', () => {
+        const db = dbWithSession('/tmp/pro%t', filePart);
+        expect(runQuery(db, '/tmp/proXt/sub')).toHaveLength(0);
+        db.close();
+    });
+
+    it('still matches a genuine ancestor directory that contains _', () => {
+        const db = dbWithSession('/tmp/proj_1', filePart);
+        expect(runQuery(db, '/tmp/proj_1/sub')).toHaveLength(1);
+        db.close();
+    });
 });
 
 describe.skipIf(!DatabaseSync)('opencode harness support', () => {

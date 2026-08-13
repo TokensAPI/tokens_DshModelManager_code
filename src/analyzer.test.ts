@@ -169,7 +169,7 @@ describe.skipIf(onWindows)('provider subprocess handling', () => {
         const bin = path.join(dir, 'fake-agy');
         fs.writeFileSync(bin, script, { mode: 0o755 });
         const image = path.join(dir, 'image.png');
-        fs.writeFileSync(image, 'not-a-real-png');
+        fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
         cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
         return { bin, image };
     }
@@ -239,7 +239,7 @@ describe.skipIf(onWindows)('provider subprocess handling', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-iso-'));
         cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
         const image = path.join(dir, 'shot.png');
-        fs.writeFileSync(image, 'not-a-real-png');
+        fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
         fs.writeFileSync(path.join(dir, 'secret.txt'), 'do not read me');
         const record = path.join(dir, 'record.txt');
         const bin = path.join(dir, 'fake-agy');
@@ -396,7 +396,7 @@ describe.skipIf(onWindows)('provider failover', () => {
         cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
         fs.writeFileSync(path.join(dir, 'agy'), script, { mode: 0o755 });
         const image = path.join(dir, 'shot.png');
-        fs.writeFileSync(image, 'not-a-real-png');
+        fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
         return { dir, image };
     }
 
@@ -525,7 +525,7 @@ describe.skipIf(onWindows)('provider failover', () => {
             { mode: 0o755 },
         );
         const image = path.join(dir, 'shot.png');
-        fs.writeFileSync(image, 'not-a-real-png');
+        fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
         vi.stubEnv('PATH', dir);
 
         const result = await analyzeImage({
@@ -546,7 +546,7 @@ describe.skipIf(onWindows)('provider failover', () => {
         cleanups.push(() => fs.rmSync(dir, { recursive: true, force: true }));
         fs.writeFileSync(path.join(dir, 'codex'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
         const image = path.join(dir, 'shot.png');
-        fs.writeFileSync(image, 'not-a-real-png');
+        fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
         vi.stubEnv('PATH', dir);
 
         await expect(
@@ -640,7 +640,7 @@ describe.skipIf(onWindows)('provider failover', () => {
         const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-none-'));
         cleanups.push(() => fs.rmSync(empty, { recursive: true, force: true }));
         const image = path.join(empty, 'shot.png');
-        fs.writeFileSync(image, 'not-a-real-png');
+        fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
         vi.stubEnv('PATH', empty);
 
         await expect(analyzeImage({ input: image, config: {}, timeoutMs: 5_000 })).rejects.toThrow(

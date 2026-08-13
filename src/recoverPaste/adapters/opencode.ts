@@ -39,6 +39,12 @@ interface SqliteRow {
  * at the repo root while a session may have been launched in a subdirectory. A
  * session id or slug narrows that directory match rather than replacing it,
  * since neither is unique across projects.
+ *
+ * Only the cwd-as-prefix direction may use LIKE, because only there is the
+ * pattern our own escaped literal. The reverse direction (db directory as an
+ * ancestor of the cwd) compares with SUBSTR instead: a LIKE pattern built
+ * from the database column would let `_`/`%` inside another project's path
+ * act as wildcards and match across projects.
  */
 export function opencodeDirectoryFilter(resolvedCwd: string): {
     clause: string;
@@ -48,7 +54,7 @@ export function opencodeDirectoryFilter(resolvedCwd: string): {
     const escaped = escapeLikePattern(normalized);
     const dir = `REPLACE(session.directory, '\\', '/')`;
     return {
-        clause: `(${dir} = ? OR ${dir} LIKE ? || '/%' ESCAPE '\\' OR ? LIKE ${dir} || '/%' ESCAPE '\\')`,
+        clause: `(${dir} = ? OR ${dir} LIKE ? || '/%' ESCAPE '\\' OR SUBSTR(?, 1, LENGTH(${dir}) + 1) = ${dir} || '/')`,
         params: [normalized, escaped, normalized],
     };
 }

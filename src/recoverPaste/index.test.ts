@@ -36,9 +36,18 @@ afterEach(() => {
     }
 });
 
-function imageLine(data: string, timestamp: string, mediaType = 'image/png'): string {
+// Real Claude Code transcript lines carry a top-level cwd; ownership checks
+// fail closed without one, so fixtures default to the common test cwd. Pass
+// null to fabricate a legacy cwd-less line on purpose.
+function imageLine(
+    data: string,
+    timestamp: string,
+    mediaType = 'image/png',
+    cwd: string | null = '/tmp/proj',
+): string {
     return JSON.stringify({
         timestamp,
+        ...(cwd === null ? {} : { cwd }),
         message: {
             role: 'user',
             content: [
@@ -55,12 +64,18 @@ function imageLine(data: string, timestamp: string, mediaType = 'image/png'): st
     });
 }
 
-function piImageLine(data: string, timestamp: string, mimeType = 'image/png'): string {
+function piImageLine(
+    data: string,
+    timestamp: string,
+    mimeType = 'image/png',
+    cwd: string | null = '/tmp/proj',
+): string {
     return JSON.stringify({
         type: 'message',
         id: 'x',
         parentId: null,
         timestamp,
+        ...(cwd === null ? {} : { cwd }),
         message: {
             role: 'user',
             content: [{ type: 'image', data: Buffer.from(data).toString('base64'), mimeType }],
@@ -387,6 +402,41 @@ describe('harness detection scoping', () => {
 });
 
 describe.skipIf(onWindows)('cross-project safety', () => {
+    it('rejects a transcript that records no cwd at all (fail closed over slug collisions)', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-nocwd-'));
+        const slugDir = path.join(
+            home,
+            '.claude',
+            'projects',
+            claudeProjectSlug('/tmp/project-alpha'),
+        );
+        fs.mkdirSync(slugDir, { recursive: true });
+        // A transcript with images but not a single cwd record: the slug alone
+        // cannot prove project ownership, so scanning must skip it.
+        fs.writeFileSync(
+            path.join(slugDir, 'legacy.jsonl'),
+            imageLine('cwdless', '2026-08-05T09:00:00.000Z', 'image/png', null),
+        );
+        const realHome = process.env.HOME;
+        process.env.HOME = home;
+        process.env.MODLENS_HARNESS = 'none';
+        try {
+            expect(() =>
+                recoverPastedImages({ cwd: '/tmp/project-alpha', outDir: path.join(home, 'out') }),
+            ).toThrow(/No pasted images/);
+            // The explicit --transcript escape hatch still reads it.
+            const explicit = recoverPastedImages({
+                cwd: '/tmp/project-alpha',
+                transcript: path.join(slugDir, 'legacy.jsonl'),
+                outDir: path.join(home, 'out'),
+            });
+            expect(fs.readFileSync(explicit.images[0].path).toString()).toBe('cwdless');
+        } finally {
+            process.env.HOME = realHome;
+            fs.rmSync(home, { recursive: true, force: true });
+        }
+    });
+
     it('rejects a transcript whose recorded cwd belongs to another project', () => {
         // /tmp/project.alpha and /tmp/project-alpha share one Claude slug.
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-collide-'));
@@ -399,7 +449,12 @@ describe.skipIf(onWindows)('cross-project safety', () => {
         fs.mkdirSync(slugDir, { recursive: true });
         fs.writeFileSync(
             path.join(slugDir, 'other.jsonl'),
-            `${JSON.stringify({ cwd: '/tmp/project.alpha' })}\n${imageLine('other-project', '2026-08-05T09:00:00.000Z')}`,
+            imageLine(
+                'other-project',
+                '2026-08-05T09:00:00.000Z',
+                'image/png',
+                '/tmp/project.alpha',
+            ),
         );
 
         const realHome = process.env.HOME;
@@ -421,7 +476,7 @@ describe.skipIf(onWindows)('cross-project safety', () => {
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(
             path.join(dir, 'c.jsonl'),
-            imageLine('secret', '2026-08-05T09:00:00.000Z'),
+            imageLine('secret', '2026-08-05T09:00:00.000Z', 'image/png', '/tmp/p'),
         );
 
         const realHome = process.env.HOME;
@@ -444,7 +499,7 @@ describe.skipIf(onWindows)('cross-project safety', () => {
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(
             path.join(dir, 'c.jsonl'),
-            imageLine('secret', '2026-08-05T09:00:00.000Z'),
+            imageLine('secret', '2026-08-05T09:00:00.000Z', 'image/png', '/tmp/p'),
         );
 
         // A directory someone else could have pre-created 0755 on a shared box.
@@ -471,7 +526,7 @@ describe.skipIf(onWindows)('cross-project safety', () => {
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(
             path.join(dir, 'c.jsonl'),
-            imageLine('secret', '2026-08-05T09:00:00.000Z'),
+            imageLine('secret', '2026-08-05T09:00:00.000Z', 'image/png', '/tmp/p'),
         );
 
         const realHome = process.env.HOME;
@@ -499,7 +554,7 @@ describe.skipIf(onWindows)('cross-project safety', () => {
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(
             path.join(dir, 'c.jsonl'),
-            imageLine('heic-bytes', '2026-08-05T09:00:00.000Z', 'image/heic'),
+            imageLine('heic-bytes', '2026-08-05T09:00:00.000Z', 'image/heic', '/tmp/p'),
         );
 
         const realHome = process.env.HOME;
