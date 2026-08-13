@@ -56,13 +56,13 @@ describe('providerChain', () => {
         },
     };
 
-    it('orders a fully configured local chain agent-first', () => {
+    it('orders a fully configured local chain inline-first, agents behind', () => {
         const env = { PATH: pathWith('agy', 'claude') };
         expect(names(providerChain('local', allKeys, env))).toEqual([
-            'antigravity-cli',
             'gemini-api',
             'openai',
             'anthropic',
+            'antigravity-cli',
             'claude-cli',
         ]);
     });
@@ -89,9 +89,9 @@ describe('providerChain', () => {
         const prefer = { ...allKeys, provider: 'anthropic' };
         expect(names(providerChain('local', prefer, env))).toEqual([
             'anthropic',
-            'antigravity-cli',
             'gemini-api',
             'openai',
+            'antigravity-cli',
         ]);
     });
 

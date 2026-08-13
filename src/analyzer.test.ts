@@ -297,6 +297,9 @@ describe.skipIf(onWindows)('provider failover', () => {
         );
 
     const GEMINI_KEYED = { providers: { 'gemini-api': { apiKey: 'g-key' } } };
+    // The default local chain is inline-first, so these failover scenarios pin
+    // agy to the front via the provider preference to make it fail first.
+    const AGY_FIRST = { ...GEMINI_KEYED, provider: 'antigravity-cli' };
 
     it('fails over from a broken agy to gemini-api and records both attempts', async () => {
         const { dir, image } = fakeAgyDir('#!/bin/sh\necho "agy exploded" >&2\nexit 1\n');
@@ -305,7 +308,7 @@ describe.skipIf(onWindows)('provider failover', () => {
 
         const result = await analyzeImage({
             input: image,
-            config: GEMINI_KEYED,
+            config: AGY_FIRST,
             timeoutMs: 20_000,
         });
 
@@ -324,7 +327,7 @@ describe.skipIf(onWindows)('provider failover', () => {
 
         const result = await analyzeImage({
             input: image,
-            config: GEMINI_KEYED,
+            config: AGY_FIRST,
             timeoutMs: 20_000,
         });
 
@@ -359,7 +362,7 @@ describe.skipIf(onWindows)('provider failover', () => {
         vi.stubGlobal('fetch', async () => new Response('quota exceeded', { status: 429 }));
 
         await expect(
-            analyzeImage({ input: image, config: GEMINI_KEYED, timeoutMs: 20_000 }),
+            analyzeImage({ input: image, config: AGY_FIRST, timeoutMs: 20_000 }),
         ).rejects.toThrow(/Every configured vision provider failed.*antigravity-cli.*gemini-api/s);
     }, 30_000);
 
