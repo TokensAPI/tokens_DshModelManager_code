@@ -32,6 +32,8 @@ DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助�
 
 ## 亮点
 
+**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `dsh plugin --profile web add @liustack/modlens`，dsh 背后的纯文本 DeepSeek 模型即可读图，原生 `read_image` 工具加粘贴图片自动识别。
+
 **直接粘贴图片识别** 无需先保存成文件再提供路径。
 
 - **零配置起手。** 复用 Claude Code、Codex、OpenCode、Pi 已配置，直接复用你本机的其他多模态模型。什么都没有？Antigravity CLI 是免 key 的免费通道，配一个免费 Gemini key 可将识别耗时降至 5 到 10 秒。

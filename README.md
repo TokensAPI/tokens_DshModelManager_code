@@ -32,6 +32,8 @@ Issues are welcome any time: [open one](https://github.com/liustack/modlens/issu
 
 ## Highlights
 
+**🥇 The first plug-in vision plugin for DeepSeek Harness (dsh):** one command, `dsh plugin --profile web add @liustack/modlens`, and the text-only DeepSeek model behind dsh reads images, as a native `read_image` tool plus automatic reading of pasted images.
+
 **Paste an image and it reads it.** No saving to a file and passing a path first.
 
 - **Zero-config start.** Reuses what Claude Code, Codex, OpenCode, or Pi already have set up: the multimodal models on your machine go straight to work. Nothing at all? Antigravity CLI is a free no-key channel, and a free Gemini key brings a read down to 5-10 seconds.

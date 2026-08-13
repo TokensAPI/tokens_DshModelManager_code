@@ -22,9 +22,19 @@ const OUTPUT_SCHEMA = JSON.parse(
 const CLI_TIMEOUT_MS = 180_000
 
 export const name = 'modlens'
-export const inject = ['tools']
+export const inject = ['tools', 'agents', 'attachments']
 
-export function apply(ctx) {
+const MEDIA_EXT = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+}
+
+export function apply(ctx, config = {}) {
+  if (config.autoRead !== false) {
+    registerAutoRead(ctx)
+  }
   // Registered as a raw JSON-Schema tool definition (no dsh package imports:
   // the developer-preview registry accepts these and out-of-tree resolution
   // of @deepseek-ai/dsh-tools is not yet reliable), so this plugin owns its
@@ -88,6 +98,89 @@ export function apply(ctx) {
       return parsed.result
     },
   })
+}
+
+/**
+ * Phase 2: paste auto-route. When entered messages carry image blocks (the
+ * Web UI's paste/drop intake) and the model behind dsh is text-only, rewrite
+ * each image block into a modlens evidence text block before the step starts.
+ * Runs after `next()` so downstream pre-step listeners (compaction, context
+ * injectors) see and shape the same final message set; a failed read degrades
+ * to an explanatory text block instead of rejecting the step.
+ */
+function registerAutoRead(ctx) {
+  ctx.on('agent/pre-step', async (payload, next) => {
+    const decision = await next()
+    if (decision.kind !== 'enter') {
+      return decision
+    }
+    const hasImage = decision.messages.some(
+      (message) =>
+        Array.isArray(message.content) &&
+        message.content.some((block) => block?.type === 'image'),
+    )
+    if (!hasImage) {
+      return decision
+    }
+    const messages = []
+    for (const message of decision.messages) {
+      if (!Array.isArray(message.content)) {
+        messages.push(message)
+        continue
+      }
+      const content = []
+      for (const block of message.content) {
+        if (block?.type !== 'image') {
+          content.push(block)
+          continue
+        }
+        content.push(await readImageBlock(ctx, block, payload.signal))
+      }
+      messages.push({ ...message, content })
+    }
+    return { kind: 'enter', messages }
+  })
+}
+
+async function readImageBlock(ctx, block, signal) {
+  const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  let dir
+  try {
+    const stored = await ctx.attachments.readImage(block.attachment, signal)
+    dir = await mkdtemp(join(tmpdir(), 'modlens-dsh-'))
+    const file = join(
+      dir,
+      `paste${MEDIA_EXT[stored.mediaType ?? block.attachment?.mediaType] ?? '.png'}`,
+    )
+    await writeFile(file, Buffer.from(stored.bytes), { mode: 0o600 })
+    const cli = process.env.MODLENS_DSH_CLI || CLI_PATH
+    const { stdout, stderr, code } = await run(
+      process.execPath,
+      [cli, '-i', file, '--timeout', String(CLI_TIMEOUT_MS)],
+      signal,
+    )
+    if (code !== 0) {
+      throw new Error((stderr || stdout).trim().slice(0, 300))
+    }
+    const parsed = JSON.parse(stdout)
+    return {
+      type: 'text',
+      text: `[Pasted image, read by the modlens vision bridge]\n${renderEvidence(parsed.result)}`,
+    }
+  } catch (error) {
+    return {
+      type: 'text',
+      text: `[A pasted image could not be read by modlens: ${
+        error instanceof Error ? error.message.slice(0, 300) : String(error)
+      }. Tell the user, and suggest running \`npx @liustack/modlens doctor\`.]`,
+    }
+  } finally {
+    if (dir) {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  }
 }
 
 function run(command, args, signal) {
