@@ -10,6 +10,14 @@
 export interface GuardsConfig {
     /** Glob patterns of models with native vision: match means never run the engine. */
     denyModels?: string[];
+    /**
+     * Allowlist mode: when non-empty, only matching models run the engine and
+     * every other identified model is denied. Deny patterns still win, so a
+     * vision variant can be carved out of a broad allow (allow glm-*, deny
+     * glm-*v*). The unknown-model policy is unchanged: fail open unless
+     * denyWhenUnknown is set.
+     */
+    allowModels?: string[];
     /** Deny when the active model cannot be determined (default: proceed). */
     denyWhenUnknown?: boolean;
 }
@@ -30,7 +38,7 @@ export interface ModelDetection {
 /** The detection it judged plus the verdict, so callers see both in one object. */
 export interface GuardVerdict extends ModelDetection {
     guard: 'allow' | 'deny';
-    /** The deny pattern that matched, on deny by match. */
+    /** The pattern that matched, when a list match decided the verdict. */
     matched?: string;
     reason: string;
 }
@@ -41,7 +49,14 @@ export interface GuardVerdict extends ModelDetection {
  * elements are ignored rather than iterated or thrown on mid-read.
  */
 export function denyPatterns(guards: GuardsConfig | undefined): string[] {
-    const raw = guards?.denyModels;
+    return stringPatterns(guards?.denyModels);
+}
+
+export function allowPatterns(guards: GuardsConfig | undefined): string[] {
+    return stringPatterns(guards?.allowModels);
+}
+
+function stringPatterns(raw: unknown): string[] {
     if (!Array.isArray(raw)) {
         return [];
     }
@@ -68,7 +83,8 @@ export function evaluateGuard(
     guards: GuardsConfig | undefined,
     detection: ModelDetection,
 ): GuardVerdict {
-    const patterns = denyPatterns(guards);
+    const deny = denyPatterns(guards);
+    const allow = allowPatterns(guards);
     if (!detection.model) {
         // Strict === true: the file is hand-editable and a string "false" is
         // truthy, which would flip fail-open into a deny.
@@ -83,25 +99,46 @@ export function evaluateGuard(
             ...detection,
             guard: 'allow',
             reason:
-                patterns.length === 0 ? 'no deny rules configured' : 'model unknown, failing open',
+                deny.length === 0 && allow.length === 0
+                    ? 'no deny rules configured'
+                    : 'model unknown, failing open',
         };
     }
-    if (patterns.length === 0) {
+    if (deny.length === 0 && allow.length === 0) {
         return { ...detection, guard: 'allow', reason: 'no deny rules configured' };
     }
     const candidates = [detection.model];
     if (detection.provider) {
         candidates.push(`${detection.provider}/${detection.model}`);
     }
-    for (const pattern of patterns) {
-        if (candidates.some((candidate) => globMatch(pattern, candidate))) {
+    const firstMatch = (patterns: string[]): string | undefined =>
+        patterns.find((pattern) => candidates.some((candidate) => globMatch(pattern, candidate)));
+    // Deny wins over allow, so a broad allow pattern can have its vision
+    // variants carved out (allow glm-*, deny glm-*v*).
+    const denied = firstMatch(deny);
+    if (denied) {
+        return {
+            ...detection,
+            guard: 'deny',
+            matched: denied,
+            reason: 'model has native vision per guards.denyModels',
+        };
+    }
+    if (allow.length > 0) {
+        const allowed = firstMatch(allow);
+        if (allowed) {
             return {
                 ...detection,
-                guard: 'deny',
-                matched: pattern,
-                reason: 'model has native vision per guards.denyModels',
+                guard: 'allow',
+                matched: allowed,
+                reason: 'model is on guards.allowModels',
             };
         }
+        return {
+            ...detection,
+            guard: 'deny',
+            reason: 'not on guards.allowModels: only listed models run the engine',
+        };
     }
     return { ...detection, guard: 'allow', reason: 'not on the deny list' };
 }

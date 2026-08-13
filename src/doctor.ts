@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import { createRequire } from 'module';
 import { CONFIG_PATH, type ModlensConfig, resolveProviderSettings } from './config.ts';
 import { detectActiveModel } from './guard/index.ts';
-import { denyPatterns, evaluateGuard, type ModelSource } from './guard/rules.ts';
+import { allowPatterns, denyPatterns, evaluateGuard, type ModelSource } from './guard/rules.ts';
 import {
     findOnPath,
     PROVIDER_DESCRIPTORS,
@@ -55,6 +55,8 @@ export interface DoctorReport {
     /** The invocation guard's rules and a live evaluation (see guards config). */
     guard: {
         rules: number;
+        /** Non-zero switches the guard into allowlist mode: only listed models run. */
+        allowRules: number;
         denyWhenUnknown: boolean;
         model: string | null;
         source: ModelSource;
@@ -254,6 +256,7 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
         harness: { detected: harnessDetection.harness, source: harnessDetection.source },
         guard: {
             rules: denyPatterns(input.config.guards).length,
+            allowRules: allowPatterns(input.config.guards).length,
             denyWhenUnknown: input.config.guards?.denyWhenUnknown ?? false,
             model: guardVerdict.model,
             source: guardVerdict.source,
@@ -320,7 +323,7 @@ export function renderDoctorReport(report: DoctorReport): string {
 
     lines.push('Guard (should the vision engine run for the active model?)');
     lines.push(
-        `  rules: ${report.guard.rules} deny pattern(s), denyWhenUnknown: ${report.guard.denyWhenUnknown}`,
+        `  rules: ${report.guard.rules} deny pattern(s), ${report.guard.allowRules} allow pattern(s)${report.guard.allowRules > 0 ? ' (allowlist mode)' : ''}, denyWhenUnknown: ${report.guard.denyWhenUnknown}`,
     );
     lines.push(`  active model: ${report.guard.model ?? 'unknown'} (via ${report.guard.source})`);
     lines.push(

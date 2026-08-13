@@ -119,4 +119,15 @@ describe('runGuard', () => {
         );
         expect(verdict.guard).toBe('deny');
     });
+
+    it('still detects when only allowModels is configured', () => {
+        // An allowlist denies everything off the list, so the short-circuit
+        // must not swallow it: MODLENS_MODEL showing up in the verdict proves
+        // detection ran.
+        const verdict = runGuard(
+            { allowModels: ['deepseek-v4-*'] },
+            { cwd: '/repo', env: { MODLENS_MODEL: 'claude-fable-5', MODLENS_HARNESS: 'none' } },
+        );
+        expect(verdict).toMatchObject({ guard: 'deny', model: 'claude-fable-5', source: 'env' });
+    });
 });

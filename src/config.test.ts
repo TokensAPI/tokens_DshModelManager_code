@@ -123,6 +123,18 @@ describe('guards config', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
+    it('round-trips guards.allowModels the same way', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
+        const file = path.join(dir, 'config.json');
+        setConfigValue('guards.allowModels', '["deepseek-v4-*", "glm-5.*"]', file);
+        expect(loadConfigFile(file).guards?.allowModels).toEqual(['deepseek-v4-*', 'glm-5.*']);
+        setConfigValue('guards.allowModels', 'minimax-m2.5*, qwen3-coder*', file);
+        expect(loadConfigFile(file).guards?.allowModels).toEqual(['minimax-m2.5*', 'qwen3-coder*']);
+        setConfigValue('guards.allowModels', '', file);
+        expect(loadConfigFile(file).guards?.allowModels).toBeUndefined();
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
     it('parses guards.denyWhenUnknown as a boolean and rejects other fields', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
         const file = path.join(dir, 'config.json');
