@@ -3,7 +3,7 @@
 // schema enforcement across vendors, so the schema rides in the prompt and the
 // response goes through tolerant JSON extraction.
 import { readLocalImageBase64 } from '../imageInput.ts';
-import { buildVisionPrompt } from '../prompt.ts';
+import { buildVisionPrompt, JSON_TEMPLATE_INSTRUCTION } from '../prompt.ts';
 import { missingSchemaFields } from '../schema.ts';
 import { mergeExtraBody } from '../util/extraBody.ts';
 import { extractJson, truncate } from '../util/json.ts';
@@ -31,16 +31,13 @@ export async function executeOpenaiCompat(
             ? options.imageSource
             : toDataUrl(readLocalImageBase64(options.imageSource));
 
-    // A filled-in template beats a JSON Schema here: weaker gateways tend to
-    // echo a schema back instead of instantiating it.
     const prompt = `${buildVisionPrompt({
         imageSource: options.imageSource,
         imageKind: 'inline',
         extraPrompt: options.extraPrompt,
     })}
 
-Respond with ONE JSON object only, no markdown fences, no commentary. Fill this exact structure with your findings from the image (do not repeat this template literally, replace every value):
-{"summary":"one paragraph describing the image","ocr":{"full_text":"all visible text","lines":[{"text":"one line","language":"en"}]},"layout":{"regions":[{"type":"title|subtitle|paragraph|list|table|chart|form|code|image|icon|other","reading_order":1,"text":"region text"}]},"semantics":{"scene":"what kind of scene","intent":"what the image is for","entities":[{"name":"entity","type":"kind","evidence":"where seen"}],"relations":[{"subject":"a","predicate":"relates to","object":"b"}]},"visual":{"dominant_colors":["color"],"style":"visual style","notes":["notable visual detail"]},"uncertainty":["anything unreadable or ambiguous"]}`;
+${JSON_TEMPLATE_INSTRUCTION}`;
 
     const startedAt = Date.now();
     const response = await fetch(`${baseUrl}/chat/completions`, {

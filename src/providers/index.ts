@@ -59,6 +59,12 @@ export interface VisionProvider {
      * explicit --workdir opts out.
      */
     isolateWorkdir?: boolean;
+    /**
+     * Set on auto-mode routes borrowed from another harness. The analyzer
+     * surfaces it as a warning when this route answers, so spending that
+     * account's quota is never silent.
+     */
+    borrowedNote?: string;
 }
 
 const PROVIDERS: Record<string, VisionProvider> = {
