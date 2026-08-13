@@ -1,10 +1,15 @@
 // Recover pasted images from agent session storage.
 //
-// None of the supported harnesses writes pasted images to a regular temp file,
-// but all of them persist user messages, image bytes included, locally before
-// any gateway-side stripping happens. Each harness stores them differently, so
-// a per-harness adapter (adapters/) knows where to look and how to read the
-// bytes, this module orchestrates detection, scoping, and writing the files.
+// Every supported harness persists user messages, image bytes included, locally
+// before any gateway-side stripping happens, and that store is what this module
+// reads. (Newer Claude Code builds additionally cache pastes as real files under
+// ~/.claude/image-cache/ and, from the cli entrypoint, inject the path into the
+// conversation; when that path is alive the skill reads it directly and never
+// gets here. The cache is cleaned after a while, the transcript copy is not, so
+// this recovery stays the route that works everywhere.) Each harness stores
+// messages differently, so a per-harness adapter (adapters/) knows where to look
+// and how to read the bytes, this module orchestrates detection, scoping, and
+// writing the files.
 //
 // Storage layouts are internal implementation details of those tools, so this
 // can break without notice; callers should fall back to asking for a path.
