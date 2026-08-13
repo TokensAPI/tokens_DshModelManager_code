@@ -44,6 +44,15 @@ const next = (() => {
     if (requested === 'minor') return `${major}.${minor + 1}.0`;
     if (requested === 'patch') return `${major}.${minor}.${patch + 1}`;
     if (!/^\d+\.\d+\.\d+$/.test(requested)) fail(`"${requested}" is not a version or a bump.`);
+    // An explicit version must move forward: publishing a downgrade or the
+    // current version again would fail at npm anyway, but late and messily.
+    const toParts = (v) => v.split('.').map(Number);
+    const [ca, cb, cc] = toParts(pkg.version);
+    const [na, nb, nc] = toParts(requested);
+    const forward = na > ca || (na === ca && (nb > cb || (nb === cb && nc > cc)));
+    if (!forward) {
+        fail(`"${requested}" is not higher than the current version ${pkg.version}.`);
+    }
     return requested;
 })();
 
@@ -80,6 +89,7 @@ if (notes.length < 20) {
 }
 
 console.log(`Releasing ${pkg.name} ${pkg.version} -> ${next}\n`);
+runLoud('pnpm', ['lint']);
 runLoud('pnpm', ['typecheck']);
 runLoud('pnpm', ['test']);
 runLoud('pnpm', ['build']);

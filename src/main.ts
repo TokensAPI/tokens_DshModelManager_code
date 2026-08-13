@@ -21,6 +21,14 @@ import { parseExtraBody } from './util/extraBody.ts';
 
 const program = new Command();
 
+/** Strict decimal parse: "10oops" is a typo, not 10. */
+function parsePositiveInt(raw: string, flag: string): number {
+    if (!/^\d+$/.test(raw.trim()) || Number.parseInt(raw, 10) <= 0) {
+        throw new Error(`Invalid ${flag}. Use a positive integer.`);
+    }
+    return Number.parseInt(raw, 10);
+}
+
 program
     .name('modlens')
     .description('Plug-in vision for text-only LLMs: image in, structured JSON evidence out')
@@ -43,10 +51,7 @@ program
     )
     .action(async (options) => {
         try {
-            const timeoutMs = Number.parseInt(options.timeout, 10);
-            if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-                throw new Error('Invalid --timeout. Use a positive integer in milliseconds.');
-            }
+            const timeoutMs = parsePositiveInt(options.timeout, '--timeout (milliseconds)');
 
             // Hard gate before any provider work, fed only by the explicit
             // MODLENS_MODEL env var and only when that model is identified:
@@ -97,7 +102,7 @@ program
             process.stderr.write(
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,
             );
-            process.exit(1);
+            process.exitCode = 1;
         }
     });
 
@@ -120,10 +125,7 @@ program
     .option('--cwd <path>', 'Project directory the image was pasted in', process.cwd())
     .action(async (options) => {
         try {
-            const count = Number.parseInt(options.count, 10);
-            if (!Number.isFinite(count) || count <= 0) {
-                throw new Error('Invalid --count. Use a positive integer.');
-            }
+            const count = parsePositiveInt(options.count, '--count');
             const result = recoverPastedImages({
                 count,
                 outDir: options.outDir,
@@ -137,7 +139,7 @@ program
             process.stderr.write(
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,
             );
-            process.exit(1);
+            process.exitCode = 1;
         }
     });
 
@@ -193,7 +195,7 @@ program
             process.stderr.write(
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,
             );
-            process.exit(1);
+            process.exitCode = 1;
         }
     });
 
@@ -222,7 +224,7 @@ config
             process.stderr.write(
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,
             );
-            process.exit(1);
+            process.exitCode = 1;
         }
     });
 
@@ -237,7 +239,7 @@ config
             process.stderr.write(
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,
             );
-            process.exit(1);
+            process.exitCode = 1;
         }
     });
 
@@ -251,8 +253,8 @@ config
             process.stderr.write(
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,
             );
-            process.exit(1);
+            process.exitCode = 1;
         }
     });
 
-program.parse();
+await program.parseAsync();

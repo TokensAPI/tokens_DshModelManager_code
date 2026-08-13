@@ -46,7 +46,16 @@ jobs:
       - run: npm install -g npm@11
       - run: pnpm install --frozen-lockfile
       # Same guards release.mjs runs, before anything irreversible.
+      - run: pnpm lint
       - run: pnpm typecheck
+      # The pushed tag must be the version the tree says it is.
+      - run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "tag v$VERSION does not match package.json version $PKG_VERSION" >&2
+            exit 1
+          fi
       - run: pnpm test
       - run: pnpm build
       # Idempotent: a manual publish (e.g. during a registry or Actions
