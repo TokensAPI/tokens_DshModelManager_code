@@ -28,7 +28,7 @@ DeepSeek and GLM have no vision capability and cannot read images. ModLens is a 
 
 ## Talk to us
 
-Issues are welcome any time: [open one](https://github.com/liustack/modlens/issues/new/choose). For everything else, come find me on X: **[@liustack](https://x.com/liustack)**. What you built with it, which harness you are on, what should come next. New releases land there first, and a proper community space is on the way.
+Issues are welcome any time: [open one](https://github.com/liustack/modlens/issues/new/choose). And come find me on X: **[@liustack](https://x.com/liustack)**. What you built with it, which harness you are on, what should come next. New releases land there first, and a proper community space is on the way.
 
 ## Highlights
 
@@ -83,7 +83,7 @@ And the paste path, end to end, in a Claude Code terminal on DeepSeek. The paste
 
 | Doc | Read it when |
 | :-- | :-- |
-| [INSTALL.md](INSTALL.md) | Installing the skill step by step (written for an agent) |
+| [Install guide](INSTALL.md) | Installing the skill step by step (written for an agent) |
 | [CLI manual](docs/cli.md) | The CLI the skill drives: flags, config, doctor |
 | [Troubleshooting](docs/troubleshooting.md) | A command failed and the message needs decoding |
 | [Configuration](skills/modlens/references/configure.md) | Setting a key, switching providers, fixing config |
@@ -91,7 +91,6 @@ And the paste path, end to end, in a Claude Code terminal on DeepSeek. The paste
 | [Harness setup](docs/harness-setup.md) | Wiring it into Codex, Claude Code, Pi, or OpenCode |
 | [Security](docs/security.md) | File permissions, image content as untrusted input |
 | [CHANGELOG](CHANGELOG.md) | Finding what changed in a version |
-| [AGENTS.md](AGENTS.md) | Working on this codebase |
 
 ## Contributing
 
