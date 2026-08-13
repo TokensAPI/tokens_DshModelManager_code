@@ -1,0 +1,4 @@
+# dsh bundle layer: mount the modlens vision plugin (see dsh/index.js).
+- insert:
+    - id: modlens
+      name: '@liustack/modlens/dsh'

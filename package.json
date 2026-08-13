@@ -26,7 +26,9 @@
     "skills/modlens/scripts",
     "skills/modlens/references",
     "CHANGELOG.md",
-    "SECURITY.md"
+    "SECURITY.md",
+    "dsh",
+    "cordis.patch.yml"
   ],
   "keywords": [
     "cli",
@@ -64,5 +66,14 @@
     "typescript": "^5.9.3",
     "vite": "^6.4.1",
     "vitest": "^3.2.7"
+  },
+  "exports": {
+    "./dsh": "./dsh/index.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }
