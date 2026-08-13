@@ -23,11 +23,12 @@ describe('dsh plugin bundle', () => {
             files?: string[];
         };
         expect(pkg.dsh?.bundle?.patch).toBe('./cordis.patch.yml');
+        expect(pkg.exports?.['.']).toBe('./dsh/index.js');
         expect(pkg.exports?.['./dsh']).toBe('./dsh/index.js');
         expect(pkg.files).toContain('dsh');
         expect(pkg.files).toContain('cordis.patch.yml');
         const patch = fs.readFileSync(path.join(__dirname, '..', 'cordis.patch.yml'), 'utf-8');
-        expect(patch).toContain('@liustack/modlens/dsh');
+        expect(patch).toContain("name: '@liustack/modlens'");
     });
 });
 

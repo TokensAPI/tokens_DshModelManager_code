@@ -32,7 +32,7 @@ DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助�
 
 ## 亮点
 
-**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`，dsh 背后的纯文本 DeepSeek 模型即可读图，原生 `read_image` 工具加粘贴图片自动识别。
+**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `read_image` 工具读图。（粘贴自动识别已内置，但目前被上游拦截：dsh 的 DeepSeek 适配器声明纯文本，Web 界面在任何插件运行前就拒绝贴图，暂时请用文件路径指图。）
 
 **直接粘贴图片识别** 无需先保存成文件再提供路径。
 
@@ -63,7 +63,7 @@ agy                                                           # 浏览器完成�
 npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens
 ```
 
-装完即有 `read_image` 工具和粘贴图片自动识别。引擎配置同样在 `~/.modlens`，详见[宿主接入](docs/harness-setup.md)。
+装完即有 `read_image` 工具（粘贴自动识别待上游放行图片进气后自动生效）。引擎配置同样在 `~/.modlens`，详见[宿主接入](docs/harness-setup.md)。
 
 ## 用法
 
