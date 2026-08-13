@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.9.1 - 2026-08-13
+
+- dsh follow-ups that missed the 3.9.0 tag during a GitHub outage: the plugin row references the bare package name via a root export, so the dsh plugin list shows `modlens` instead of `modlens/dsh`; install lines use `npx -y @deepseek-ai/dsh` (the developer preview has no global binary); and both READMEs state the paste status honestly, since the dsh DeepSeek adapter declares text-only input and Web-UI image admission runs before any plugin hook, `read_image` is the working path today and paste auto-read stays wired for when images can enter.
+
 ## 3.9.0 - 2026-08-13
 
 - **The first plug-in vision plugin for DeepSeek Harness (dsh).** The npm package is now also a dsh bundle: `dsh plugin --profile <name> add @liustack/modlens` is the whole install. It registers a native `read_image` tool (schema in every model request, so there is no trigger heuristic at all) that spawns the modlens CLI shipped in the same package, declares the vision schema as its canonical output contract, and renders evidence text for the model. Phase 2 rides `agent/pre-step`: images pasted or dropped into the dsh Web UI are read automatically and enter the step as modlens evidence blocks, with failed reads degrading to an explanatory note instead of rejecting the step (`autoRead: false` in the plugin row turns this off). The plugin imports no dsh packages (raw JSON-Schema tool registration, node builtins only), which is also the smallest possible surface against developer-preview churn. Verified end to end on a real dsh headless profile: the DeepSeek model called `read_image` and quoted the exact transcription back.
