@@ -29,6 +29,8 @@ const MEDIA_EXT = {
   'image/jpeg': '.jpg',
   'image/webp': '.webp',
   'image/gif': '.gif',
+  'image/heic': '.heic',
+  'image/heif': '.heif',
 }
 
 export function apply(ctx, config = {}) {
@@ -191,6 +193,36 @@ function registerVisionProvider(ctx, config) {
   }
 }
 
+// The same pasted attachment rides every later step of its session, but the
+// cache must never make a failure permanent or run the engine twice for
+// concurrent steps. So it stores promises (concurrent readers join the first
+// run), evicts failed reads on settle (a fixed config gets a fresh chance),
+// and caps itself LRU-style so a long-lived Web profile cannot hoard
+// evidence text forever.
+const EVIDENCE_CACHE_LIMIT = 64
+
+function cachedEvidence(ctx, adapter, block, signal) {
+  const key = JSON.stringify(block.attachment ?? block)
+  const hit = adapter.evidenceCache.get(key)
+  if (hit !== undefined) {
+    // Refresh recency: Map iteration order is insertion order.
+    adapter.evidenceCache.delete(key)
+    adapter.evidenceCache.set(key, hit)
+    return hit
+  }
+  const pending = readImageBlock(ctx, block, signal).then((evidence) => {
+    if (!evidence.ok) {
+      adapter.evidenceCache.delete(key)
+    }
+    return evidence.block
+  })
+  adapter.evidenceCache.set(key, pending)
+  while (adapter.evidenceCache.size > EVIDENCE_CACHE_LIMIT) {
+    adapter.evidenceCache.delete(adapter.evidenceCache.keys().next().value)
+  }
+  return pending
+}
+
 async function convertImagesToEvidence(ctx, messages, signal, adapter) {
   const out = []
   for (const message of messages) {
@@ -204,13 +236,7 @@ async function convertImagesToEvidence(ctx, messages, signal, adapter) {
         content.push(block)
         continue
       }
-      const key = JSON.stringify(block.attachment ?? block)
-      let text = adapter.evidenceCache.get(key)
-      if (text === undefined) {
-        text = (await readImageBlock(ctx, block, signal)).text
-        adapter.evidenceCache.set(key, text)
-      }
-      content.push({ type: 'text', text })
+      content.push(await cachedEvidence(ctx, adapter, block, signal))
     }
     out.push({ ...message, content })
   }
@@ -251,7 +277,7 @@ function registerAutoRead(ctx) {
           content.push(block)
           continue
         }
-        content.push(await readImageBlock(ctx, block, payload.signal))
+        content.push((await readImageBlock(ctx, block, payload.signal)).block)
       }
       messages.push({ ...message, content })
     }
@@ -259,6 +285,12 @@ function registerAutoRead(ctx) {
   })
 }
 
+/**
+ * Read one image block into an evidence text block. Never throws: failures
+ * degrade to an explanatory block with `ok: false`, so callers can decide
+ * what a failure means (the pre-step keeps the step going, the cache refuses
+ * to memoize it).
+ */
 async function readImageBlock(ctx, block, signal) {
   const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
@@ -275,9 +307,15 @@ async function readImageBlock(ctx, block, signal) {
         "attachments.readImage returned no 'data' bytes; the dsh attachment shape may have changed",
       )
     }
-    dir = await mkdtemp(join(tmpdir(), 'modlens-dsh-'))
     const mediaType = stored.ref?.mediaType ?? block.attachment?.mediaType
-    const file = join(dir, `paste${MEDIA_EXT[mediaType] ?? '.png'}`)
+    const ext = MEDIA_EXT[mediaType]
+    if (!ext) {
+      // Refusing beats disguising: a fake .png suffix would make the CLI (and
+      // the provider behind it) judge mislabelled bytes.
+      throw new Error(`unsupported pasted media type ${mediaType ?? '(none declared)'}`)
+    }
+    dir = await mkdtemp(join(tmpdir(), 'modlens-dsh-'))
+    const file = join(dir, `paste${ext}`)
     await writeFile(file, Buffer.from(stored.data), { mode: 0o600 })
     const cli = process.env.MODLENS_DSH_CLI || CLI_PATH
     const { stdout, stderr, code } = await run(
@@ -290,15 +328,21 @@ async function readImageBlock(ctx, block, signal) {
     }
     const parsed = JSON.parse(stdout)
     return {
-      type: 'text',
-      text: `[Pasted image, read by the modlens vision bridge]\n${renderEvidence(parsed.result)}`,
+      ok: true,
+      block: {
+        type: 'text',
+        text: `[Pasted image, read by the modlens vision bridge]\n${renderEvidence(parsed.result)}`,
+      },
     }
   } catch (error) {
     return {
-      type: 'text',
-      text: `[A pasted image could not be read by modlens: ${
-        error instanceof Error ? error.message.slice(0, 300) : String(error)
-      }. Tell the user, and suggest running \`npx @liustack/modlens doctor\`.]`,
+      ok: false,
+      block: {
+        type: 'text',
+        text: `[A pasted image could not be read by modlens: ${
+          error instanceof Error ? error.message.slice(0, 300) : String(error)
+        }. Tell the user, and suggest running \`npx @liustack/modlens doctor\`.]`,
+      },
     }
   } finally {
     if (dir) {
