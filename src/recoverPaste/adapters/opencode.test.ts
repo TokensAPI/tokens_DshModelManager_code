@@ -150,6 +150,30 @@ describe.skipIf(!DatabaseSync)('opencode Windows path normalization (issue #11)'
         db.close();
     });
 
+    it('measures the prefix boundary in code points, not UTF-16 units', () => {
+        // SQLite SUBSTR counts characters; JS .length counts UTF-16 units.
+        // An emoji (2 units, 1 character) used to shift the boundary and
+        // reject the genuine subdirectory.
+        const db = dbWithSession('/tmp/😀proj', filePart);
+        expect(runQuery(db, '/tmp/😀proj/sub')).toHaveLength(1);
+        expect(runQuery(db, '/tmp/😀projX/sub')).toHaveLength(0);
+        db.close();
+    });
+
+    it('treats filesystem roots as valid ancestors without doubling the slash', () => {
+        const db = dbWithSession('/', filePart);
+        // A stored root session claims everything under it.
+        expect(runQuery(db, '/tmp/project')).toHaveLength(1);
+        db.close();
+        const winRoot = dbWithSession('E:/', filePart);
+        expect(runCaseQuery(winRoot, 'e:\\project\\sub', true)).toHaveLength(1);
+        winRoot.close();
+        // And a cwd at the root accepts stored subdirectories.
+        const sub = dbWithSession('/tmp/deep', filePart);
+        expect(runQuery(sub, '/')).toHaveLength(1);
+        sub.close();
+    });
+
     it('case-insensitive on Windows: mixed-case ancestor still matches', () => {
         const db = dbWithSession('E:/GitTest/Proj', filePart);
         expect(runCaseQuery(db, 'e:\\gittest\\proj\\sub', true)).toHaveLength(1);

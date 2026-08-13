@@ -8,7 +8,7 @@ Run this flow when `~/.modlens/config.json` does not exist, or `modlens config s
 modlens doctor --json
 ```
 
-Read three things from the report: which providers are `ready`, the Reuse section (per-harness decisions plus discovered logins and vision models; the harness this conversation runs inside is itself the first reusable engine), and the guard state. Doctor spends no quota and makes no network calls.
+Read three things from the report: each provider's `status` (`ready` means verified; `installed` means a CLI is on PATH but its sign-in is unverified until the first real read; rendered as `[ok?]` in the text report), the Reuse section (per-harness decisions plus discovered logins and vision models; the harness this conversation runs inside is itself the first reusable engine), and the guard state. Doctor spends no quota and makes no network calls.
 
 ## 2. Tell the user what their machine already has
 
