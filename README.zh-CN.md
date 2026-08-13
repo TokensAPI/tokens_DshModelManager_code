@@ -34,10 +34,13 @@ DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助�
 
 ## 亮点
 
-**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `read_image` 工具读图。要粘贴识图，把模型选择器切到插件新增的两个条目之一：**`DeepSeek-V4-Flash (modlens vision)`** 或 **`DeepSeek-V4-Pro (modlens vision)`**，贴图放行、发请求时转成证据（你的消息保留原生缩略图）、仍由原 DeepSeek 路由回答。包装只覆盖 DeepSeek 与 GLM 的文本模型，两家自己的视觉型号自动排除。
+**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `read_image` 工具读图。
 
-**直接粘贴图片识别** 无需先保存成文件再提供路径。
+如果需要在 dsh 中直接粘贴识图，把模型选择器切到插件新增的两个条目之一：**`DeepSeek-V4-Flash (modlens vision)`** 或 **`DeepSeek-V4-Pro (modlens vision)`**，贴图放行、发请求时转成证据（你的消息保留原生缩略图）、仍由原 DeepSeek 路由回答。包装只覆盖 DeepSeek 与 GLM 的文本模型，两家自己的视觉型号自动排除。
 
+不想切模型也行（macOS）：截图后直接说「读我剪贴板里的图」，任何模型（原生 DeepSeek 也行）都会调 `read_clipboard` 工具读系统剪贴板，每次读取先经 dsh 原生审批弹窗确认，图片不进消息流，所以不受模型模态限制。
+
+- **直接粘贴图片识别** 无需先保存成文件再提供路径。
 - **零配置起手。** 复用 Claude Code、Codex、OpenCode、Pi 已配置，直接复用你本机的其他多模态模型。什么都没有？Antigravity CLI 是免 key 的免费通道，配一个免费 Gemini key 可将识别耗时降至 5 到 10 秒。
 - **基于证据而非想象。** 全文转录、按阅读顺序划分的版面区块、实体与关系列表，模型引用的是具体内容。
 - **一次安装，多端可用。** Claude Code、Codex、Pi、OpenCode 均经真机验证。
