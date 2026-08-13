@@ -123,14 +123,17 @@ describe('guards config', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('parses the top-level auto switch as a strict boolean', () => {
+    it('records per-harness borrow decisions as strict booleans, empty clears', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
         const file = path.join(dir, 'config.json');
-        setConfigValue('auto', 'true', file);
-        expect(loadConfigFile(file).auto).toBe(true);
-        setConfigValue('auto', 'false', file);
-        expect(loadConfigFile(file).auto).toBe(false);
-        expect(() => setConfigValue('auto', 'maybe', file)).toThrow('true or false');
+        setConfigValue('borrow.codex', 'true', file);
+        setConfigValue('borrow.pi', 'false', file);
+        expect(loadConfigFile(file).borrow).toEqual({ codex: true, pi: false });
+        setConfigValue('borrow.codex', '', file);
+        expect(loadConfigFile(file).borrow).toEqual({ pi: false });
+        expect(() => setConfigValue('borrow.codex', 'maybe', file)).toThrow('true or false');
+        expect(() => setConfigValue('borrow.grok', 'true', file)).toThrow('Unknown borrow');
+        expect(() => setConfigValue('auto', 'true', file)).toThrow(/borrow/);
         fs.rmSync(dir, { recursive: true, force: true });
     });
 

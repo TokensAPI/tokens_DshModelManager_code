@@ -4,7 +4,13 @@
 import * as fs from 'fs';
 import { createRequire } from 'module';
 import { type DiscoverOptions, discoverAuto, type HarnessProbe } from './auto/discover.ts';
-import { CONFIG_PATH, type ModlensConfig, resolveProviderSettings } from './config.ts';
+import {
+    BORROW_HARNESSES,
+    type BorrowHarness,
+    CONFIG_PATH,
+    type ModlensConfig,
+    resolveProviderSettings,
+} from './config.ts';
 import { detectActiveModel } from './guard/index.ts';
 import { allowPatterns, denyPatterns, evaluateGuard, type ModelSource } from './guard/rules.ts';
 import {
@@ -72,9 +78,10 @@ export interface DoctorReport {
         permissionsOk: boolean;
         note?: string;
     };
-    /** Auto-mode discovery: what local harness vision could be borrowed. */
-    auto: {
-        enabled: boolean;
+    /** Borrow state: per-harness grant decisions plus what discovery found. */
+    borrow: {
+        /** claude absent counts as granted (claude-cli predates the model). */
+        decisions: Record<BorrowHarness, 'granted' | 'refused' | 'not asked'>;
         probes: HarnessProbe[];
     };
 }
@@ -273,10 +280,19 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
             reason: guardVerdict.reason,
         },
         config: inspectConfigFile(configPath),
-        // doctor is the "what would auto find" view, so it always probes fresh
-        // (and rewrites the cache); regular runs will read the cache instead.
-        auto: {
-            enabled: input.config.auto === true,
+        // doctor is the "what could be borrowed" view, so it always probes
+        // fresh (and rewrites the cache); regular runs read the cache instead.
+        borrow: {
+            decisions: Object.fromEntries(
+                BORROW_HARNESSES.map((harness) => {
+                    const decision = input.config.borrow?.[harness];
+                    const fallback = harness === 'claude' ? 'granted' : 'not asked';
+                    return [
+                        harness,
+                        decision === true ? 'granted' : decision === false ? 'refused' : fallback,
+                    ];
+                }),
+            ) as Record<BorrowHarness, 'granted' | 'refused' | 'not asked'>,
             probes: discoverAuto({ env, fresh: true, ...input.auto }).probes,
         },
     };
@@ -345,11 +361,13 @@ export function renderDoctorReport(report: DoctorReport): string {
     );
     lines.push('');
 
-    lines.push('Auto (borrowable local harness vision; off by default)');
+    lines.push('Borrow (may modlens spend other local logins? config "borrow.<harness>")');
     lines.push(
-        `  enabled: ${report.auto.enabled}${report.auto.enabled ? '' : ' (turn on: modlens config set auto true)'}`,
+        `  decisions: ${Object.entries(report.borrow.decisions)
+            .map(([harness, decision]) => `${harness} ${decision}`)
+            .join(', ')}`,
     );
-    for (const probe of report.auto.probes) {
+    for (const probe of report.borrow.probes) {
         if (!probe.cliFound) {
             lines.push(`  ${probe.harness}: cli not found`);
             continue;

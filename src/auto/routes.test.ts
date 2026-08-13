@@ -4,7 +4,13 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import type { BuildProviderInvocationOptions, VisionProvider } from '../providers/index.ts';
 import type { AutoDiscovery } from './discover.ts';
-import { autoProviders, codexCliRoute, opencodeCliRoute, piBorrowedRoutes } from './routes.ts';
+import {
+    borrowProviders,
+    codexCliRoute,
+    opencodeCliRoute,
+    piCliRoute,
+    piRoutes,
+} from './routes.ts';
 
 function pathWith(bins: Record<string, string>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-bin-'));
@@ -173,7 +179,7 @@ describe('piBorrowedRoutes', () => {
                 };
             },
         };
-        const routes = piBorrowedRoutes(home, env, { openai: fakeTarget });
+        const { inline: routes } = piRoutes(home, env, { openai: fakeTarget });
         expect(routes).toHaveLength(1);
         expect(routes[0].name).toBe('pi:openai');
         expect(routes[0].defaultModel).toBe('gpt-5.6-sol');
@@ -191,17 +197,88 @@ describe('piBorrowedRoutes', () => {
     it('returns no routes without credentials, a store, or a pi binary', () => {
         const home = piHome();
         // No pi on PATH: the key could never be fetched.
-        expect(piBorrowedRoutes(home, { PATH: '' })).toEqual([]);
+        expect(piRoutes(home, { PATH: '' })).toEqual({ inline: [], agents: [] });
         fs.rmSync(home, { recursive: true, force: true });
         const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
-        expect(piBorrowedRoutes(empty, { PATH: pathWith({ pi: '#!/bin/sh\necho k\n' }) })).toEqual(
-            [],
-        );
+        expect(piRoutes(empty, { PATH: pathWith({ pi: '#!/bin/sh\necho k\n' }) })).toEqual({
+            inline: [],
+            agents: [],
+        });
         fs.rmSync(empty, { recursive: true, force: true });
     });
 });
 
-describe('autoProviders', () => {
+describe('piCliRoute', () => {
+    it('builds a non-interactive pi invocation with the @file attachment', () => {
+        const route = piCliRoute('bespoke', 'vision-x');
+        const invocation = route.buildInvocation?.(BUILD_BASE);
+        expect(invocation?.command).toBe('pi');
+        const args = invocation?.args ?? [];
+        expect(args).toContain('-p');
+        expect(args).toContain('--no-session');
+        expect(args).toContain('--no-tools');
+        expect(args[args.indexOf('--provider') + 1]).toBe('bespoke');
+        expect(args[args.indexOf('--model') + 1]).toBe('vision-x');
+        expect(args).toContain('@/tmp/shot.png');
+        expect(args[args.length - 1]).toContain('"ocr"');
+    });
+
+    it('parses the pi event stream from the message_end event', () => {
+        const route = piCliRoute('bespoke', 'vision-x');
+        const payload = { summary: 'seen' };
+        const stdout = [
+            JSON.stringify({ type: 'message_update', message: { content: [] } }),
+            JSON.stringify({
+                type: 'message_end',
+                message: {
+                    content: [
+                        { type: 'thinking', thinking: 'hm' },
+                        { type: 'text', text: JSON.stringify(payload) },
+                    ],
+                    usage: { totalTokens: 9 },
+                    responseId: 'r-1',
+                },
+            }),
+        ].join('\n');
+        const parsed = route.parseOutput?.(stdout);
+        expect(parsed?.result).toEqual(payload);
+        expect(parsed?.meta.conversationId).toBe('r-1');
+        expect(parsed?.meta.usage).toEqual({ totalTokens: 9 });
+    });
+
+    it('falls back to a pi-cli agent route for unmappable credentials', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
+        fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
+        fs.writeFileSync(
+            path.join(home, '.pi', 'agent', 'models-store.json'),
+            JSON.stringify({
+                bespoke: {
+                    models: [
+                        {
+                            id: 'vision-x',
+                            provider: 'bespoke',
+                            api: 'bespoke-rpc',
+                            baseUrl: 'https://b.example.com',
+                            input: ['text', 'image'],
+                        },
+                    ],
+                },
+            }),
+        );
+        fs.writeFileSync(
+            path.join(home, '.pi', 'agent', 'auth.json'),
+            JSON.stringify({ bespoke: { type: 'oauth' } }),
+        );
+        const env = { PATH: pathWith({ pi: '#!/bin/sh\necho k\n' }) };
+        const routes = piRoutes(home, env);
+        expect(routes.inline).toEqual([]);
+        expect(routes.agents.map((r) => r.name)).toEqual(['pi-cli']);
+        expect(routes.agents[0].defaultModel).toBe('vision-x');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+});
+
+describe('borrowProviders', () => {
     const discovery: AutoDiscovery = {
         cachedAt: new Date().toISOString(),
         fromCache: false,
@@ -232,23 +309,35 @@ describe('autoProviders', () => {
         ],
     };
 
-    it('orders local routes inline-first and skips claude (already a provider)', () => {
+    it('builds routes only for granted harnesses, region-ordered', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
-        const routes = autoProviders('local', { env: { PATH: '' }, home, discovery });
-        expect(routes.map((r) => r.name)).toEqual(['codex-cli', 'opencode-cli']);
+        const routes = borrowProviders(
+            'local',
+            { borrow: { codex: true, opencode: true } },
+            { env: { PATH: '' }, home, discovery },
+        );
+        expect(routes.inline).toEqual([]);
+        expect(routes.agents.map((r) => r.name)).toEqual(['codex-cli', 'opencode-cli']);
         fs.rmSync(home, { recursive: true, force: true });
     });
 
-    it('keeps only borrowed-inline routes for remote URLs', () => {
+    it('builds nothing without grants, even when discovery is full', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
-        expect(autoProviders('remote', { env: { PATH: '' }, home, discovery })).toEqual([]);
+        for (const config of [{}, { borrow: { codex: false, opencode: false } }]) {
+            const routes = borrowProviders('local', config, { env: { PATH: '' }, home, discovery });
+            expect(routes).toEqual({ inline: [], agents: [] });
+        }
         fs.rmSync(home, { recursive: true, force: true });
     });
 
-    it('builds nothing from an empty discovery', () => {
+    it('keeps agents out of the remote kind entirely', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
-        const empty: AutoDiscovery = { cachedAt: '', fromCache: false, probes: [] };
-        expect(autoProviders('local', { env: { PATH: '' }, home, discovery: empty })).toEqual([]);
+        const routes = borrowProviders(
+            'remote',
+            { borrow: { codex: true, opencode: true, pi: true } },
+            { env: { PATH: '' }, home, discovery },
+        );
+        expect(routes.agents).toEqual([]);
         fs.rmSync(home, { recursive: true, force: true });
     });
 });

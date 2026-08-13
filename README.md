@@ -32,7 +32,7 @@ Something broken, or something missing? [Open an issue](https://github.com/liust
 
 ## Highlights
 
-- **Starts with what you already have.** A machine with Claude Code signed in works immediately, zero setup: modlens rides that login. No Claude Code? Antigravity CLI is a free no-key channel, and a free Gemini key brings a read down to 5-10 seconds.
+- **Starts with what you already have.** A signed-in Claude Code works immediately, zero setup, and the logins of Codex, OpenCode, and Pi can be borrowed too, each behind one explicit yes. No harness at all? Antigravity CLI is a free no-key channel, and a free Gemini key brings a read down to 5-10 seconds.
 - **Evidence, not an impression.** Full transcription, reading-order layout regions, entity and relation lists. The model quotes specifics.
 - **Install once, use everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
 
@@ -42,7 +42,7 @@ Something broken, or something missing? [Open an issue](https://github.com/liust
 
 > Install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md, then run the health check and tell me the result.
 
-The install starts by checking what your machine already has. An existing Claude Code login is enough: modlens works right away with zero extra setup, and the health check will say so.
+The install starts by checking what your machine already has. An existing login in Claude Code, Codex, OpenCode, or Pi can be enough: modlens asks before borrowing any of them, and the health check tells you where things stand.
 
 **Step 2, only if the health check comes back empty, set up a free engine.** The recommended choice is a free Gemini API key (about three minutes at [Google AI Studio](https://aistudio.google.com), no credit card), which also makes every read 5-10 seconds. A free OpenAI-compatible key from another platform works too. To avoid any sign-up, install Antigravity CLI instead, then sign in:
 
@@ -51,7 +51,7 @@ curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy                                                           # sign in, then exit
 ```
 
-*Preview: `modlens doctor` also inventories vision-capable models reachable through other local harness CLIs (Codex, OpenCode, Pi). Automatic routing through them is in development.*
+The install also inventories vision reachable through your other local harness CLIs (Codex, OpenCode, Pi) and asks, per harness, whether modlens may borrow it. Granted logins join the engine pool as equals, and every borrowed read is labeled with whose quota it spent.
 
 ## Usage
 

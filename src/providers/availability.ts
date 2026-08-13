@@ -130,7 +130,13 @@ export function providerChain(
     config: ModlensConfig,
     env: NodeJS.ProcessEnv = process.env,
 ): VisionProvider[] {
-    const names: string[] = [...(kind === 'remote' ? REMOTE_FAILOVER_ORDER : LOCAL_FAILOVER_ORDER)];
+    let names: string[] = [...(kind === 'remote' ? REMOTE_FAILOVER_ORDER : LOCAL_FAILOVER_ORDER)];
+    // claude-cli is the borrow-a-login route that predates the borrow model,
+    // so its membership follows the borrow.claude decision: absent counts as
+    // granted (compatibility), an explicit refusal removes it. -p still pins.
+    if (config.borrow?.claude === false) {
+        names = names.filter((name) => name !== 'claude-cli');
+    }
 
     const preferred = config.provider?.trim();
     if (preferred) {

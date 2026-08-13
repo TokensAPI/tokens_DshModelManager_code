@@ -112,17 +112,33 @@ has one, so always check before setting anything up:
 bash ~/.claude/skills/modlens/scripts/run.sh doctor   # replace with your TARGET
 ```
 
-If the report shows any provider marked `[ok]`, an engine is ready: skip to
-Step 4. In particular, a machine with Claude Code signed in always has
-`claude-cli` ready, so modlens works there with zero further setup. That route
-is the slow one (a 20-45 second agent loop that also spends the user's Claude
-subscription), which is fine as a starting point: tell the user it already
-works, and that a free Gemini key (Path 1) brings a read down to 5-10 seconds
-whenever they want the upgrade.
+Read two sections of the report: the providers and the Borrow section.
 
-If nothing is `[ok]`, pick one path below. If the user handed you a Gemini API
-key, use Path 1 with it now. If they already have an OpenAI-compatible
-endpoint, use Path 3.
+**Providers.** If any provider shows `[ok]`, an engine is ready: skip to the
+Borrow consent below, then Step 4. In particular, a machine with Claude Code
+signed in always has `claude-cli` ready, so modlens works there with zero
+further setup. That route is the slow one (a 20-45 second agent loop that also
+spends the user's Claude subscription), which is fine as a starting point: tell
+the user it already works, and that a free Gemini key (Path 1) brings a read
+down to 5-10 seconds whenever they want the upgrade.
+
+**Borrow consent.** The Borrow section lists local harness CLIs whose logins
+could read images: the harness you are installing into counts too (a signed-in
+Codex, an OpenCode vision model, credentials held by pi). For each entry marked
+`not asked` that has vision, ask the user one question, naming the harness and
+whose quota it spends, for example: "Your Codex CLI is signed in and its model
+reads images. Allow modlens to borrow it when needed? Every borrowed read is
+labeled with whose quota it spent." Record each answer, yes or no:
+
+```bash
+bash ~/.claude/skills/modlens/scripts/run.sh config set borrow.codex true    # or false
+```
+
+A refusal recorded is a question never asked again. Skip what the user skips.
+
+If no provider is `[ok]` and nothing was granted, pick one path below. If the
+user handed you a Gemini API key, use Path 1 with it now. If they already have
+an OpenAI-compatible endpoint, use Path 3.
 
 ### Path 1: Gemini API key (recommended; works in headless sessions)
 
