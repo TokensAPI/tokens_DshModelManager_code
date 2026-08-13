@@ -8,7 +8,7 @@ Run this flow when `~/.modlens/config.json` does not exist, or `modlens config s
 modlens doctor --json
 ```
 
-Read three things from the report: each provider's `status` (`ready` means verified; `installed` means a CLI is on PATH but its sign-in is unverified until the first real read; rendered as `[ok?]` in the text report), the Reuse section (per-harness decisions plus discovered logins and vision models; the harness this conversation runs inside is itself the first reusable engine), and the guard state. Doctor spends no quota and makes no network calls.
+Read three things from the report: each provider's `status` (`ready` means verified, `installed` means a CLI is on PATH with its sign-in unverified until the first real read, rendered as `[ok?]` in the text report), the Reuse section (per-harness decisions plus discovered logins and vision models, where the harness this conversation runs inside is itself the first reusable engine), and the guard state. Doctor spends no quota and makes no network calls.
 
 ## 2. Tell the user what their machine already has
 
@@ -16,9 +16,9 @@ One line per finding, plain words, in the user's language. Name concrete things,
 
 - An engine is ready: "modlens is ready to go: <provider> is configured (via <env var / config file / existing login>)."
 - Reusable vision found: "Your <harness> CLI is signed in and its model can read images. modlens can reuse it when needed, about <n> seconds per read, and it spends that account's quota."
-- Nothing at all: "No vision engine is set up yet. The fastest free option is a Gemini API key (three minutes, no card); Antigravity CLI works with no sign-up at all."
+- Nothing at all: "No vision engine is set up yet. The fastest free option is a Gemini API key (three minutes, no card). Antigravity CLI works with no sign-up at all."
 
-Do not dump the raw doctor output on the user; summarize it. Do not describe options the machine does not have.
+Do not dump the raw doctor output on the user, summarize it. Do not describe options the machine does not have.
 
 ## 3. Ask before touching anything
 
@@ -27,7 +27,7 @@ Consent rules:
 - One question per decision, never a bundled yes. Reusing Codex and reusing pi credentials are two questions (or one question with independent options), not one.
 - Each question names the harness, whose quota it spends, and the accounting promise. Example wording: "Allow modlens to reuse your signed-in Codex CLI for image reads? Every reused read is labeled in the result so you always see whose quota was spent."
 - The do-nothing outcome must be safe and stated: "If you skip this, modlens just uses the engines you configure yourself."
-- If the user offers an API key, take exactly that key; never go looking for keys they did not hand over.
+- If the user offers an API key, take exactly that key, and never go looking for keys they did not hand over.
 
 ## 4. Apply only what was consented to
 
