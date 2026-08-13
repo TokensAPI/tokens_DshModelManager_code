@@ -134,7 +134,7 @@ export function providerChain(
     // claude-cli is the borrow-a-login route that predates the borrow model,
     // so its membership follows the borrow.claude decision: absent counts as
     // granted (compatibility), an explicit refusal removes it. -p still pins.
-    if (config.borrow?.claude === false) {
+    if (config.reuse?.claude === false) {
         names = names.filter((name) => name !== 'claude-cli');
     }
 

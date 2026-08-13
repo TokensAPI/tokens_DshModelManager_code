@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { discoverAuto } from './auto/discover.ts';
-import { type AutoRouteOptions, borrowProviders } from './auto/routes.ts';
+import { type AutoRouteOptions, reuseProviders } from './auto/routes.ts';
 import { loadConfigFile, type ModlensConfig, resolveProviderSettings } from './config.ts';
 import { providerChain } from './providers/availability.ts';
 import {
@@ -94,7 +94,7 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
     if (chain.length === 0) {
         throw new Error(
             'No vision provider is set up on this machine. Install Antigravity CLI (curl -fsSL https://antigravity.google/cli/install.sh | bash, then run agy once to sign in), or configure a key: modlens config set gemini-api.apiKey <key>. Run modlens doctor for the full picture.' +
-                borrowHint(config, options.autoOptions),
+                reuseHint(config, options.autoOptions),
         );
     }
 
@@ -127,8 +127,8 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
                 ok: true,
                 durationSeconds: (Date.now() - startedAt) / 1000,
             });
-            if (provider.borrowedNote) {
-                warnings.push(provider.borrowedNote);
+            if (provider.reuseNote) {
+                warnings.push(provider.reuseNote);
             }
             if (attempts.length > 1) {
                 const failed = attempts.slice(0, -1);
@@ -178,7 +178,7 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
     throw new Error(
         `Every configured vision provider failed for this image. ${attempts
             .map((attempt) => `${attempt.provider}: ${attempt.error}`)
-            .join(' | ')}${borrowHint(config, options.autoOptions)}`,
+            .join(' | ')}${reuseHint(config, options.autoOptions)}`,
     );
 }
 
@@ -190,13 +190,13 @@ const INLINE_REGION = new Set(['gemini-api', 'openai', 'anthropic']);
  * claude-cli (which spends the Claude subscription and stays last). The base
  * order is preserved, so a `config set provider` preference keeps its place.
  */
-function composeChain(
+export function composeChain(
     kind: 'local' | 'remote',
     config: ModlensConfig,
     autoOptions: AutoRouteOptions | undefined,
 ): VisionProvider[] {
-    const chain = [...providerChain(kind, config)];
-    const borrowed = borrowProviders(kind, config, autoOptions);
+    const chain = [...providerChain(kind, config, autoOptions?.env ?? process.env)];
+    const borrowed = reuseProviders(kind, config, autoOptions);
     if (borrowed.inline.length > 0) {
         const lastInline = chain.map((p) => INLINE_REGION.has(p.name)).lastIndexOf(true);
         chain.splice(lastInline + 1, 0, ...borrowed.inline);
@@ -208,7 +208,7 @@ function composeChain(
     return chain;
 }
 
-const BORROW_KEY_BY_HARNESS: Record<string, 'codex' | 'opencode' | 'pi'> = {
+const REUSE_KEY_BY_HARNESS: Record<string, 'codex' | 'opencode' | 'pi'> = {
     codex: 'codex',
     opencode: 'opencode',
     pi: 'pi',
@@ -219,26 +219,41 @@ const BORROW_KEY_BY_HARNESS: Record<string, 'codex' | 'opencode' | 'pi'> = {
  * borrowable vision the user was never asked about. A hint only: nothing is
  * enabled without an explicit grant.
  */
-function borrowHint(config: ModlensConfig, autoOptions: AutoRouteOptions | undefined): string {
+function reuseHint(config: ModlensConfig, autoOptions: AutoRouteOptions | undefined): string {
     try {
-        const grants = config.borrow ?? {};
+        const grants = config.reuse ?? {};
         const discovery =
             autoOptions?.discovery ??
             discoverAuto({ env: autoOptions?.env, home: autoOptions?.home });
-        const unasked = discovery.probes.filter((probe) => {
-            const key = BORROW_KEY_BY_HARNESS[probe.harness];
-            return (
-                key !== undefined &&
-                probe.cliFound &&
-                probe.visionModels.length > 0 &&
-                grants[key] === undefined
-            );
-        });
-        if (unasked.length === 0) {
-            return '';
+        const unasked: string[] = [];
+        const dead: string[] = [];
+        for (const probe of discovery.probes) {
+            const key = REUSE_KEY_BY_HARNESS[probe.harness];
+            if (key === undefined) {
+                continue;
+            }
+            const usable = probe.cliFound && probe.visionModels.length > 0;
+            if (grants[key] === undefined && usable) {
+                unasked.push(probe.harness);
+            } else if (grants[key] === true && !usable) {
+                // Granted but currently unusable: signed out, uninstalled, or
+                // its vision models went away. Name it instead of pretending
+                // the grant never existed.
+                dead.push(probe.harness);
+            }
         }
-        const names = unasked.map((probe) => probe.harness).join(', ');
-        return ` Hint: this machine has vision reachable through ${names}, which modlens is not yet allowed to borrow. Ask the user, then: modlens config set borrow.<harness> true.`;
+        const parts: string[] = [];
+        if (unasked.length > 0) {
+            parts.push(
+                ` Hint: this machine has vision reachable through ${unasked.join(', ')}, which modlens is not yet allowed to reuse. Ask the user, then: modlens config set reuse.<harness> true.`,
+            );
+        }
+        if (dead.length > 0) {
+            parts.push(
+                ` Note: reuse is granted for ${dead.join(', ')} but it is currently unusable (signed out, uninstalled, or no vision model); check that CLI's login.`,
+            );
+        }
+        return parts.join('');
     } catch {
         return '';
     }

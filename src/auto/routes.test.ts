@@ -4,13 +4,7 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import type { BuildProviderInvocationOptions, VisionProvider } from '../providers/index.ts';
 import type { AutoDiscovery } from './discover.ts';
-import {
-    borrowProviders,
-    codexCliRoute,
-    opencodeCliRoute,
-    piCliRoute,
-    piRoutes,
-} from './routes.ts';
+import { codexCliRoute, opencodeCliRoute, piCliRoute, piRoutes, reuseProviders } from './routes.ts';
 
 function pathWith(bins: Record<string, string>): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-bin-'));
@@ -130,7 +124,7 @@ describe('opencodeCliRoute', () => {
     });
 });
 
-describe('piBorrowedRoutes', () => {
+describe('piReusedRoutes', () => {
     function piHome(): string {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
         fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
@@ -183,7 +177,7 @@ describe('piBorrowedRoutes', () => {
         expect(routes).toHaveLength(1);
         expect(routes[0].name).toBe('pi:openai');
         expect(routes[0].defaultModel).toBe('gpt-5.6-sol');
-        expect(routes[0].borrowedNote).toContain('pi');
+        expect(routes[0].reuseNote).toContain('pi');
 
         await routes[0].execute?.(BUILD_BASE);
         expect(seen[0].settings).toMatchObject({
@@ -278,7 +272,7 @@ describe('piCliRoute', () => {
     });
 });
 
-describe('borrowProviders', () => {
+describe('reuseProviders', () => {
     const discovery: AutoDiscovery = {
         cachedAt: new Date().toISOString(),
         fromCache: false,
@@ -311,9 +305,9 @@ describe('borrowProviders', () => {
 
     it('builds routes only for granted harnesses, region-ordered', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
-        const routes = borrowProviders(
+        const routes = reuseProviders(
             'local',
-            { borrow: { codex: true, opencode: true } },
+            { reuse: { codex: true, opencode: true } },
             { env: { PATH: '' }, home, discovery },
         );
         expect(routes.inline).toEqual([]);
@@ -323,8 +317,8 @@ describe('borrowProviders', () => {
 
     it('builds nothing without grants, even when discovery is full', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
-        for (const config of [{}, { borrow: { codex: false, opencode: false } }]) {
-            const routes = borrowProviders('local', config, { env: { PATH: '' }, home, discovery });
+        for (const config of [{}, { reuse: { codex: false, opencode: false } }]) {
+            const routes = reuseProviders('local', config, { env: { PATH: '' }, home, discovery });
             expect(routes).toEqual({ inline: [], agents: [] });
         }
         fs.rmSync(home, { recursive: true, force: true });
@@ -332,9 +326,9 @@ describe('borrowProviders', () => {
 
     it('keeps agents out of the remote kind entirely', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-routes-home-'));
-        const routes = borrowProviders(
+        const routes = reuseProviders(
             'remote',
-            { borrow: { codex: true, opencode: true, pi: true } },
+            { reuse: { codex: true, opencode: true, pi: true } },
             { env: { PATH: '' }, home, discovery },
         );
         expect(routes.agents).toEqual([]);

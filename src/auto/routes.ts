@@ -9,7 +9,7 @@
 //   their non-interactive modes (codex exec -i, opencode run -f), the same
 //   pattern claude-cli established.
 //
-// Every route carries a borrowedNote so the analyzer can say whose quota a
+// Every route carries a reuseNote so the analyzer can say whose quota a
 // read spent; credentials are fetched at call time and live only in memory.
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
@@ -37,8 +37,7 @@ export function codexCliRoute(visionModel: string): VisionProvider {
         name: 'codex-cli',
         defaultModel: visionModel,
         isolateWorkdir: true,
-        borrowedNote:
-            "auto mode borrowed the local Codex CLI login for this read; it spent that account's quota.",
+        reuseNote: "this read reused the local Codex CLI login and spent that account's quota.",
         buildInvocation: (options: BuildProviderInvocationOptions) => {
             if (options.imageKind === 'remote') {
                 throw new Error(
@@ -131,7 +130,7 @@ export function opencodeCliRoute(modelId: string): VisionProvider {
         name: 'opencode-cli',
         defaultModel: modelId,
         isolateWorkdir: true,
-        borrowedNote: `auto mode borrowed OpenCode's ${modelId} for this read; it spent that account's quota.`,
+        reuseNote: `this read reused OpenCode's ${modelId} and spent that account's quota.`,
         buildInvocation: (options: BuildProviderInvocationOptions) => {
             if (options.imageKind === 'remote') {
                 throw new Error(
@@ -224,7 +223,7 @@ export function piCliRoute(providerName: string, modelId: string): VisionProvide
         name: 'pi-cli',
         defaultModel: modelId,
         isolateWorkdir: true,
-        borrowedNote: `auto mode borrowed pi's ${providerName}/${modelId} for this read; it spent that account's quota.`,
+        reuseNote: `this read reused pi's ${providerName}/${modelId} and spent that account's quota.`,
         buildInvocation: (options: BuildProviderInvocationOptions) => {
             if (options.imageKind === 'remote') {
                 throw new Error(
@@ -363,7 +362,7 @@ export function piRoutes(
             routes.push({
                 name: `pi:${target.name}`,
                 defaultModel: id,
-                borrowedNote: `auto mode borrowed pi's ${provider} credentials for ${id}; this read spent that account's quota.`,
+                reuseNote: `this read reused pi's ${provider} credentials for ${id} and spent that account's quota.`,
                 execute: async (options) => {
                     const apiKey = fetchPiKey(piPath, id, provider);
                     return targetExecute({
@@ -412,7 +411,7 @@ export interface AutoRouteOptions {
     targets?: Record<string, VisionProvider>;
 }
 
-export interface BorrowedRoutes {
+export interface ReusedRoutes {
     /** Join the inline region of the chain (same speed class, guards intact). */
     inline: VisionProvider[];
     /** Join the agent region, before claude-cli. Local images only. */
@@ -427,14 +426,14 @@ export interface BorrowedRoutes {
  * is not built here: it is a first-class provider whose chain membership the
  * `borrow.claude` decision gates directly.
  */
-export function borrowProviders(
+export function reuseProviders(
     kind: 'local' | 'remote',
     config: ModlensConfig,
     options: AutoRouteOptions = {},
-): BorrowedRoutes {
+): ReusedRoutes {
     const env = options.env ?? process.env;
     const home = options.home ?? os.homedir();
-    const grants = config.borrow ?? {};
+    const grants = config.reuse ?? {};
     const inline: VisionProvider[] = [];
     const agents: VisionProvider[] = [];
     let piAgents: VisionProvider[] = [];

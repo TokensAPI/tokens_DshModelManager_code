@@ -88,11 +88,11 @@ The default `-m` model depends on the provider:
 | `--harness <name>` | Force storage scope: `claude-code`, `pi`, `opencode`, `none` | auto-detect |
 | `--cwd <path>` | Project directory the image was pasted in | current directory |
 
-Five providers: `antigravity-cli` (no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (uses your existing Claude subscription). Without `-p`, a run tries every provider that is set up, inline API providers first (5-10s), then the agents; the first good result wins and `meta.attempts` records the rest. Harnesses granted via `borrow.<harness>` contribute borrowed engines to the same regions (pi credentials inline, agent CLIs behind), with no priority over the user's own; details and the `guards` deny/allow lists are in [Configuration](configure.md).
+Five providers: `antigravity-cli` (no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (uses your existing Claude subscription). Without `-p`, a run tries every provider that is set up, inline API providers first (5-10s), then the agents; the first good result wins and `meta.attempts` records the rest. Harnesses granted via `reuse.<harness>` contribute reused engines to the same regions (pi credentials inline, agent CLIs behind), with no priority over the user's own; details and the `guards` deny/allow lists are in [Configuration](configure.md).
 
 Other subcommands:
 
 - `modlens guard [--model <id>]`: should the engine run for the active model at all? Exit 0 allow, 1 deny, verdict as JSON.
-- `modlens config <init|set|show>`: keys are `provider`, `borrow.<claude|codex|opencode|pi>`, `guards.<denyModels|allowModels|denyWhenUnknown>`, and `<provider>.<apiKey|baseUrl|model|extraBody>`.
-- `modlens doctor`: Node and node:sqlite, provider readiness, the failover chains for this machine, the detected harness, the guard's rules with a live verdict, and the Borrow section with per-harness grant decisions and discovered vision. Spends no quota; `--json` for a machine-readable report.
+- `modlens config <init|set|show>`: keys are `provider`, `reuse.<claude|codex|opencode|pi>`, `guards.<denyModels|allowModels|denyWhenUnknown>`, and `<provider>.<apiKey|baseUrl|model|extraBody>`.
+- `modlens doctor`: Node and node:sqlite, provider readiness, the failover chains for this machine, the detected harness, the guard's rules with a live verdict, and the Reuse section with per-harness grant decisions and discovered vision. Spends no quota; `--json` for a machine-readable report.
 
