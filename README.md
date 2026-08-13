@@ -10,7 +10,7 @@
   <a href="./README.zh-CN.md">简体中文</a> ·
   <a href="docs/troubleshooting.md">Troubleshooting</a> ·
   <a href="skills/modlens/references/configure.md">Configuration</a> ·
-  <a href="skills/modlens/references/output-schema.md">Output contract</a> ·
+  <a href="docs/output-schema.md">Output contract</a> ·
   <a href="docs/security.md">Security</a> ·
   <a href="https://github.com/liustack/modsearch">ModSearch (web)</a>
 </p>
@@ -82,10 +82,10 @@ And the paste path, end to end, in a Claude Code terminal on DeepSeek. The paste
 | Doc | Read it when |
 | :-- | :-- |
 | [INSTALL.md](INSTALL.md) | Installing the skill step by step (written for an agent) |
-| [CLI manual](skills/modlens/references/cli.md) | The CLI the skill drives: flags, config, doctor |
+| [CLI manual](docs/cli.md) | The CLI the skill drives: flags, config, doctor |
 | [Troubleshooting](docs/troubleshooting.md) | A command failed and the message needs decoding |
 | [Configuration](skills/modlens/references/configure.md) | Setting a key, switching providers, fixing config |
-| [Output contract](skills/modlens/references/output-schema.md) | Parsing the JSON or building on it |
+| [Output contract](docs/output-schema.md) | Parsing the JSON or building on it |
 | [Harness setup](docs/harness-setup.md) | Wiring it into Codex, Claude Code, Pi, or OpenCode |
 | [Security](docs/security.md) | File permissions, image content as untrusted input |
 | [CHANGELOG](CHANGELOG.md) | Finding what changed in a version |

@@ -151,14 +151,15 @@ Three things that bite:
 
 ## Choosing a provider for the user
 
-- Wants zero setup and free: `antigravity-cli` (needs agy sign-in, 15-40s per image).
+- Wants zero setup and free: `antigravity-cli` (needs agy sign-in, 15-40s per image; for dense or hard images try `-m gemini-3.1-pro-high`).
 - Wants fast and free: `gemini-api` (three-minute key, 5-10s).
-- Already pays for Claude: `claude-cli` (no extra key) or `anthropic` (API billing).
+- Already pays for Claude: `claude-cli` (no extra key, 20-45s agent loop) or `anthropic` (API billing).
 - Has a favorite multimodal endpoint (qwen, GLM, ...): `openai`.
 
 Every configured provider also backs up the others: a run tries them in a
-fixed order (local images agent-first; remote URLs inline-API-first, agent
-last) and fails over on an error, a timeout, or a schema-violating result.
+fixed order (inline API providers first at 5-10s, then the agents; for remote
+URLs the order is also a security boundary) and fails over on an error, a
+timeout, or a schema-violating result.
 `config set provider <name>` moves a provider to the front of its allowed
 region; `-p <name>` pins exactly one with no fallback. `doctor` prints the
 chains, and the result's `meta.attempts` shows what a run actually tried.

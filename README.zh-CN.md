@@ -10,7 +10,7 @@
   <a href="./README.md">English</a> ·
   <a href="docs/troubleshooting.md">故障排查</a> ·
   <a href="skills/modlens/references/configure.md">配置</a> ·
-  <a href="skills/modlens/references/output-schema.md">输出契约</a> ·
+  <a href="docs/output-schema.md">输出契约</a> ·
   <a href="docs/security.md">安全</a> ·
   <a href="https://github.com/liustack/modsearch">ModSearch（联网）</a>
 </p>
@@ -82,10 +82,10 @@ Codex 桌面 App 中识别一张推文截图。作者、配文、照片内容（
 | 文档                                                   | 适用场景                                   |
 | :----------------------------------------------------- | :----------------------------------------- |
 | [INSTALL.md](INSTALL.md)                               | 一步步安装 skill（为 agent 编写）          |
-| [CLI 手册](skills/modlens/references/cli.md)           | skill 所驱动的 CLI：参数、配置与体检       |
+| [CLI 手册](docs/cli.md)           | skill 所驱动的 CLI：参数、配置与体检       |
 | [故障排查](docs/troubleshooting.md)                    | 命令报错，查成因和解法                     |
 | [配置手册](skills/modlens/references/configure.md)     | 配置 key、切换 provider、排查配置          |
-| [输出契约](skills/modlens/references/output-schema.md) | 解析 JSON 或构建下游工具                   |
+| [输出契约](docs/output-schema.md) | 解析 JSON 或构建下游工具                   |
 | [宿主接入](docs/harness-setup.md)                      | 在 Codex、Claude Code、Pi、OpenCode 中配置 |
 | [安全说明](docs/security.md)                           | 恢复文件的权限、图片内容作为不可信输入     |
 | [更新日志](CHANGELOG.md)                               | 查询版本变更                               |
