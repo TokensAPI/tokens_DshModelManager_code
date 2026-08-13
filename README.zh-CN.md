@@ -32,7 +32,7 @@ DeepSeek-V4-Flash 没有视觉能力，无法处理截图和图片。ModLens 借
 
 ## 亮点
 
-- **从你机器上已有的开始。** 装着 Claude Code 且已登录的机器，装完即用，零配置：modlens 直接骑那个登录态。没有 Claude Code？Antigravity CLI 是免 key 的免费通道，配一个免费 Gemini key 可将识别耗时降至 5 到 10 秒。
+- **从你机器上已有的开始。** 已登录的 Claude Code 装完即用、零配置，Codex、OpenCode、Pi 的登录态也能借用，每一项都先问过你。什么都没有？Antigravity CLI 是免 key 的免费通道，配一个免费 Gemini key 可将识别耗时降至 5 到 10 秒。
 - **返回证据，而非印象。** 全文转录、按阅读顺序划分的版面区块、实体与关系列表，模型引用的是具体内容。
 - **一次安装，多端可用。** Claude Code、Codex、Pi、OpenCode 均经真机验证。
 
@@ -42,7 +42,7 @@ DeepSeek-V4-Flash 没有视觉能力，无法处理截图和图片。ModLens 借
 
 > 按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill，完成后运行体检并把结果告诉我。
 
-安装会先盘点你机器上已有的东西。已登录的 Claude Code 就足够了：modlens 装完直接可用，零额外配置，体检报告会告诉你。
+安装会先盘点你机器上已有的东西。Claude Code、Codex、OpenCode 或 Pi 里任何一个已有的登录态都可能就够了：modlens 借用前一定先征得你同意，体检报告会说清现状。
 
 **第二步，只在体检两手空空时，才需要你配一个免费引擎。** 推荐免费的 Gemini api key（到 [Google AI Studio](https://aistudio.google.com) 领取，约三分钟，无需信用卡），配上后每次识别 5 到 10 秒。其他平台的免费 openai 兼容 key 也行。想完全免注册就装 Antigravity CLI，然后完成登录：
 
@@ -51,7 +51,7 @@ curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy                                                           # 浏览器完成登录后退出
 ```
 
-*预告：`modlens doctor` 现在还会盘点本机其他 harness CLI（Codex、OpenCode、Pi）里可触达的视觉模型，经由它们的自动路由开发中。*
+安装还会盘点本机其他 harness CLI（Codex、OpenCode、Pi）里可触达的视觉能力，并逐个询问是否允许 modlens 借用。获准的登录态与你自己配的引擎平级入池，每次借用都会在结果里标明花的是谁的额度。
 
 ## 用法
 

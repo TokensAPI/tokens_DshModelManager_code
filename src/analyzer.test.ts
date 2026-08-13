@@ -398,7 +398,7 @@ describe.skipIf(onWindows)('provider failover', () => {
 
         const result = await analyzeImage({
             input: image,
-            config: { auto: true },
+            config: { borrow: { codex: true } },
             autoOptions: { home, env: { PATH: dir } },
             timeoutMs: 20_000,
         });
@@ -442,7 +442,7 @@ describe.skipIf(onWindows)('provider failover', () => {
             await analyzeImage({
                 input: image,
                 provider: 'antigravity-cli',
-                config: { auto: true },
+                config: { borrow: { codex: true } },
                 autoOptions: { home, env: { PATH: dir } },
                 timeoutMs: 20_000,
             });

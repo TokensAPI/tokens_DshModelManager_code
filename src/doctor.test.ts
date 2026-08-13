@@ -223,26 +223,31 @@ describe('buildDoctorReport: guard', () => {
     });
 });
 
-describe('buildDoctorReport: auto discovery', () => {
-    it('probes the four harnesses fresh and reports the enabled flag from config', () => {
+describe('buildDoctorReport: borrow', () => {
+    it('probes the four harnesses fresh and maps grant decisions with defaults', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-doctor-home-'));
         const report = buildDoctorReport({
-            config: { auto: true },
+            config: { borrow: { codex: true, pi: false } },
             env: { PATH: '', MODLENS_HARNESS: 'none' },
             auto: { home },
         });
-        expect(report.auto.enabled).toBe(true);
-        expect(report.auto.probes.map((p) => p.harness).sort()).toEqual([
+        expect(report.borrow.decisions).toEqual({
+            claude: 'granted',
+            codex: 'granted',
+            opencode: 'not asked',
+            pi: 'refused',
+        });
+        expect(report.borrow.probes.map((p) => p.harness).sort()).toEqual([
             'claude-code',
             'codex',
             'opencode',
             'pi',
         ]);
-        expect(report.auto.probes.every((p) => p.cliFound === false)).toBe(true);
+        expect(report.borrow.probes.every((p) => p.cliFound === false)).toBe(true);
         fs.rmSync(home, { recursive: true, force: true });
     });
 
-    it('renders an Auto section with per-harness lines and the off-by-default hint', () => {
+    it('renders a Borrow section with decisions and per-harness lines', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-doctor-home-'));
         const report = buildDoctorReport({
             config: {},
@@ -250,8 +255,9 @@ describe('buildDoctorReport: auto discovery', () => {
             auto: { home },
         });
         const rendered = renderDoctorReport(report);
-        expect(rendered).toContain('Auto');
-        expect(rendered).toContain('enabled: false');
+        expect(rendered).toContain('Borrow');
+        expect(rendered).toContain('codex not asked');
+        expect(rendered).toContain('claude granted');
         expect(rendered).toContain('codex: cli not found');
         fs.rmSync(home, { recursive: true, force: true });
     });

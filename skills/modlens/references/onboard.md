@@ -1,6 +1,6 @@
 # First run on this machine: inventory, ask, then configure
 
-Run this flow when `~/.modlens/config.json` does not exist, or `modlens config show` prints an empty config (`{"providers":{}}` with no `auto` key). That check makes the flow idempotent: a machine that has been through it is never re-onboarded, and an existing config is never overwritten without the user asking for a change. The user can also request it by name ("set up modlens").
+Run this flow when `~/.modlens/config.json` does not exist, or `modlens config show` prints an empty config (`{"providers":{}}` with no `borrow` decisions). That check makes the flow idempotent: a machine that has been through it is never re-onboarded, and an existing config is never overwritten without the user asking for a change. The user can also request it by name ("set up modlens").
 
 ## 1. Inventory, spending nothing
 
@@ -8,7 +8,7 @@ Run this flow when `~/.modlens/config.json` does not exist, or `modlens config s
 modlens doctor --json
 ```
 
-Read three things from the report: which providers are `ready`, what `auto.probes` found (harness CLIs with logins and vision models), and the guard state. Doctor spends no quota and makes no network calls.
+Read three things from the report: which providers are `ready`, the Borrow section (per-harness decisions plus discovered logins and vision models; the harness this conversation runs inside is itself the first borrowable engine), and the guard state. Doctor spends no quota and makes no network calls.
 
 ## 2. Tell the user what their machine already has
 
@@ -33,19 +33,19 @@ Consent rules:
 
 | The user agreed to | Run |
 | :-- | :-- |
-| Borrowing harness CLIs | `modlens config set auto true` |
+| Borrowing a harness CLI | `modlens config set borrow.<claude\|codex\|opencode\|pi> true` (one per consent) |
 | A Gemini key they handed over | `modlens config set gemini-api.apiKey <key>` |
 | An OpenAI-compatible endpoint | `config set openai.baseUrl / openai.apiKey / openai.model` |
 | Guard rules for their text-only model | `modlens config set guards.allowModels '["<pattern>"]'` (patterns: `references/configure.md`) |
 
-Nothing consented to: write nothing, tell the user modlens will use whatever is configured later, and stop.
+A refusal is also an answer: record it with `modlens config set borrow.<harness> false` so the user is never asked again. Nothing decided at all: write nothing and stop.
 
 ## 5. Close the loop
 
-Run `modlens doctor` once more and report in one or two sentences: what was written (always and only `~/.modlens/config.json`), what the chain now looks like, and the undo (`modlens config set auto false`, or editing that file). If an engine is ready, offer to prove it on a real image.
+Run `modlens doctor` once more and report in one or two sentences: what was written (always and only `~/.modlens/config.json`), what the chain now looks like, and the undo (`modlens config set borrow.<harness> false`, or editing that file). If an engine is ready, offer to prove it on a real image.
 
 ## Never
 
-- Never enable `auto` without an explicit yes in this conversation.
+- Never set any `borrow.<harness>` to true without an explicit yes for that harness in this conversation.
 - Never write, move, or read files outside `~/.modlens/` during onboarding (doctor's read-only probing is the one exception).
 - Never present borrowing as free: it spends the named account's quota, and the wording must say so.

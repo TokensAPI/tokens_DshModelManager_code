@@ -25,13 +25,23 @@ export type ProviderStringField = 'apiKey' | 'baseUrl' | 'model';
 
 const STRING_FIELDS: ProviderStringField[] = ['apiKey', 'baseUrl', 'model'];
 
+/** Harnesses whose local logins modlens can be granted to borrow. */
+export const BORROW_HARNESSES = ['claude', 'codex', 'opencode', 'pi'] as const;
+export type BorrowHarness = (typeof BORROW_HARNESSES)[number];
+
 export interface ModlensConfig {
     provider?: string;
     providers?: Record<string, ProviderSettings>;
     /** Invocation guard: when the active model already sees images, skip the engine. */
     guards?: GuardsConfig;
-    /** Auto mode: discover local harness CLIs and their vision models (default off). */
-    auto?: boolean;
+    /**
+     * Per-harness borrow decisions, written by the onboarding conversation:
+     * true = the user allowed borrowing this harness's login for reads,
+     * false = they refused (do not ask again), absent = never asked.
+     * `claude` absent counts as granted for compatibility: claude-cli predates
+     * this model as a built-in provider.
+     */
+    borrow?: Partial<Record<BorrowHarness, boolean>>;
 }
 
 export const CONFIG_DIR = path.join(os.homedir(), '.modlens');
@@ -111,18 +121,36 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
     if (dottedKey === 'provider') {
         config.provider = value;
     } else if (dottedKey === 'auto') {
-        const normalized = value.trim().toLowerCase();
-        if (normalized !== 'true' && normalized !== 'false') {
-            throw new Error('auto must be true or false.');
+        throw new Error(
+            'The auto switch was replaced by per-harness grants. Use: modlens config set borrow.<claude|codex|opencode|pi> true|false',
+        );
+    } else if (dottedKey.startsWith('borrow.')) {
+        const harness = dottedKey.slice('borrow.'.length);
+        if (!(BORROW_HARNESSES as readonly string[]).includes(harness)) {
+            throw new Error(
+                `Unknown borrow harness: ${harness}. Use ${BORROW_HARNESSES.join(', ')}.`,
+            );
         }
-        config.auto = normalized === 'true';
+        const key = harness as BorrowHarness;
+        const normalized = value.trim().toLowerCase();
+        if (normalized === '') {
+            delete config.borrow?.[key];
+            if (config.borrow && Object.keys(config.borrow).length === 0) {
+                delete config.borrow;
+            }
+        } else if (normalized !== 'true' && normalized !== 'false') {
+            throw new Error(`borrow.${harness} must be true or false (empty clears).`);
+        } else {
+            config.borrow ??= {};
+            config.borrow[key] = normalized === 'true';
+        }
     } else if (dottedKey.startsWith('guards.')) {
         setGuardsValue(config, dottedKey.slice('guards.'.length), value);
     } else {
         const dot = dottedKey.indexOf('.');
         if (dot <= 0 || dot === dottedKey.length - 1) {
             throw new Error(
-                `Invalid config key: ${dottedKey}. Use "provider", "auto", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
+                `Invalid config key: ${dottedKey}. Use "provider", "borrow.<claude|codex|opencode|pi>", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
             );
         }
         const providerName = dottedKey.slice(0, dot);
