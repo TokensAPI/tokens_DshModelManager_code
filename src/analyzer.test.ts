@@ -114,6 +114,46 @@ describe('composeChain preferences', () => {
     });
 });
 
+describe('composeChain remote security boundary', () => {
+    it('keeps reused inline keys ahead of a preferred agent for remote URLs', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-chain-bin-'));
+        fs.writeFileSync(path.join(dir, 'agy'), '#!/bin/sh\n', { mode: 0o755 });
+        fs.writeFileSync(path.join(dir, 'pi'), '#!/bin/sh\necho k\n', { mode: 0o755 });
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-chain-home-'));
+        fs.mkdirSync(path.join(home, '.pi', 'agent'), { recursive: true });
+        fs.writeFileSync(
+            path.join(home, '.pi', 'agent', 'models-store.json'),
+            JSON.stringify({
+                openai: {
+                    models: [
+                        {
+                            id: 'gpt-5.6-sol',
+                            provider: 'openai',
+                            api: 'openai-completions',
+                            baseUrl: 'https://x.example/v1',
+                            input: ['text', 'image'],
+                        },
+                    ],
+                },
+            }),
+        );
+        fs.writeFileSync(
+            path.join(home, '.pi', 'agent', 'auth.json'),
+            JSON.stringify({ openai: { type: 'api_key' } }),
+        );
+        const chain = composeChain(
+            'remote',
+            { provider: 'antigravity-cli', reuse: { pi: true } },
+            { env: { PATH: dir }, home },
+        );
+        // Only the inline path runs the SSRF guards, so the reused key leads
+        // even though the user preferred the agent.
+        expect(chain.map((p) => p.name)).toEqual(['pi:openai', 'antigravity-cli']);
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+});
+
 describe.skipIf(onWindows)('provider subprocess handling', () => {
     const cleanups: Array<() => void> = [];
 
