@@ -248,6 +248,146 @@ describe('dsh plugin vision provider (phase 3)', () => {
     });
 });
 
+describe('dsh plugin read_clipboard (milestone 2)', () => {
+    const onDarwin = it.skipIf(process.platform !== 'darwin');
+
+    it('ships a clipboard schema whose result branch is the source vision schema', () => {
+        const shipped = JSON.parse(
+            fs.readFileSync(path.join(__dirname, '..', 'dsh', 'clipboard-schema.json'), 'utf-8'),
+        ) as {
+            properties: { result: unknown; snapshot: { required: string[] } };
+            required: string[];
+        };
+        expect(shipped.properties.result).toEqual(VISION_RESULT_SCHEMA);
+        expect(shipped.required).toEqual(['snapshot', 'result']);
+        expect(shipped.properties.snapshot.required).toContain('snapshotId');
+        expect(shipped.properties.snapshot.required).toContain('sha256');
+    });
+
+    interface RegisteredTool {
+        name: string;
+        execute: (args: unknown, exec: { signal?: AbortSignal }) => Promise<unknown>;
+    }
+
+    async function loadTools(config: Record<string, unknown> = {}) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const tools: RegisteredTool[] = [];
+        const handlers: Record<string, CallableFunction> = {};
+        plugin.apply(
+            {
+                tools: { register: (tool: RegisteredTool) => tools.push(tool) },
+                attachments: {},
+                on: (event: string, fn: CallableFunction) => {
+                    handlers[event] = fn;
+                },
+            } as never,
+            config,
+        );
+        return { tools, handlers };
+    }
+
+    onDarwin('asks for approval on every call and stays out of other tools', async () => {
+        const { handlers } = await loadTools();
+        const gate = handlers['tools/pre-execute'];
+        expect(gate).toBeDefined();
+        const capture = (await gate({ name: 'read_clipboard', arguments: {} }, async () => ({
+            kind: 'allow',
+        }))) as { kind: string; reason?: string };
+        expect(capture.kind).toBe('ask');
+        expect(capture.reason).toContain('clipboard');
+        const reread = (await gate(
+            { name: 'read_clipboard', arguments: { snapshotId: 'snap9' } },
+            async () => ({ kind: 'allow' }),
+        )) as { kind: string; reason?: string };
+        expect(reread.kind).toBe('ask');
+        expect(reread.reason).toContain('snap9');
+        const other = (await gate({ name: 'read_image', arguments: {} }, async () => ({
+            kind: 'allow',
+        }))) as { kind: string };
+        expect(other.kind).toBe('allow');
+    });
+
+    function fakeClipCli(body: string): string {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-clip-'));
+        const file = path.join(dir, 'cli.js');
+        fs.writeFileSync(file, body);
+        return file;
+    }
+
+    const captureOutput = JSON.stringify({
+        image: 'clipboard://sha256/aa',
+        provider: 'openai',
+        result: { summary: 'CLIP-SUM', ocr: { full_text: 'CLIP-TEXT' }, uncertainty: [] },
+        meta: {
+            model: 'm',
+            clipboard: {
+                snapshotId: 'snap1',
+                sha256: 'a'.repeat(64),
+                bytes: 3,
+                sourceMime: 'image/png',
+                normalizedMime: 'image/png',
+                createdAt: 'c',
+                expiresAt: 'e',
+            },
+        },
+    });
+
+    onDarwin('capture path lifts the snapshot out of meta', async () => {
+        const { tools } = await loadTools();
+        const tool = tools.find((t) => t.name === 'read_clipboard');
+        expect(tool).toBeDefined();
+        const cli = fakeClipCli(
+            `if (process.argv[2] !== 'clip' || process.argv[3] !== 'capture') { console.error('wrong argv: ' + process.argv.slice(2)); process.exit(9) }
+             console.log(${JSON.stringify(captureOutput)})`,
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        try {
+            const value = (await tool?.execute({}, { signal: undefined })) as {
+                snapshot: { snapshotId: string };
+                result: { summary: string };
+                provider: string;
+                meta: Record<string, unknown>;
+            };
+            expect(value.snapshot.snapshotId).toBe('snap1');
+            expect(value.result.summary).toBe('CLIP-SUM');
+            expect(value.provider).toBe('openai');
+            expect(value.meta).toEqual({ model: 'm' });
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
+    onDarwin('snapshotId routes to clip read and errors keep their identifier', async () => {
+        const { tools } = await loadTools();
+        const tool = tools.find((t) => t.name === 'read_clipboard');
+        const cli = fakeClipCli(
+            `if (process.argv[3] === 'read' && process.argv[4] === 'snap1') { console.log(${JSON.stringify(captureOutput)}) }
+             else { console.error('Error: CLIPBOARD_NO_IMAGE: no image on the clipboard.'); process.exit(1) }`,
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        try {
+            const value = (await tool?.execute({ snapshotId: 'snap1' }, {})) as {
+                snapshot: { snapshotId: string };
+            };
+            expect(value.snapshot.snapshotId).toBe('snap1');
+            await expect(tool?.execute({ snapshotId: 'gone' }, {})).rejects.toThrow(
+                /CLIPBOARD_NO_IMAGE/,
+            );
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
+    it('stays unregistered when disabled', async () => {
+        const { tools, handlers } = await loadTools({ readClipboard: false });
+        expect(tools.find((t) => t.name === 'read_clipboard')).toBeUndefined();
+        expect(handlers['tools/pre-execute']).toBeUndefined();
+    });
+});
+
 describe('dsh plugin request-time image conversion (v2)', () => {
     it('keeps the log intact and converts wire messages once per attachment', async () => {
         // @ts-expect-error untyped on purpose
