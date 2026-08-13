@@ -1,13 +1,13 @@
 ---
 name: modlens
-description: "Plug-in vision for text-only models. Hard rule: when a file path or URL with an image extension (.png, .jpg, .jpeg, .webp, .gif, .bmp, .heic) appears anywhere in the conversation (typed by the user, injected as a `[Image: source: <path>]` line, or inside a tag) and you cannot see that image's content, run this skill on it before any other approach: no self-built OCR, no PIL, no tesseract. Also triggers on pasted-image placeholders such as `[Image #1]` and `[Unsupported Image]`, and when the user says the image is on the clipboard (剪贴板): 'read my clipboard', 'the screenshot I just took', 我刚截的图 → run `modlens clip capture`. If you can actually see the image, do not use this skill. When unsure, run `modlens guard` first: a deny verdict means the active model has native vision and must read the image itself. Converts images into structured JSON evidence: full OCR, layout, semantics, visual clues. Also use when the user asks to install, configure, or switch modlens providers."
+description: "Plug-in vision for text-only models. Hard rule: when a file path or URL with an image extension (.png, .jpg, .jpeg, .webp, .gif, .bmp, .heic) appears anywhere in the conversation (typed by the user, injected as a `[Image: source: <path>]` line, or inside a tag) and you cannot see that image's content, run this skill on it before any other approach: no self-built OCR, no PIL, no tesseract. Also triggers on pasted-image placeholders such as `[Image #1]` and `[Unsupported Image]`. If you can actually see the image, do not use this skill. When unsure, run `modlens guard` before the first read of a session: a deny verdict means the active model has native vision and must read the image itself. Runs the modlens CLI to convert the image into structured JSON evidence: every word transcribed, layout regions, semantics, visual clues. Also use when the user asks how to install, configure, or switch modlens providers (Gemini API key, OpenAI-compatible endpoints, Claude API or Claude Code CLI)."
 compatibility: Requires network access and one of node 22+/npx, bun/bunx, or a preinstalled modlens binary on PATH.
 allowed-tools: Bash
 ---
 
 # ModLens — Vision Bridge Skill
 
-Use this skill when an image is in play and you cannot see its content: a path or URL with an image extension (the path alone is the trigger, hand it to modlens, never Read the bytes or build your own OCR), a placeholder like `[Image #1]`, `[Unsupported Image]`, or a `[Image: source: <path>]` line, an image the user says is on the clipboard, or the user asking to configure modlens. Do not use it for web search or fetch (that is `modsearch`), or for images you can already see natively.
+Use this skill when an image is in play and you cannot see its content: a path or URL with an image extension (the path alone is the trigger, hand it to modlens, never Read the bytes or build your own OCR), a placeholder like `[Image #1]`, `[Unsupported Image]`, or a `[Image: source: <path>]` line, or the user asking to configure modlens. Do not use it for web search or fetch (that is `modsearch`), or for images you can already see natively.
 
 ## Run it
 
@@ -39,13 +39,13 @@ State lives on the machine and the CLI reports it; read what you need when you n
 | Current settings | `modlens config show` |
 | First use and `config show` is empty | Follow `references/onboard.md`: inventory the machine, ask the user what to enable, configure only that |
 | Set keys, providers, guard lists, reuse grants | `references/configure.md` has every key and recipe |
-| The image is on the clipboard, or pasted with no visible path | `references/find-image.md`: clipboard branch first, then per-harness recovery |
+| A pasted image with no visible path | `references/find-image.md` has the branch for each harness |
 | An error | Read the message: every error names its cause and most name the fix |
 
 ## The loop
 
 1. **First read of a session**: `modlens guard --model <your-model-id>` (pass your model id only when your system prompt states it, never a guess). Exit 0: proceed. Exit 1 with a `model` in the verdict: stop, the user's rules say this model reads images itself. Exit 1 with `model: null`: stop, tell the user the guard could not identify the model and that `MODLENS_MODEL=<model>` unblocks it. Exit 2: guard error, fails open, proceed. Re-run only after a model switch.
-2. **Locate the image**: a visible path or URL is ready as-is; an image said to be on the clipboard, or a paste with no path, goes through `references/find-image.md`.
+2. **Locate the image**: a visible path or URL is ready as-is; otherwise `references/find-image.md`.
 3. **Read it**: `modlens -i <path-or-url>`, once per image. Useful flags: `-o <file>`, `--prompt "<extra focus>"`, `--timeout <ms>`, `-p <provider>` to pin one provider with no fallback.
 4. **Answer from the JSON**: `result.summary`, `result.ocr.full_text`, `result.layout.regions`, `result.semantics` are the evidence; quote specifics. If `result.uncertainty` is non-empty, say what was unclear instead of guessing.
 5. **Relay the accounting**: `meta.attempts` lists every provider tried; `meta.warnings` carries failover notices and whose quota a reused read spent. Pass a warning on when the provider that answered would surprise the user.

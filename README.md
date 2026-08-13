@@ -36,8 +36,6 @@ Issues are welcome any time: [open one](https://github.com/liustack/modlens/issu
 
 **🥇 The first vision plugin for DeepSeek Harness (dsh):** one command, `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`, and the text-only DeepSeek model behind dsh reads images through a native `read_image` tool. For pasted images, switch the model selector to one of the two entries the plugin adds, **`DeepSeek-V4-Flash (modlens vision)`** or **`DeepSeek-V4-Pro (modlens vision)`**: pastes are admitted there, converted to evidence at request time (your message keeps its native thumbnail), and answered by the same DeepSeek route. The wrap covers DeepSeek and GLM text models only; their own vision models are excluded automatically.
 
-No model switch needed either (macOS): take a screenshot and say "read my clipboard" — any model, native DeepSeek included, calls the `read_clipboard` tool, each read confirmed through dsh's native approval prompt. The image never enters the message stream, so model modality does not apply.
-
 **Paste an image and it reads it.** No saving to a file and passing a path first.
 
 - **Zero-config start.** Reuses what Claude Code, Codex, OpenCode, or Pi already have set up: the multimodal models on your machine go straight to work. Nothing at all? Antigravity CLI is a free no-key channel, and a free Gemini key brings a read down to 5-10 seconds.
