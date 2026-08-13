@@ -121,6 +121,18 @@ export function apply(ctx, config = {}) {
 function registerVisionProvider(ctx, config) {
   const upstream = config.upstream || 'deepseek-official'
   const providerId = config.providerId || 'deepseek-modlens'
+  // Wrap only the text-only members of these families. Their own vision
+  // models (present or future: deepseek-vl/ocr/janus, glm-4.5v, glm-5v-...)
+  // need no bridge and are excluded by name and by declared modality.
+  const families = config.families || ['deepseek', 'glm']
+  const VISION_ID = /(deepseek-(vl|ocr)|janus|glm-[\d.]*v(\b|-))/i
+  const shouldWrap = (info) => {
+    const id = String(info?.id ?? '').toLowerCase()
+    if (!families.some((family) => id.startsWith(family))) return false
+    if (VISION_ID.test(id)) return false
+    if (Array.isArray(info?.inputModalities) && info.inputModalities.includes('image')) return false
+    return true
+  }
   if (typeof ctx.llm?.registerAdapter !== 'function' || typeof ctx.llm?.stream !== 'function') {
     return
   }
@@ -143,7 +155,7 @@ function registerVisionProvider(ctx, config) {
       async listModels(_provider, signal) {
         try {
           const models = await ctx.llm.listModels(upstream, signal)
-          return models.map((model) => ({
+          return models.filter(shouldWrap).map((model) => ({
             ...withVision(model),
             name: `${model.name ?? model.id} (modlens vision)`,
           }))
@@ -153,6 +165,9 @@ function registerVisionProvider(ctx, config) {
       },
       async resolveModel(_provider, model, signal) {
         const info = await ctx.llm.resolveModelInfo(upstream, model, signal)
+        if (!shouldWrap(info)) {
+          throw new Error(`model "${model}" is outside the modlens vision wrap scope`)
+        }
         return { ...withVision(info), id: model }
       },
       stream(options) {

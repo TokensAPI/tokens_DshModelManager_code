@@ -6,6 +6,8 @@
 
 <p align="center"><b>为纯文本模型补上视觉能力，直接粘贴图片就能识别。</b></p>
 
+<p align="center">🥇 <b>全网第一个支持 DeepSeek Harness（dsh）的视觉插件</b> 🥇</p>
+
 <p align="center">
   <a href="./README.md">English</a> ·
   <a href="docs/troubleshooting.md">故障排查</a> ·
@@ -32,7 +34,7 @@ DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助�
 
 ## 亮点
 
-**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `read_image` 工具读图。要粘贴识图，在模型选择器里选插件新增的「(modlens vision)」变体：贴图放行、请求前转成证据文本、仍由原 DeepSeek 路由回答。
+**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `read_image` 工具读图。要粘贴识图，把模型选择器切到插件新增的两个条目之一：**`DeepSeek-V4-Flash (modlens vision)`** 或 **`DeepSeek-V4-Pro (modlens vision)`**，贴图放行、发请求时转成证据（你的消息保留原生缩略图）、仍由原 DeepSeek 路由回答。包装只覆盖 DeepSeek 与 GLM 的文本模型，两家自己的视觉型号自动排除。
 
 **直接粘贴图片识别** 无需先保存成文件再提供路径。
 

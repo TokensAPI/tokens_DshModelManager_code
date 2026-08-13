@@ -215,6 +215,7 @@ describe('dsh plugin vision provider (phase 3)', () => {
             name: string;
             inputModalities: string[];
         }>;
+        expect(models).toHaveLength(1);
         expect(models[0].provider).toBe('deepseek-modlens');
         expect(models[0].inputModalities).toContain('image');
         expect(models[0].name).toContain('modlens vision');
