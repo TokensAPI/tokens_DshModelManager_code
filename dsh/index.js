@@ -214,13 +214,13 @@ async function readImageBlock(ctx, block, signal) {
   const { join } = await import('node:path')
   let dir
   try {
+    // StoredImageAttachment carries { ref, data: Uint8Array }; the media type
+    // rides the reference (verified against dsh attachment/src/types.ts).
     const stored = await ctx.attachments.readImage(block.attachment, signal)
     dir = await mkdtemp(join(tmpdir(), 'modlens-dsh-'))
-    const file = join(
-      dir,
-      `paste${MEDIA_EXT[stored.mediaType ?? block.attachment?.mediaType] ?? '.png'}`,
-    )
-    await writeFile(file, Buffer.from(stored.bytes), { mode: 0o600 })
+    const mediaType = stored.ref?.mediaType ?? block.attachment?.mediaType
+    const file = join(dir, `paste${MEDIA_EXT[mediaType] ?? '.png'}`)
+    await writeFile(file, Buffer.from(stored.data), { mode: 0o600 })
     const cli = process.env.MODLENS_DSH_CLI || CLI_PATH
     const { stdout, stderr, code } = await run(
       process.execPath,
