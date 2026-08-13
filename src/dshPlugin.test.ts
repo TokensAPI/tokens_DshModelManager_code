@@ -102,6 +102,33 @@ describe('dsh plugin auto-read (phase 2)', () => {
         }
     });
 
+    it('names the failure when the attachment store returns no data bytes (#17)', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const handlers: Record<string, Handler> = {};
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                // An API-shape drift: readImage resolves, but with no data field.
+                attachments: { readImage: async () => ({ ref: { mediaType: 'image/png' } }) },
+                on: (event: string, fn: Handler) => {
+                    handlers[event] = fn;
+                },
+            } as never,
+            { autoRead: true },
+        );
+        const messages = [imageMessage()];
+        const decision = await handlers['agent/pre-step'](
+            { messages, signal: undefined },
+            async () => ({ kind: 'enter', messages }),
+        );
+        const block = decision.messages?.[0].content[1];
+        expect(block?.text).toContain('could not be read');
+        expect(block?.text).toContain("no 'data' bytes");
+    });
+
     it('degrades a failed read to an explanatory block instead of rejecting the step', async () => {
         const handlers = await load();
         const cli = fakeCli(`console.error('engine down'); process.exit(1)`);

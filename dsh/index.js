@@ -268,6 +268,13 @@ async function readImageBlock(ctx, block, signal) {
     // StoredImageAttachment carries { ref, data: Uint8Array }; the media type
     // rides the reference (verified against dsh attachment/src/types.ts).
     const stored = await ctx.attachments.readImage(block.attachment, signal)
+    if (!stored?.data) {
+      // Named failure instead of Buffer.from(undefined)'s bare TypeError the
+      // next time a developer-preview release moves the field (issue #17).
+      throw new Error(
+        "attachments.readImage returned no 'data' bytes; the dsh attachment shape may have changed",
+      )
+    }
     dir = await mkdtemp(join(tmpdir(), 'modlens-dsh-'))
     const mediaType = stored.ref?.mediaType ?? block.attachment?.mediaType
     const file = join(dir, `paste${MEDIA_EXT[mediaType] ?? '.png'}`)
