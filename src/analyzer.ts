@@ -216,9 +216,16 @@ export function composeChain(
     if (borrowed.inline.length > 0) {
         const lastInline = chain.map((p) => INLINE_REGION.has(p.name)).lastIndexOf(true);
         // With no inline members in the base chain, reused keys still queue
-        // behind a provider the user explicitly preferred to the front.
+        // behind a provider the user explicitly preferred to the front, but
+        // only for local images: for remote URLs inline-first is a security
+        // boundary (only the inline download path runs the SSRF guards), so
+        // even a preferred agent stays behind reused keys there.
         const insertAt =
-            lastInline >= 0 ? lastInline + 1 : preferredName === chain[0]?.name ? 1 : 0;
+            lastInline >= 0
+                ? lastInline + 1
+                : kind === 'local' && preferredName === chain[0]?.name
+                  ? 1
+                  : 0;
         chain.splice(insertAt, 0, ...borrowed.inline);
     }
     if (borrowed.agents.length > 0) {
