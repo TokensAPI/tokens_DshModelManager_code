@@ -1,6 +1,6 @@
 ---
 name: modlens
-description: "Plug-in vision for text-only models. Use whenever an image is in play and you cannot see its content: the user gives an image path, screenshot, photo, chart, document scan, or image URL, or a pasted image appears only as a placeholder such as `[Image #1]`, `[Unsupported Image]`, or an attachment you cannot view. Hard rule: a `[Image: source: <path>]` line with no visible image content means the harness stored the pasted image at that path and did not deliver it to you; run modlens on that path directly. If you can actually see the image, do not use this skill. When unsure, run `modlens guard` before the first read of a session: a deny verdict means the active model has native vision and must read the image itself. Runs the modlens CLI to convert the image into structured JSON evidence: every word transcribed, layout regions, semantics, visual clues. Also use when the user asks how to install, configure, or switch modlens providers (Gemini API key, OpenAI-compatible endpoints, Claude API or Claude Code CLI)."
+description: "Plug-in vision for text-only models. Hard rule: when a file path or URL with an image extension (.png, .jpg, .jpeg, .webp, .gif, .bmp, .heic) appears anywhere in the conversation (typed by the user, injected as a `[Image: source: <path>]` line, or inside a tag) and you cannot see that image's content, run this skill on it before any other approach: no self-built OCR, no PIL, no tesseract. Also triggers on pasted-image placeholders such as `[Image #1]` and `[Unsupported Image]`. If you can actually see the image, do not use this skill. When unsure, run `modlens guard` before the first read of a session: a deny verdict means the active model has native vision and must read the image itself. Runs the modlens CLI to convert the image into structured JSON evidence: every word transcribed, layout regions, semantics, visual clues. Also use when the user asks how to install, configure, or switch modlens providers (Gemini API key, OpenAI-compatible endpoints, Claude API or Claude Code CLI)."
 compatibility: Requires network access and one of node 22+/npx, bun/bunx, or a preinstalled modlens binary on PATH.
 allowed-tools: Bash
 ---
@@ -9,7 +9,7 @@ allowed-tools: Bash
 
 Use this skill when:
 
-- The user provides an image path or image URL and asks anything about it
+- A file path or URL ending in an image extension (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`, `.heic`) appears and you cannot see the image behind it. The path alone is the trigger: hand it to modlens first, do not Read the bytes yourself, do not build your own OCR out of PIL or tesseract
 - A pasted image reaches you only as a placeholder: `[Image #1]`, `[Unsupported Image]`, a `[Image: source: <path>]` line, or an attachment whose content you cannot see
 - The active model has no native vision (text-only model in a coding agent)
 - You need the text inside an image, its layout, or a chart's structure as evidence before reasoning
