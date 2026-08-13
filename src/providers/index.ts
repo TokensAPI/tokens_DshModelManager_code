@@ -64,7 +64,7 @@ export interface VisionProvider {
      * surfaces it as a warning when this route answers, so spending that
      * account's quota is never silent.
      */
-    borrowedNote?: string;
+    reuseNote?: string;
 }
 
 const PROVIDERS: Record<string, VisionProvider> = {

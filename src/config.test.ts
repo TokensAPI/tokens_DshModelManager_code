@@ -123,16 +123,16 @@ describe('guards config', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('records per-harness borrow decisions as strict booleans, empty clears', () => {
+    it('records per-harness reuse decisions as strict booleans, empty clears', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
         const file = path.join(dir, 'config.json');
-        setConfigValue('borrow.codex', 'true', file);
-        setConfigValue('borrow.pi', 'false', file);
-        expect(loadConfigFile(file).borrow).toEqual({ codex: true, pi: false });
-        setConfigValue('borrow.codex', '', file);
-        expect(loadConfigFile(file).borrow).toEqual({ pi: false });
-        expect(() => setConfigValue('borrow.codex', 'maybe', file)).toThrow('true or false');
-        expect(() => setConfigValue('borrow.grok', 'true', file)).toThrow('Unknown borrow');
+        setConfigValue('reuse.codex', 'true', file);
+        setConfigValue('reuse.pi', 'false', file);
+        expect(loadConfigFile(file).reuse).toEqual({ codex: true, pi: false });
+        setConfigValue('reuse.codex', '', file);
+        expect(loadConfigFile(file).reuse).toEqual({ pi: false });
+        expect(() => setConfigValue('reuse.codex', 'maybe', file)).toThrow('true or false');
+        expect(() => setConfigValue('reuse.grok', 'true', file)).toThrow('Unknown reuse');
         // auto never shipped; it is just an unknown key like any other.
         expect(() => setConfigValue('auto', 'true', file)).toThrow('Invalid config key');
         fs.rmSync(dir, { recursive: true, force: true });

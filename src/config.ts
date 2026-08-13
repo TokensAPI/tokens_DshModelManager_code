@@ -26,8 +26,8 @@ export type ProviderStringField = 'apiKey' | 'baseUrl' | 'model';
 const STRING_FIELDS: ProviderStringField[] = ['apiKey', 'baseUrl', 'model'];
 
 /** Harnesses whose local logins modlens can be granted to borrow. */
-export const BORROW_HARNESSES = ['claude', 'codex', 'opencode', 'pi'] as const;
-export type BorrowHarness = (typeof BORROW_HARNESSES)[number];
+export const REUSE_HARNESSES = ['claude', 'codex', 'opencode', 'pi'] as const;
+export type ReuseHarness = (typeof REUSE_HARNESSES)[number];
 
 export interface ModlensConfig {
     provider?: string;
@@ -41,7 +41,7 @@ export interface ModlensConfig {
      * `claude` absent counts as granted for compatibility: claude-cli predates
      * this model as a built-in provider.
      */
-    borrow?: Partial<Record<BorrowHarness, boolean>>;
+    reuse?: Partial<Record<ReuseHarness, boolean>>;
 }
 
 export const CONFIG_DIR = path.join(os.homedir(), '.modlens');
@@ -120,25 +120,25 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
 
     if (dottedKey === 'provider') {
         config.provider = value;
-    } else if (dottedKey.startsWith('borrow.')) {
-        const harness = dottedKey.slice('borrow.'.length);
-        if (!(BORROW_HARNESSES as readonly string[]).includes(harness)) {
+    } else if (dottedKey.startsWith('reuse.')) {
+        const harness = dottedKey.slice('reuse.'.length);
+        if (!(REUSE_HARNESSES as readonly string[]).includes(harness)) {
             throw new Error(
-                `Unknown borrow harness: ${harness}. Use ${BORROW_HARNESSES.join(', ')}.`,
+                `Unknown reuse harness: ${harness}. Use ${REUSE_HARNESSES.join(', ')}.`,
             );
         }
-        const key = harness as BorrowHarness;
+        const key = harness as ReuseHarness;
         const normalized = value.trim().toLowerCase();
         if (normalized === '') {
-            delete config.borrow?.[key];
-            if (config.borrow && Object.keys(config.borrow).length === 0) {
-                delete config.borrow;
+            delete config.reuse?.[key];
+            if (config.reuse && Object.keys(config.reuse).length === 0) {
+                delete config.reuse;
             }
         } else if (normalized !== 'true' && normalized !== 'false') {
-            throw new Error(`borrow.${harness} must be true or false (empty clears).`);
+            throw new Error(`reuse.${harness} must be true or false (empty clears).`);
         } else {
-            config.borrow ??= {};
-            config.borrow[key] = normalized === 'true';
+            config.reuse ??= {};
+            config.reuse[key] = normalized === 'true';
         }
     } else if (dottedKey.startsWith('guards.')) {
         setGuardsValue(config, dottedKey.slice('guards.'.length), value);
@@ -146,7 +146,7 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
         const dot = dottedKey.indexOf('.');
         if (dot <= 0 || dot === dottedKey.length - 1) {
             throw new Error(
-                `Invalid config key: ${dottedKey}. Use "provider", "borrow.<claude|codex|opencode|pi>", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
+                `Invalid config key: ${dottedKey}. Use "provider", "reuse.<claude|codex|opencode|pi>", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
             );
         }
         const providerName = dottedKey.slice(0, dot);

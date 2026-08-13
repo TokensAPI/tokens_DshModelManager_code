@@ -28,12 +28,14 @@ DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助�
 
 ## 交流
 
-用出问题了就[提个 issue](https://github.com/liustack/modlens/issues/new/choose)。其他的都欢迎来 X 上聊：**[@liustack](https://x.com/liustack)**，你用它做了什么、在哪个 harness 上跑、接下来该做什么，新版本也是那边先发。社群正在筹备中。
+欢迎随时提[issue](https://github.com/liustack/modlens/issues/new/choose)。也欢迎来 X 上聊：**[@liustack](https://x.com/liustack)**，你用它做了什么、在哪个 harness 上跑、接下来该做什么，新版本也是那边先发。社群正在筹备中。
 
 ## 亮点
 
-- **从你机器上已有的开始。** 已登录的 Claude Code 装完即用、零配置，Codex、OpenCode、Pi 的登录态也能借用，每一项都先问过你。什么都没有？Antigravity CLI 是免 key 的免费通道，配一个免费 Gemini key 可将识别耗时降至 5 到 10 秒。
-- **返回证据，而非印象。** 全文转录、按阅读顺序划分的版面区块、实体与关系列表，模型引用的是具体内容。
+**直接粘贴图片识别** 无需先保存成文件再提供路径。
+
+- **零配置起手。** 复用 Claude Code、Codex、OpenCode、Pi 已配置，直接复用你本机的其他多模态模型。什么都没有？Antigravity CLI 是免 key 的免费通道，配一个免费 Gemini key 可将识别耗时降至 5 到 10 秒。
+- **基于证据而非想象。** 全文转录、按阅读顺序划分的版面区块、实体与关系列表，模型引用的是具体内容。
 - **一次安装，多端可用。** Claude Code、Codex、Pi、OpenCode 均经真机验证。
 
 ## 安装
@@ -79,17 +81,16 @@ Codex 桌面 App 中识别一张推文截图。作者、配文、照片内容（
 
 ## 文档
 
-| 文档                                                   | 适用场景                                   |
-| :----------------------------------------------------- | :----------------------------------------- |
-| [INSTALL.md](INSTALL.md)                               | 一步步安装 skill（为 agent 编写）          |
-| [CLI 手册](docs/cli.md)           | skill 所驱动的 CLI：参数、配置与体检       |
-| [故障排查](docs/troubleshooting.md)                    | 命令报错，查成因和解法                     |
-| [配置手册](skills/modlens/references/configure.md)     | 配置 key、切换 provider、排查配置          |
-| [输出契约](docs/output-schema.md) | 解析 JSON 或构建下游工具                   |
-| [宿主接入](docs/harness-setup.md)                      | 在 Codex、Claude Code、Pi、OpenCode 中配置 |
-| [安全说明](docs/security.md)                           | 恢复文件的权限、图片内容作为不可信输入     |
-| [更新日志](CHANGELOG.md)                               | 查询版本变更                               |
-| [AGENTS.md](AGENTS.md)                                 | 修改本项目代码                             |
+| 文档                                               | 适用场景                                   |
+| :------------------------------------------------- | :----------------------------------------- |
+| [安装手册](INSTALL.md)                             | 一步步安装 skill（为 agent 编写）          |
+| [CLI 手册](docs/cli.md)                            | skill 所驱动的 CLI：参数、配置与体检       |
+| [故障排查](docs/troubleshooting.md)                | 命令报错，查成因和解法                     |
+| [配置手册](skills/modlens/references/configure.md) | 配置 key、切换 provider、排查配置          |
+| [输出契约](docs/output-schema.md)                  | 解析 JSON 或构建下游工具                   |
+| [宿主接入](docs/harness-setup.md)                  | 在 Codex、Claude Code、Pi、OpenCode 中配置 |
+| [安全说明](docs/security.md)                       | 恢复文件的权限、图片内容作为不可信输入     |
+| [更新日志](CHANGELOG.md)                           | 查询版本变更                               |
 
 ## 参与方式
 
@@ -98,9 +99,9 @@ Codex 桌面 App 中识别一张推文截图。作者、配文、照片内容（
 - **[提交 issue](https://github.com/liustack/modlens/issues)。** bug、建议、难以理解的报错或文档都欢迎。issue 会被认真阅读，并影响后续开发方向。
 - **Fork。** MIT 协议下你的副本完全归你，修改和发布不受限制。
 
-## 插入硬广一条
+## 插入一条硬广
 
-关注微信公众号「liustack」：AI 工具、实践与想法，第一时间推送。微信扫码，或搜一搜「liustack」：
+关注微信公众号「liustack」：AI 创业机会、独立开发见解、AI 实战与工具，第一时间推送。微信扫码，或搜一搜「liustack」：
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/liustack/modlens/main/assets/wechat-qrcode.png" width="420" alt="微信公众号 liustack" />

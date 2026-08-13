@@ -398,13 +398,13 @@ describe.skipIf(onWindows)('provider failover', () => {
 
         const result = await analyzeImage({
             input: image,
-            config: { borrow: { codex: true } },
+            config: { reuse: { codex: true } },
             autoOptions: { home, env: { PATH: dir } },
             timeoutMs: 20_000,
         });
         expect(result.provider).toBe('codex-cli');
         expect(result.meta.attempts[0]).toMatchObject({ provider: 'codex-cli', ok: true });
-        expect(result.meta.warnings.join(' ')).toContain('borrowed');
+        expect(result.meta.warnings.join(' ')).toContain('reused');
     }, 30_000);
 
     it('without the auto switch the same machine has no chain at all', async () => {
@@ -442,7 +442,7 @@ describe.skipIf(onWindows)('provider failover', () => {
             await analyzeImage({
                 input: image,
                 provider: 'antigravity-cli',
-                config: { borrow: { codex: true } },
+                config: { reuse: { codex: true } },
                 autoOptions: { home, env: { PATH: dir } },
                 timeoutMs: 20_000,
             });

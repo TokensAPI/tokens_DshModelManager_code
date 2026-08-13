@@ -3,12 +3,13 @@
 // local machine only (Node version, PATH, the config file, process ancestry).
 import * as fs from 'fs';
 import { createRequire } from 'module';
+import { composeChain } from './analyzer.ts';
 import { type DiscoverOptions, discoverAuto, type HarnessProbe } from './auto/discover.ts';
 import {
-    BORROW_HARNESSES,
-    type BorrowHarness,
     CONFIG_PATH,
     type ModlensConfig,
+    REUSE_HARNESSES,
+    type ReuseHarness,
     resolveProviderSettings,
 } from './config.ts';
 import { detectActiveModel } from './guard/index.ts';
@@ -17,7 +18,6 @@ import {
     findOnPath,
     PROVIDER_DESCRIPTORS,
     type ProviderDescriptor,
-    providerChain,
 } from './providers/availability.ts';
 import { resolveProvider } from './providers/index.ts';
 import { detectHarnessDetailed, type HarnessSource } from './recoverPaste/detect.ts';
@@ -79,9 +79,9 @@ export interface DoctorReport {
         note?: string;
     };
     /** Borrow state: per-harness grant decisions plus what discovery found. */
-    borrow: {
+    reuse: {
         /** claude absent counts as granted (claude-cli predates the model). */
-        decisions: Record<BorrowHarness, 'granted' | 'refused' | 'not asked'>;
+        decisions: Record<ReuseHarness, 'granted' | 'refused' | 'not asked'>;
         probes: HarnessProbe[];
     };
 }
@@ -102,6 +102,10 @@ function versionParts(version: string): [number, number] {
         return [0, 0];
     }
     return [Number(match[1]), Number(match[2])];
+}
+
+function chainEntryName(provider: { name: string; reuseNote?: string }): string {
+    return provider.reuseNote ? `${provider.name} (reused)` : provider.name;
 }
 
 function meetsMinimum(version: string, minimum: string): boolean {
@@ -255,6 +259,11 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
         harness: harnessDetection.harness,
     });
     const guardVerdict = evaluateGuard(input.config.guards, guardDetection);
+    // doctor is the "what could be reused" view, so it always probes fresh
+    // (and rewrites the cache); regular runs read the cache instead. The same
+    // probe result then feeds the chain composition below.
+    const reuseDiscovery = discoverAuto({ env, fresh: true, ...input.auto });
+    const reuseOptions = { env, ...input.auto, discovery: reuseDiscovery };
     return {
         node: {
             version: process.version,
@@ -264,9 +273,12 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
         nodeSqlite: checkNodeSqlite(),
         providers: PROVIDER_DESCRIPTORS.map((d) => inspectProvider(d, input.config, env)),
         selection: resolveSelection(input.config, input.providerFlag),
+        // The chains a run would actually use, reused routes included and
+        // labeled, so a machine living entirely on granted logins does not
+        // read as "no engine" right next to a granted Reuse section.
         chains: {
-            local: providerChain('local', input.config, env).map((p) => p.name),
-            remote: providerChain('remote', input.config, env).map((p) => p.name),
+            local: composeChain('local', input.config, reuseOptions).map(chainEntryName),
+            remote: composeChain('remote', input.config, reuseOptions).map(chainEntryName),
         },
         harness: { detected: harnessDetection.harness, source: harnessDetection.source },
         guard: {
@@ -280,20 +292,18 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
             reason: guardVerdict.reason,
         },
         config: inspectConfigFile(configPath),
-        // doctor is the "what could be borrowed" view, so it always probes
-        // fresh (and rewrites the cache); regular runs read the cache instead.
-        borrow: {
+        reuse: {
             decisions: Object.fromEntries(
-                BORROW_HARNESSES.map((harness) => {
-                    const decision = input.config.borrow?.[harness];
+                REUSE_HARNESSES.map((harness) => {
+                    const decision = input.config.reuse?.[harness];
                     const fallback = harness === 'claude' ? 'granted' : 'not asked';
                     return [
                         harness,
                         decision === true ? 'granted' : decision === false ? 'refused' : fallback,
                     ];
                 }),
-            ) as Record<BorrowHarness, 'granted' | 'refused' | 'not asked'>,
-            probes: discoverAuto({ env, fresh: true, ...input.auto }).probes,
+            ) as Record<ReuseHarness, 'granted' | 'refused' | 'not asked'>,
+            probes: reuseDiscovery.probes,
         },
     };
 }
@@ -361,13 +371,13 @@ export function renderDoctorReport(report: DoctorReport): string {
     );
     lines.push('');
 
-    lines.push('Borrow (may modlens spend other local logins? config "borrow.<harness>")');
+    lines.push('Reuse (may modlens reuse other local logins? config "reuse.<harness>")');
     lines.push(
-        `  decisions: ${Object.entries(report.borrow.decisions)
+        `  decisions: ${Object.entries(report.reuse.decisions)
             .map(([harness, decision]) => `${harness} ${decision}`)
             .join(', ')}`,
     );
-    for (const probe of report.borrow.probes) {
+    for (const probe of report.reuse.probes) {
         if (!probe.cliFound) {
             lines.push(`  ${probe.harness}: cli not found`);
             continue;

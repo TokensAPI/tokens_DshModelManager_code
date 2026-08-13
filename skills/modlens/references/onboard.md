@@ -1,6 +1,6 @@
 # First run on this machine: inventory, ask, then configure
 
-Run this flow when `~/.modlens/config.json` does not exist, or `modlens config show` prints an empty config (`{"providers":{}}` with no `borrow` decisions). That check makes the flow idempotent: a machine that has been through it is never re-onboarded, and an existing config is never overwritten without the user asking for a change. The user can also request it by name ("set up modlens").
+Run this flow when `~/.modlens/config.json` does not exist, or `modlens config show` prints an empty config (`{"providers":{}}` with no `reuse` decisions). That check makes the flow idempotent: a machine that has been through it is never re-onboarded, and an existing config is never overwritten without the user asking for a change. The user can also request it by name ("set up modlens").
 
 ## 1. Inventory, spending nothing
 
@@ -8,14 +8,14 @@ Run this flow when `~/.modlens/config.json` does not exist, or `modlens config s
 modlens doctor --json
 ```
 
-Read three things from the report: which providers are `ready`, the Borrow section (per-harness decisions plus discovered logins and vision models; the harness this conversation runs inside is itself the first borrowable engine), and the guard state. Doctor spends no quota and makes no network calls.
+Read three things from the report: which providers are `ready`, the Reuse section (per-harness decisions plus discovered logins and vision models; the harness this conversation runs inside is itself the first reusable engine), and the guard state. Doctor spends no quota and makes no network calls.
 
 ## 2. Tell the user what their machine already has
 
 One line per finding, plain words, in the user's language. Name concrete things, not concepts:
 
 - An engine is ready: "modlens is ready to go: <provider> is configured (via <env var / config file / existing login>)."
-- Borrowable vision found: "Your <harness> CLI is signed in and its model can read images. modlens can borrow it when needed, about <n> seconds per read, and it spends that account's quota."
+- Reusable vision found: "Your <harness> CLI is signed in and its model can read images. modlens can reuse it when needed, about <n> seconds per read, and it spends that account's quota."
 - Nothing at all: "No vision engine is set up yet. The fastest free option is a Gemini API key (three minutes, no card); Antigravity CLI works with no sign-up at all."
 
 Do not dump the raw doctor output on the user; summarize it. Do not describe options the machine does not have.
@@ -24,8 +24,8 @@ Do not dump the raw doctor output on the user; summarize it. Do not describe opt
 
 Consent rules:
 
-- One question per decision, never a bundled yes. Borrowing Codex and borrowing pi credentials are two questions (or one question with independent options), not one.
-- Each question names the harness, whose quota it spends, and the accounting promise. Example wording: "Allow modlens to borrow your signed-in Codex CLI for image reads? Every borrowed read is labeled in the result so you always see whose quota was spent."
+- One question per decision, never a bundled yes. Borrowing Codex and reusing pi credentials are two questions (or one question with independent options), not one.
+- Each question names the harness, whose quota it spends, and the accounting promise. Example wording: "Allow modlens to reuse your signed-in Codex CLI for image reads? Every reused read is labeled in the result so you always see whose quota was spent."
 - The do-nothing outcome must be safe and stated: "If you skip this, modlens just uses the engines you configure yourself."
 - If the user offers an API key, take exactly that key; never go looking for keys they did not hand over.
 
@@ -33,19 +33,19 @@ Consent rules:
 
 | The user agreed to | Run |
 | :-- | :-- |
-| Borrowing a harness CLI | `modlens config set borrow.<claude\|codex\|opencode\|pi> true` (one per consent) |
+| Reusing a harness CLI | `modlens config set reuse.<claude\|codex\|opencode\|pi> true` (one per consent) |
 | A Gemini key they handed over | `modlens config set gemini-api.apiKey <key>` |
 | An OpenAI-compatible endpoint | `config set openai.baseUrl / openai.apiKey / openai.model` |
 | Guard rules for their text-only model | `modlens config set guards.allowModels '["<pattern>"]'` (patterns: `references/configure.md`) |
 
-A refusal is also an answer: record it with `modlens config set borrow.<harness> false` so the user is never asked again. Nothing decided at all: write nothing and stop.
+A refusal is also an answer: record it with `modlens config set reuse.<harness> false` so the user is never asked again. Nothing decided at all: write nothing and stop.
 
 ## 5. Close the loop
 
-Run `modlens doctor` once more and report in one or two sentences: what was written (always and only `~/.modlens/config.json`), what the chain now looks like, and the undo (`modlens config set borrow.<harness> false`, or editing that file). If an engine is ready, offer to prove it on a real image.
+Run `modlens doctor` once more and report in one or two sentences: what was written (always and only `~/.modlens/config.json`), what the chain now looks like, and the undo (`modlens config set reuse.<harness> false`, or editing that file). If an engine is ready, offer to prove it on a real image.
 
 ## Never
 
-- Never set any `borrow.<harness>` to true without an explicit yes for that harness in this conversation.
+- Never set any `reuse.<harness>` to true without an explicit yes for that harness in this conversation.
 - Never write, move, or read files outside `~/.modlens/` during onboarding (doctor's read-only probing is the one exception).
-- Never present borrowing as free: it spends the named account's quota, and the wording must say so.
+- Never present reusing another login as free: it spends the named account's quota, and the wording must say so.

@@ -223,31 +223,31 @@ describe('buildDoctorReport: guard', () => {
     });
 });
 
-describe('buildDoctorReport: borrow', () => {
+describe('buildDoctorReport: reuse', () => {
     it('probes the four harnesses fresh and maps grant decisions with defaults', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-doctor-home-'));
         const report = buildDoctorReport({
-            config: { borrow: { codex: true, pi: false } },
+            config: { reuse: { codex: true, pi: false } },
             env: { PATH: '', MODLENS_HARNESS: 'none' },
             auto: { home },
         });
-        expect(report.borrow.decisions).toEqual({
+        expect(report.reuse.decisions).toEqual({
             claude: 'granted',
             codex: 'granted',
             opencode: 'not asked',
             pi: 'refused',
         });
-        expect(report.borrow.probes.map((p) => p.harness).sort()).toEqual([
+        expect(report.reuse.probes.map((p) => p.harness).sort()).toEqual([
             'claude-code',
             'codex',
             'opencode',
             'pi',
         ]);
-        expect(report.borrow.probes.every((p) => p.cliFound === false)).toBe(true);
+        expect(report.reuse.probes.every((p) => p.cliFound === false)).toBe(true);
         fs.rmSync(home, { recursive: true, force: true });
     });
 
-    it('renders a Borrow section with decisions and per-harness lines', () => {
+    it('renders a Reuse section with decisions and per-harness lines', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-doctor-home-'));
         const report = buildDoctorReport({
             config: {},
@@ -255,7 +255,7 @@ describe('buildDoctorReport: borrow', () => {
             auto: { home },
         });
         const rendered = renderDoctorReport(report);
-        expect(rendered).toContain('Borrow');
+        expect(rendered).toContain('Reuse');
         expect(rendered).toContain('codex not asked');
         expect(rendered).toContain('claude granted');
         expect(rendered).toContain('codex: cli not found');

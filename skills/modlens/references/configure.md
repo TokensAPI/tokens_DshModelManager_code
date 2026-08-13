@@ -17,12 +17,12 @@ modlens config set <provider>.<field> <value>   # fields: apiKey, baseUrl, model
 
 ## The file's exact shape
 
-Everything lives under three top-level keys, all optional. A missing file means all defaults. Provider settings sit under `providers.<name>`, not at the top level, which is the mistake hand-editors make most.
+Everything lives under four top-level keys, all optional. This example shows every supported key and field at once (a real file only needs what you use). A missing file means all defaults. Provider settings sit under `providers.<name>`, not at the top level, which is the mistake hand-editors make most.
 
 ```json
 {
   "provider": "gemini-api",
-  "borrow": { "codex": true, "pi": false },
+  "reuse": { "claude": true, "codex": true, "opencode": false, "pi": true },
   "guards": {
     "allowModels": ["deepseek-v4-*", "glm-5.*", "minimax-m2.5*", "qwen3-coder*"],
     "denyModels": ["glm-*v*", "deepseek-vl*"],
@@ -41,7 +41,11 @@ Everything lives under three top-level keys, all optional. A missing file means 
       "model": "qwen3.6-27b",
       "extraBody": { "thinking": { "type": "disabled" } }
     },
-    "anthropic": { "apiKey": "sk-ant-..." },
+    "anthropic": {
+      "apiKey": "sk-ant-...",
+      "baseUrl": "https://api.anthropic.com",
+      "model": "claude-haiku-4-5-20251001"
+    },
     "claude-cli": { "model": "haiku" }
   }
 }
@@ -58,7 +62,7 @@ Field semantics:
   - List a model by what actually reaches it, not by what it could see: a multimodal model behind a gateway that strips images still needs modlens, and your session transcript records the model name the gateway reports. `modlens doctor`'s Guard section shows the rules and a live verdict for checking the result.
   - `denyWhenUnknown` (default `false`) decides what happens when no signal identifies the active model, in either mode: `false` proceeds, `true` denies. The active model is detected from, strongest first: the `MODLENS_MODEL` env var (`none` means "treat as unknown"), the harness's session storage, the `--model` self-report.
 - Environment variables override the file for these bindings: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`. Beyond those, modlens reads `MODLENS_HARNESS` (paste-recovery and guard scope), `MODLENS_MODEL` (guard override, see `guards`), and the fingerprints harnesses inject themselves, which pin the guard's storage lookup to the current session: `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, plus the presence markers harness detection relies on (`CLAUDECODE`, `PI_CODING_AGENT`, `CODEX_SANDBOX`).
-- `borrow.<claude|codex|opencode|pi>`: per-harness grants for spending other local logins, written by the onboarding conversation (`references/onboard.md`). `true` lets reads borrow that harness (pi credentials join the inline region with every guard intact; a signed-in Codex, an OpenCode vision model, or pi driven directly join the agent region before `claude-cli`), `false` records a refusal so the user is never re-asked, absent means never asked and nothing runs. `claude` absent counts as granted: `claude-cli` predates this model as a built-in provider, and `borrow.claude false` removes it from the chain (`-p claude-cli` still pins). Borrowed engines get no priority over the user's own: regions order by speed class only. Every borrowed answer adds a `meta.warnings` line naming whose quota it spent, and `modlens doctor`'s Borrow section shows each harness's decision plus what discovery found (probe results cache for 6 hours in `~/.modlens/auto-cache.json`; doctor always re-probes). Set with `modlens config set borrow.codex true` (empty clears back to never-asked).
+- `reuse.<claude|codex|opencode|pi>`: per-harness grants for spending other local logins, written by the onboarding conversation (`references/onboard.md`). `true` lets reads reuse that harness (pi credentials join the inline region with every guard intact; a signed-in Codex, an OpenCode vision model, or pi driven directly join the agent region before `claude-cli`), `false` records a refusal so the user is never re-asked, absent means never asked and nothing runs. `claude` absent counts as granted: `claude-cli` predates this model as a built-in provider, and `reuse.claude false` removes it from the chain (`-p claude-cli` still pins). Reused engines get no priority over the user's own: regions order by speed class only. Every reused answer adds a `meta.warnings` line naming whose quota it spent, and `modlens doctor`'s Reuse section shows each harness's decision plus what discovery found (probe results cache for 6 hours in `~/.modlens/auto-cache.json`; doctor always re-probes). Set with `modlens config set reuse.codex true` (empty clears back to never-asked).
 - Unknown top-level keys and unknown provider names are ignored rather than rejected, so a typo fails quiet: run `modlens doctor` after hand-editing, it shows which file and env values are actually in effect.
 
 Hand-editing is fine (keep the file valid JSON and its permissions 0600). `modlens config set` does the same thing with guardrails.
