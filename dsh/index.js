@@ -32,7 +32,10 @@ const MEDIA_EXT = {
 }
 
 export function apply(ctx, config = {}) {
-  if (config.autoRead !== false) {
+  // Off by default since the vision provider converts at request time and
+  // keeps the durable log (and the UI thumbnail) intact; turn it on only for
+  // setups where images enter through a provider this plugin does not wrap.
+  if (config.autoRead === true) {
     registerAutoRead(ctx)
   }
   if (config.visionProvider !== false) {
@@ -153,10 +156,17 @@ function registerVisionProvider(ctx, config) {
         return { ...withVision(info), id: model }
       },
       stream(options) {
-        // By the time a request reaches here, the pre-step rewrite has already
-        // replaced every image block with evidence text.
-        return ctx.llm.stream({ ...options, provider: upstream })
+        // Convert at request time, not at log time: the durable session log
+        // keeps the real image blocks (so the UI shows the paste natively),
+        // and only the wire messages carry evidence text. Cached per
+        // attachment, since the same history rides every later step.
+        const self = this
+        return (async function* () {
+          const messages = await convertImagesToEvidence(ctx, options.messages, options.signal, self)
+          yield* ctx.llm.stream({ ...options, provider: upstream, messages })
+        })()
       },
+      evidenceCache: new Map(),
     })
   } catch (error) {
     // DUPLICATE_ADAPTER or a preview-era surface change: degrade to the
@@ -164,6 +174,32 @@ function registerVisionProvider(ctx, config) {
     // vanishing (a swallowed TypeError here once hid a missing base method).
     console.error(`[modlens] vision provider registration skipped: ${error}`)
   }
+}
+
+async function convertImagesToEvidence(ctx, messages, signal, adapter) {
+  const out = []
+  for (const message of messages) {
+    if (!Array.isArray(message.content) || !message.content.some((b) => b?.type === 'image')) {
+      out.push(message)
+      continue
+    }
+    const content = []
+    for (const block of message.content) {
+      if (block?.type !== 'image') {
+        content.push(block)
+        continue
+      }
+      const key = JSON.stringify(block.attachment ?? block)
+      let text = adapter.evidenceCache.get(key)
+      if (text === undefined) {
+        text = (await readImageBlock(ctx, block, signal)).text
+        adapter.evidenceCache.set(key, text)
+      }
+      content.push({ type: 'text', text })
+    }
+    out.push({ ...message, content })
+  }
+  return out
 }
 
 /**

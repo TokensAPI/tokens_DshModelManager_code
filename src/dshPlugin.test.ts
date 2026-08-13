@@ -41,7 +41,7 @@ describe('dsh plugin auto-read (phase 2)', () => {
         messages?: Array<{ content: Array<{ type: string; text?: string }> }>;
     }>;
 
-    async function load(autoRead?: boolean) {
+    async function load(autoRead: boolean | undefined = true) {
         // The plugin is plain JS by design (no build step, no dsh type deps).
         // @ts-expect-error untyped on purpose
         const plugin = (await import('../dsh/index.js')) as {
@@ -136,6 +136,23 @@ describe('dsh plugin auto-read (phase 2)', () => {
         expect(reject).toEqual({ kind: 'reject' });
         const off = await load(false);
         expect(off['agent/pre-step']).toBeUndefined();
+        // Default config: no auto-read handler (request-time conversion owns it).
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const bare: Record<string, unknown> = {};
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: (event: string, fn: unknown) => {
+                    bare[event] = fn;
+                },
+            } as never,
+            {},
+        );
+        expect(bare['agent/pre-step']).toBeUndefined();
     });
 });
 
@@ -209,7 +226,13 @@ describe('dsh plugin vision provider (phase 3)', () => {
         expect(info.provider).toBe('deepseek-modlens');
         expect(info.id).toBe('deepseek-v4-flash');
         expect(info.inputModalities).toEqual(['text', 'image']);
-        adapter.stream({ provider: 'deepseek-modlens', model: 'deepseek-v4-flash', messages: [] });
+        for await (const _chunk of adapter.stream({
+            provider: 'deepseek-modlens',
+            model: 'deepseek-v4-flash',
+            messages: [],
+        }) as AsyncIterable<unknown>) {
+            // drain
+        }
         expect(streamed[0].provider).toBe('deepseek-official');
     });
 
@@ -221,5 +244,80 @@ describe('dsh plugin vision provider (phase 3)', () => {
             { visionProvider: false },
         );
         expect(registered).toEqual([]);
+    });
+});
+
+describe('dsh plugin request-time image conversion (v2)', () => {
+    it('keeps the log intact and converts wire messages once per attachment', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-cli-'));
+        const marker = path.join(cliDir, 'count');
+        const cli = path.join(cliDir, 'cli.js');
+        fs.writeFileSync(
+            cli,
+            `const fs=require('fs');fs.appendFileSync(${JSON.stringify(marker)},'x');console.log(JSON.stringify({result:{summary:'S',ocr:{full_text:'WIRE-EVIDENCE'},uncertainty:[]}}))`,
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        try {
+            const registered: Array<{ adapter: Record<string, CallableFunction> }> = [];
+            const streamed: Array<{
+                messages: Array<{ content: Array<{ type: string; text?: string }> }>;
+            }> = [];
+            const ctx = {
+                tools: { register: () => {} },
+                attachments: {
+                    readImage: async () => ({
+                        data: new Uint8Array([1]),
+                        ref: { mediaType: 'image/png' },
+                    }),
+                },
+                on: () => {},
+                llm: {
+                    registerAdapter: (_p: string[], adapter: Record<string, CallableFunction>) => {
+                        registered.push({ adapter });
+                    },
+                    listModels: async () => [],
+                    resolveModelInfo: async () => ({}),
+                    stream: (options: never) => {
+                        streamed.push(options);
+                        return (async function* () {})();
+                    },
+                },
+            };
+            plugin.apply(ctx as never, {});
+            const adapter = registered[0].adapter;
+            const request = {
+                provider: 'deepseek-modlens',
+                model: 'm',
+                messages: [
+                    {
+                        role: 'user',
+                        content: [
+                            { type: 'text', text: 'what is this' },
+                            { type: 'image', attachment: { id: 'att-1' } },
+                        ],
+                    },
+                ],
+            };
+            for await (const _c of adapter.stream(request) as AsyncIterable<unknown>) {
+                // drain
+            }
+            const wire = streamed[0].messages[0].content;
+            expect(wire[0]).toEqual({ type: 'text', text: 'what is this' });
+            expect(wire[1].type).toBe('text');
+            expect(wire[1].text).toContain('WIRE-EVIDENCE');
+            // The caller's request object keeps its image block untouched.
+            expect(request.messages[0].content[1].type).toBe('image');
+            // Second request with the same attachment hits the cache: one CLI run.
+            for await (const _c of adapter.stream(request) as AsyncIterable<unknown>) {
+                // drain
+            }
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
     });
 });
