@@ -102,17 +102,18 @@ export function providerAvailable(
     return (descriptor.required ?? []).every((req) => Boolean(settings[req.field]?.trim()));
 }
 
-// The failover orders. Local images lead with the zero-config agent. Remote
-// URLs lead with the inline API providers, because only the inline download
-// path runs the private-address guards, the magic-byte image check, and the
-// size cap; an agent fetching a URL on its own passes through none of those,
-// so agents stay at the back. claude-cli reads local files only, so it never
-// joins the remote chain.
+// The failover orders. Both kinds lead with the inline API providers: a
+// configured key answers in 5-10 seconds while an agent loop takes 15-45, so
+// the fast route goes first and the agents back it up. For remote URLs the
+// order is also a security boundary, because only the inline download path
+// runs the private-address guards, the magic-byte image check, and the size
+// cap. claude-cli reads local files only, so it never joins the remote chain,
+// and it stays last locally because it spends the user's Claude subscription.
 const LOCAL_FAILOVER_ORDER = [
-    'antigravity-cli',
     'gemini-api',
     'openai',
     'anthropic',
+    'antigravity-cli',
     'claude-cli',
 ] as const;
 const REMOTE_FAILOVER_ORDER = ['gemini-api', 'openai', 'anthropic', 'antigravity-cli'] as const;
