@@ -34,7 +34,7 @@ Issues are welcome any time: [open one](https://github.com/liustack/modlens/issu
 
 ## Highlights
 
-**🥇 The first vision plugin for DeepSeek Harness (dsh):** one command, `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`, and the text-only DeepSeek model behind dsh reads images through a native `read_image` tool. For pasted images, switch the model selector to one of the two entries the plugin adds, **`DeepSeek-V4-Flash (modlens vision)`** or **`DeepSeek-V4-Pro (modlens vision)`**: pastes are admitted there, converted to evidence at request time (your message keeps its native thumbnail), and answered by the same DeepSeek route. The wrap covers DeepSeek and GLM text models only; their own vision models are excluded automatically.
+**🥇 The first vision plugin for DeepSeek Harness (dsh):** one command, `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens`, and the text-only DeepSeek model behind dsh reads images through a native `read_image` tool. If dsh warns `declares no dsh.bundle`, pnpm's release-age gate installed an old version: see [troubleshooting](docs/troubleshooting.md#dsh-says-declares-no-dshbundle--installed-as-a-plain-dependency) for the one-line fix. For pasted images, switch the model selector to one of the two entries the plugin adds, **`DeepSeek-V4-Flash (modlens vision)`** or **`DeepSeek-V4-Pro (modlens vision)`**: pastes are admitted there, converted to evidence at request time (your message keeps its native thumbnail), and answered by the same DeepSeek route. The wrap covers DeepSeek and GLM text models only; their own vision models are excluded automatically.
 
 **Paste an image and it reads it.** No saving to a file and passing a path first.
 

@@ -72,3 +72,21 @@ describe('missingSchemaFields', () => {
         ]);
     });
 });
+
+describe('docs contract', () => {
+    it('output-schema.md lists exactly the required fields the schema enforces', () => {
+        const fs = require('fs');
+        const path = require('path');
+        const doc = fs.readFileSync(
+            path.join(__dirname, '..', 'docs', 'output-schema.md'),
+            'utf-8',
+        ) as string;
+        const line = doc.split('\n').find((l: string) => l.startsWith('Required fields:'));
+        expect(line).toBeDefined();
+        for (const field of VISION_RESULT_SCHEMA.required) {
+            expect(line).toContain(`\`${field}\``);
+        }
+        // And nothing is called optional that the schema requires.
+        expect(line).not.toMatch(/`visual` is optional/);
+    });
+});

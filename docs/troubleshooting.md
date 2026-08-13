@@ -119,6 +119,38 @@ One known blind spot: storage detection reads the newest assistant turn recorded
 
 Note that the hard refusal above only fires on an actual `denyModels` match against the explicit `MODLENS_MODEL` value. Storage detection and the `denyWhenUnknown` policy never block `analyze`, they only speak through `modlens guard`, whose deny is advice to the agent rather than a locked door.
 
+## dsh says "declares no dsh.bundle — installed as a plain dependency"
+
+The dsh profile installed an old modlens version. The `dsh.bundle` declaration
+exists since 3.9.0, and pnpm v11's release-age gate (`minimumReleaseAge`,
+quarantining versions published less than a day ago — dsh profiles may
+configure a longer window) silently falls back to an older version when every
+recent one is inside the window. That old version has no bundle declaration,
+so dsh correctly treats it as a plain dependency and none of the tools appear.
+An exact version in the add command does not bypass the gate.
+
+The fix is a one-time exclusion in the profile. In
+`~/.dsh/profiles/<name>/pnpm-workspace.yaml`, add the bare package name (not
+`name@version` — a pinned version would need updating on every release):
+
+```yaml
+minimumReleaseAgeExclude:
+  - '@liustack/modlens'
+```
+
+then update inside the profile:
+
+```sh
+npx -y @deepseek-ai/dsh plugin --profile <name> update @liustack/modlens
+```
+
+dsh's reconcile notices the bundle declaration on the new version and
+activates it; restart dsh afterwards. Verify with
+`npx -y @deepseek-ai/dsh plugin --profile <name> list` — the version shown
+should be 3.9.0 or newer. The trade-off is honest: excluding modlens from the
+quarantine means new modlens releases install immediately, without the
+supply-chain cooling-off pnpm gives other packages.
+
 ## Config file problems
 
 ```

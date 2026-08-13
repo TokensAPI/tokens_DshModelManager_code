@@ -67,6 +67,6 @@ The CLI prints one JSON object to stdout:
 }
 ```
 
-Required fields: `summary`, `ocr`, `layout`, `semantics`, `uncertainty`. `visual` is optional.
+Required fields: `summary`, `ocr`, `layout`, `semantics`, `visual`, `uncertainty` — every top-level field, `visual` included. (Earlier docs called `visual` optional; the enforced schema has always required it, so build to the schema.)
 
 Changes from v1: pixel `bbox` coordinates and numeric `confidence` scores were removed. Vision models fabricate both, so v2 stops pretending to provide them. `layout.regions[].type` gained `code`.

@@ -38,6 +38,8 @@ export interface DoctorProvider {
     name: string;
     kind: 'subprocess' | 'api';
     ready: boolean;
+    /** subprocess only: on PATH, but sign-in cannot be verified offline. */
+    authUnverified?: boolean;
     detail: string;
     /** subprocess: the resolved binary path when found. */
     binaryPath?: string | null;
@@ -151,9 +153,13 @@ function inspectProvider(
             name: descriptor.name,
             kind: 'subprocess',
             ready: binaryPath !== null,
+            // "On PATH" proves installation, not a working login: doctor runs
+            // offline and spends nothing, so sign-in state stays unverified
+            // here and the first real read is the auth check.
+            authUnverified: binaryPath !== null,
             binaryPath,
             detail: binaryPath
-                ? `${descriptor.bin} found at ${binaryPath}`
+                ? `${descriptor.bin} found at ${binaryPath} (installed; sign-in not verified offline)`
                 : `${descriptor.bin} not on PATH`,
             fix: binaryPath ? undefined : descriptor.install,
         };
@@ -328,7 +334,9 @@ export function renderDoctorReport(report: DoctorReport): string {
 
     lines.push('Providers');
     for (const provider of report.providers) {
-        lines.push(`  ${mark(provider.ready)} ${provider.name}: ${provider.detail}`);
+        const providerMark =
+            provider.ready && provider.authUnverified ? '[ok?]' : mark(provider.ready);
+        lines.push(`  ${providerMark} ${provider.name}: ${provider.detail}`);
         if (provider.fix) {
             lines.push(`       fix: ${provider.fix}`);
         }

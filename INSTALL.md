@@ -114,12 +114,15 @@ bash ~/.claude/skills/modlens/scripts/run.sh doctor   # replace with your TARGET
 
 Read two sections of the report: the providers and the Reuse section.
 
-**Providers.** If any provider shows `[ok]`, an engine is ready: skip to the
-Reuse consent below, then Step 4. In particular, a machine with Claude Code
-signed in always has `claude-cli` ready, so modlens works there with zero
-further setup. That route is the slow one (a 20-45 second agent loop that also
-spends the user's Claude subscription), which is fine as a starting point: tell
-the user it already works, and that a free Gemini key (Path 1) brings a read
+**Providers.** An API provider showing `[ok]` is ready: skip to the Reuse
+consent below, then Step 4. A CLI provider showing `[ok?]` is installed but its
+sign-in cannot be verified offline: treat it as probably-ready, and let the
+first real read in Step 4 confirm it (a signed-out CLI fails there with its own
+sign-in guidance — relay that, it is the fix). A machine with Claude Code
+signed in has `claude-cli` working with zero further setup. That route is the
+slow one (a 20-45 second agent loop that also spends the user's Claude
+subscription), which is fine as a starting point: tell the user it already
+works, and that a free Gemini key (Path 1) brings a read
 down to 5-10 seconds whenever they want the upgrade.
 
 **Reuse consent.** The Reuse section lists local harness CLIs whose logins

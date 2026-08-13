@@ -30,6 +30,8 @@ Output is a fixed JSON shape:
     "summary": "A workflow diagram with four nodes connected by labeled arrows.",
     "ocr": { "full_text": "/shaping\nBEFORE YOU BUILD\n...", "lines": [] },
     "layout": { "regions": [{ "reading_order": 1, "type": "title", "text": "/shaping" }] },
+    "semantics": { "scene": "workflow diagram", "entities": [], "relations": [] },
+    "visual": { "dominant_colors": ["white", "black"], "style": "flat", "notes": [] },
     "uncertainty": []
   },
   "meta": {
@@ -65,7 +67,7 @@ Output is a fixed JSON shape:
 `--extra-body` is how vendor-specific knobs get through, turning thinking off
 being the common one. It applies to the three API providers and replaces the
 configured `extraBody` for that run. Per-vendor spellings and the fields it
-refuses to touch are in [Configuration](configure.md).
+refuses to touch are in [Configuration](../skills/modlens/references/configure.md).
 
 The default `-m` model depends on the provider:
 
@@ -88,7 +90,7 @@ The default `-m` model depends on the provider:
 | `--harness <name>` | Force storage scope: `claude-code`, `pi`, `opencode`, `none` | auto-detect |
 | `--cwd <path>` | Project directory the image was pasted in | current directory |
 
-Five providers: `antigravity-cli` (no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (uses your existing Claude subscription). Without `-p`, a run tries every provider that is set up, inline API providers first (5-10s), then the agents; the first good result wins and `meta.attempts` records the rest. Harnesses granted via `reuse.<harness>` contribute reused engines to the same regions (pi credentials inline, agent CLIs behind), with no priority over the user's own; details and the `guards` deny/allow lists are in [Configuration](configure.md).
+Five providers: `antigravity-cli` (no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (uses your existing Claude subscription). Without `-p`, a run tries every provider that is set up, inline API providers first (5-10s), then the agents; the first good result wins and `meta.attempts` records the rest. Harnesses granted via `reuse.<harness>` contribute reused engines to the same regions (pi credentials inline, agent CLIs behind), with no priority over the user's own; details and the `guards` deny/allow lists are in [Configuration](../skills/modlens/references/configure.md).
 
 Other subcommands:
 
