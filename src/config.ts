@@ -114,7 +114,7 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
         const dot = dottedKey.indexOf('.');
         if (dot <= 0 || dot === dottedKey.length - 1) {
             throw new Error(
-                `Invalid config key: ${dottedKey}. Use "provider", "guards.<denyModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
+                `Invalid config key: ${dottedKey}. Use "provider", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
             );
         }
         const providerName = dottedKey.slice(0, dot);
@@ -154,12 +154,12 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
 
 /** Accepts a JSON array of globs or a comma-separated list. Empty clears. */
 function setGuardsValue(config: ModlensConfig, field: string, value: string): void {
-    if (field === 'denyModels') {
+    if (field === 'denyModels' || field === 'allowModels') {
         if (value.trim() === '') {
-            delete config.guards?.denyModels;
+            delete config.guards?.[field];
         } else {
             config.guards ??= {};
-            config.guards.denyModels = parseModelList(value);
+            config.guards[field] = parseModelList(value, `guards.${field}`);
         }
     } else if (field === 'denyWhenUnknown') {
         const normalized = value.trim().toLowerCase();
@@ -169,18 +169,20 @@ function setGuardsValue(config: ModlensConfig, field: string, value: string): vo
         config.guards ??= {};
         config.guards.denyWhenUnknown = normalized === 'true';
     } else {
-        throw new Error(`Unknown guards field: ${field}. Use denyModels or denyWhenUnknown.`);
+        throw new Error(
+            `Unknown guards field: ${field}. Use denyModels, allowModels, or denyWhenUnknown.`,
+        );
     }
     if (config.guards && Object.keys(config.guards).length === 0) {
         delete config.guards;
     }
 }
 
-function parseModelList(value: string): string[] {
+function parseModelList(value: string, key: string): string[] {
     if (value.trim().startsWith('[')) {
-        const parsed = parseJsonOrExplain(value, 'guards.denyModels');
+        const parsed = parseJsonOrExplain(value, key);
         if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
-            throw new Error('guards.denyModels must be a JSON array of glob strings.');
+            throw new Error(`${key} must be a JSON array of glob strings.`);
         }
         return parsed as string[];
     }

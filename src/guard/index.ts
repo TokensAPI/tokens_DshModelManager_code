@@ -6,6 +6,7 @@
 import { detectHarnessDetailed } from '../recoverPaste/detect.ts';
 import { type SniffRoots, sniffModel } from './modelSniff.ts';
 import {
+    allowPatterns,
     denyPatterns,
     evaluateGuard,
     type GuardsConfig,
@@ -73,9 +74,15 @@ export function runGuard(
     options: DetectModelOptions,
 ): GuardVerdict {
     // With no rule that could ever deny, the verdict needs no model: skip the
-    // detection work (a ps spawn plus session-storage reads) entirely. doctor
-    // composes detectActiveModel + evaluateGuard itself to keep its rich view.
-    if (denyPatterns(guards).length === 0 && guards?.denyWhenUnknown !== true) {
+    // detection work (a ps spawn plus session-storage reads) entirely. An
+    // allowlist denies everything off the list, so it counts as such a rule.
+    // doctor composes detectActiveModel + evaluateGuard itself to keep its
+    // rich view.
+    if (
+        denyPatterns(guards).length === 0 &&
+        allowPatterns(guards).length === 0 &&
+        guards?.denyWhenUnknown !== true
+    ) {
         return { model: null, source: 'none', guard: 'allow', reason: 'no deny rules configured' };
     }
     return evaluateGuard(guards, detectActiveModel(options));

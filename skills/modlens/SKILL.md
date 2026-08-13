@@ -72,14 +72,15 @@ modlens guard --model <your-model-id>
 Pass `--model` with your own model id when you know it (most harnesses state it in your system prompt). Never pass a guess. The verdict weighs three signals, strongest first: the `MODLENS_MODEL` env var, the harness's own session storage (it records the model on every assistant turn, so it outranks your self-report), then your `--model` value.
 
 - `{"guard": "allow"}` (exit 0): proceed with the read.
-- `{"guard": "deny"}` (exit 1) **with a `matched` field**: do not run the engine. The active model is on the user's own deny list of vision-capable models: read the image with your native vision instead.
-- `{"guard": "deny"}` (exit 1) **without `matched`**: the model could not be identified and the user set `denyWhenUnknown`. Do not run the engine, and do not pretend to see the image either. Tell the user the guard could not identify the active model and that `MODLENS_MODEL=<model>` (or `MODLENS_MODEL=none` after fixing the guards config) unblocks it.
+- `{"guard": "deny"}` (exit 1) **with a `model` identified**: do not run the engine. Either the model matched the user's deny list of vision-capable models (a `matched` field names the pattern), or the user runs an allow list of text-only models and this model is not on it. Read the image with your native vision instead.
+- `{"guard": "deny"}` (exit 1) **with `model: null`**: the model could not be identified and the user set `denyWhenUnknown`. Do not run the engine, and do not pretend to see the image either. Tell the user the guard could not identify the active model and that `MODLENS_MODEL=<model>` (or `MODLENS_MODEL=none` after fixing the guards config) unblocks it.
 - Exit 2 is an error: the guard fails open, report the error and proceed.
 
-One check per session is enough, unless the user switches models mid-session: the verdict follows the model, so re-run the guard after a switch. Users enable this with glob patterns of vision-capable model names, and `modlens doctor` shows the rules plus a live evaluation in its Guard section:
+One check per session is enough, unless the user switches models mid-session: the verdict follows the model, so re-run the guard after a switch. Users configure it with glob patterns either way round, a deny list of vision models or an allow list of text-only models (deny wins on overlap, so a vision variant can be carved out of a broad allow). `modlens doctor` shows the rules plus a live evaluation in its Guard section:
 
 ```bash
-modlens config set guards.denyModels '["gemini-3*", "qwen-vl-*"]'
+modlens config set guards.allowModels '["deepseek-v4-*", "glm-5.*"]'   # only these run the engine
+modlens config set guards.denyModels '["glm-*v*", "qwen-vl-*"]'        # never these
 modlens config set guards.denyWhenUnknown true    # optional, default false (fail open)
 ```
 

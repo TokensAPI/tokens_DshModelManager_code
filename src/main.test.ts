@@ -203,6 +203,20 @@ describe('analyze guard gate', () => {
         expect(stderr).toContain('gpt-5.6*');
         fs.rmSync(home, { recursive: true, force: true });
     });
+
+    it('refuses to spend a provider call when MODLENS_MODEL is off the allowlist', () => {
+        const { home, file } = guardedHome({ allowModels: ['deepseek-v4-*'] });
+        const { code, stderr } = run(['-i', file], {
+            HOME: home,
+            USERPROFILE: home,
+            MODLENS_HARNESS: 'none',
+            MODLENS_MODEL: 'claude-fable-5',
+        });
+        expect(code).toBe(1);
+        expect(stderr).toMatch(/guard/i);
+        expect(stderr).toContain('allowModels');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
 });
 
 describe('config show', () => {

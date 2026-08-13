@@ -49,19 +49,22 @@ program
             }
 
             // Hard gate before any provider work, fed only by the explicit
-            // MODLENS_MODEL env var and only on an actual pattern match:
-            // storage sniffing and the denyWhenUnknown policy stay advisory in
-            // `modlens guard`, where a wrong guess cannot block a read.
+            // MODLENS_MODEL env var and only when that model is identified:
+            // a deny-pattern match or an allowlist exclusion blocks the read,
+            // while storage sniffing and the denyWhenUnknown policy stay
+            // advisory in `modlens guard`, where a wrong guess cannot block.
             const config = loadConfigFile();
             if (process.env.MODLENS_MODEL?.trim()) {
                 const verdict = runGuard(config.guards, {
                     cwd: process.cwd(),
                     env: process.env,
                 });
-                if (verdict.guard === 'deny' && verdict.matched) {
+                if (verdict.guard === 'deny' && verdict.model) {
+                    const cause = verdict.matched
+                        ? `matches guards.denyModels pattern "${verdict.matched}". A model with native vision should read the image itself.`
+                        : 'is not on guards.allowModels, which only lets listed models run the engine.';
                     throw new Error(
-                        `Invocation guard denied this read: active model "${verdict.model}" matches guards.denyModels pattern "${verdict.matched}". ` +
-                            'A model with native vision should read the image itself. ' +
+                        `Invocation guard denied this read: active model "${verdict.model}" ${cause} ` +
                             `To override, unset MODLENS_MODEL or edit guards in ${CONFIG_PATH}.`,
                     );
                 }

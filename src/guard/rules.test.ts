@@ -98,3 +98,58 @@ describe('guard evaluation', () => {
         }
     });
 });
+
+describe('allowlist mode', () => {
+    it('allows a model matching an allow pattern and names the matched rule', () => {
+        const verdict = evaluateGuard(
+            { allowModels: ['deepseek-v4-*', 'glm-5.*'] },
+            { model: 'deepseek-v4-flash', source: 'storage' },
+        );
+        expect(verdict.guard).toBe('allow');
+        expect(verdict.matched).toBe('deepseek-v4-*');
+    });
+
+    it('denies a known model that matches no allow pattern', () => {
+        const verdict = evaluateGuard(
+            { allowModels: ['deepseek-v4-*'] },
+            { model: 'claude-fable-5', source: 'storage' },
+        );
+        expect(verdict.guard).toBe('deny');
+        expect(verdict.matched).toBeUndefined();
+        expect(verdict.reason).toContain('allowModels');
+    });
+
+    it('lets a deny pattern carve a vision variant out of a broad allow', () => {
+        const verdict = evaluateGuard(
+            { allowModels: ['glm-*'], denyModels: ['glm-*v*'] },
+            { model: 'glm-5v-turbo', source: 'storage' },
+        );
+        expect(verdict.guard).toBe('deny');
+        expect(verdict.matched).toBe('glm-*v*');
+    });
+
+    it('matches allow patterns against provider/model too', () => {
+        const verdict = evaluateGuard(
+            { allowModels: ['ds-gateway/*'] },
+            { model: 'v4-flash', provider: 'ds-gateway', source: 'storage' },
+        );
+        expect(verdict.guard).toBe('allow');
+        expect(verdict.matched).toBe('ds-gateway/*');
+    });
+
+    it('keeps failing open on an unknown model unless denyWhenUnknown is set', () => {
+        const unknown = { model: null, source: 'none' } as const;
+        expect(evaluateGuard({ allowModels: ['deepseek-v4-*'] }, unknown).guard).toBe('allow');
+        expect(
+            evaluateGuard({ allowModels: ['deepseek-v4-*'], denyWhenUnknown: true }, unknown).guard,
+        ).toBe('deny');
+    });
+
+    it('treats an empty or malformed allowModels as no allowlist at all', () => {
+        for (const allowModels of [[], 'deepseek-v4-*']) {
+            const guards = { allowModels } as unknown as { allowModels: string[] };
+            const verdict = evaluateGuard(guards, { model: 'claude-fable-5', source: 'storage' });
+            expect(verdict.guard).toBe('allow');
+        }
+    });
+});
