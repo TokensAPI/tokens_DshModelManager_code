@@ -41,7 +41,11 @@ describe('dsh plugin auto-read (phase 2)', () => {
     }>;
 
     async function load(autoRead?: boolean) {
-        const plugin = await import('../dsh/index.js');
+        // The plugin is plain JS by design (no build step, no dsh type deps).
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: { autoRead?: boolean }) => void;
+        };
         const handlers: Record<string, Handler> = {};
         const ctx = {
             tools: { register: () => {} },

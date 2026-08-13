@@ -57,6 +57,14 @@ agy                                                           # 浏览器完成�
 
 安装还会盘点本机其他 harness CLI（Codex、OpenCode、Pi）里可触达的视觉能力，并逐个询问是否允许 modlens 复用。获准的登录态与你自己配的引擎平级入池，每次复用都会在结果里标明花的是谁的额度。
 
+**DeepSeek Harness（dsh）用户不走 skill 流程**，本包就是原生 dsh 插件：
+
+```sh
+dsh plugin --profile web add @liustack/modlens
+```
+
+装完即有 `read_image` 工具和粘贴图片自动识别。引擎配置同样在 `~/.modlens`，详见[宿主接入](docs/harness-setup.md)。
+
 ## 用法
 
 装好之后不需要记任何命令。正常聊天，粘贴图片或给出图片路径，提问即可，skill 自动触发：图片交给视觉引擎，答案基于读到的内容返回。
