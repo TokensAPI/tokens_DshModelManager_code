@@ -28,6 +28,7 @@ import type {
 import { openaiCompatProvider } from '../providers/openaiCompat.ts';
 import { visionResultSchemaJson } from '../schema.ts';
 import { extractJson, parseJsonLoose, truncate, tryParseJson } from '../util/json.ts';
+import { resolveSpawnPlan } from '../util/winExec.ts';
 import { type AutoDiscovery, discoverAuto } from './discover.ts';
 
 const KEY_FETCH_TIMEOUT_MS = 10_000;
@@ -471,11 +472,22 @@ export function piRoutes(
 
 function fetchPiKey(piPath: string, modelId: string, provider: string, timeoutMs: number): string {
     try {
-        const key = execFileSync(
-            piPath,
-            ['auth', 'print-api-key', '--model', modelId, '--provider', provider],
-            { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs },
-        ).trim();
+        // Windows shim routing (issue #31): findOnPath hands this a .cmd
+        // there, which cannot be exec'd without cmd.exe.
+        const plan = resolveSpawnPlan(piPath, [
+            'auth',
+            'print-api-key',
+            '--model',
+            modelId,
+            '--provider',
+            provider,
+        ]);
+        const key = execFileSync(plan.command, plan.args, {
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: timeoutMs,
+            ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+        }).trim();
         if (!key) {
             throw new Error('empty');
         }
