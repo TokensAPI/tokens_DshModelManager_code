@@ -105,7 +105,15 @@ modlens config set openai.apiKey <sk-key>
 modlens config set openai.model qwen3.6-27b
 ```
 
-官方 OpenAI 的写法：baseUrl 用 `https://api.openai.com/v1`，配一个具备视觉能力的模型。对应的环境变量：`OPENAI_BASE_URL`、`OPENAI_API_KEY`。模型必须是多模态的，纯文本模型会失败或产生幻觉。这条路线没有服务端 schema 约束，偶发的结构错误会以明确报错的形式暴露出来，重试或换 provider 即可。
+官方 OpenAI 的写法：baseUrl 用 `https://api.openai.com/v1`，配一个具备视觉能力的模型。对应的环境变量：`OPENAI_BASE_URL`、`OPENAI_API_KEY`。模型必须是多模态的，纯文本模型会失败或产生幻觉。
+
+这条路线默认在服务端不做任何约束，能力弱一些的模型可能只答出契约的一半，运行就会以明确报错失败。真遇到就让网关自己强制执行：
+
+```bash
+modlens config set openai.structuredOutput true
+```
+
+契约会以 `response_format: json_schema` 的严格形式发出去，schema 由 modlens 校验用的那份推导而来。默认关闭，因为不支持结构化输出的网关会对这个字段返回 400，端点拒绝就关回去。关掉思考（见下）会让结构错误更容易出现，所以这两项常常一起用。
 
 ### anthropic（Claude API key）
 

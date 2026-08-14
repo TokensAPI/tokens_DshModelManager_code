@@ -105,7 +105,15 @@ modlens config set openai.apiKey <sk-key>
 modlens config set openai.model qwen3.6-27b
 ```
 
-For official OpenAI: baseUrl `https://api.openai.com/v1`, a vision-capable model. Environment equivalents: `OPENAI_BASE_URL`, `OPENAI_API_KEY`. The model must be multimodal; text-only models will fail or hallucinate. This route has no server-side schema enforcement, so occasional shape failures are surfaced as explicit errors; retry or switch provider.
+For official OpenAI: baseUrl `https://api.openai.com/v1`, a vision-capable model. Environment equivalents: `OPENAI_BASE_URL`, `OPENAI_API_KEY`. The model must be multimodal; text-only models will fail or hallucinate.
+
+This route enforces nothing server-side by default, so a weaker model can answer with half the contract and the run fails with an explicit error. If that happens, ask the gateway to enforce it:
+
+```bash
+modlens config set openai.structuredOutput true
+```
+
+The contract goes out as `response_format: json_schema` in strict form, derived from the schema modlens checks against. Off by default because a gateway without structured-output support answers 400 for the field, so turn it back off if the endpoint refuses it. Turning thinking off (below) makes the shape failures more likely, so the two often go together.
 
 ### anthropic (Claude API key)
 

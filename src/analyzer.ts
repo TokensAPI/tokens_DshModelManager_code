@@ -382,7 +382,7 @@ async function runProvider(
     const missing = missingSchemaFields(parsed.result);
     if (missing.length > 0) {
         throw new Error(
-            `${provider.name} returned a result that does not match the vision schema (missing: ${missing.join(', ')}).`,
+            `${provider.name} returned a result that does not match the vision schema (wrong or missing: ${missing.join(', ')}).`,
         );
     }
 

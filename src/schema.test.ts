@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { missingSchemaFields, schemaViolations, VISION_RESULT_SCHEMA } from './schema.ts';
+import {
+    type JsonSchemaNode,
+    missingSchemaFields,
+    schemaViolations,
+    strictSchema,
+    VISION_RESULT_SCHEMA,
+    visionResponseFormat,
+} from './schema.ts';
 
 const VALID = {
     summary: 'a tweet screenshot',
@@ -58,6 +65,25 @@ describe('missingSchemaFields', () => {
         expect(kind).not.toHaveProperty('enum');
     });
 
+    it('accepts null on a field the schema does not require', () => {
+        // A model with nothing to note writes null, and leaving the field out
+        // was already fine, so rejecting null cost a whole read over an empty
+        // list (issue #37).
+        const quiet = structuredClone(VALID) as Record<string, unknown>;
+        (quiet.visual as Record<string, unknown>).notes = null;
+        (quiet.visual as Record<string, unknown>).style = null;
+        expect(missingSchemaFields(quiet)).toEqual([]);
+    });
+
+    it('still refuses null where the contract requires a value', () => {
+        const empty = structuredClone(VALID) as Record<string, unknown>;
+        empty.visual = null;
+        expect(missingSchemaFields(empty)).toEqual(['visual']);
+        const noText = structuredClone(VALID);
+        noText.ocr.lines[0].text = null as unknown as string;
+        expect(missingSchemaFields(noText)).toContain('ocr.lines[0].text');
+    });
+
     it('still enforces an enum wherever one is declared', () => {
         // The vision schema declares none, so this pins the machinery
         // directly: a future enum must not pass unchecked.
@@ -98,6 +124,45 @@ describe('missingSchemaFields', () => {
             'visual',
             'uncertainty',
         ]);
+    });
+});
+
+describe('strict schema for structured output (#37)', () => {
+    it('requires every property and makes the optional ones nullable', () => {
+        const schema = strictSchema(VISION_RESULT_SCHEMA as JsonSchemaNode);
+        // Strict mode has no optional properties: everything is required, and
+        // what this contract does not require becomes nullable instead.
+        expect(schema.required).toEqual(Object.keys(schema.properties ?? {}));
+        expect(schema.additionalProperties).toBe(false);
+        const visual = schema.properties?.visual;
+        expect(visual?.required).toEqual(['dominant_colors', 'style', 'notes']);
+        expect(visual?.properties?.notes?.anyOf?.[1]).toEqual({ type: 'null' });
+        // A required one keeps its plain shape.
+        expect(schema.properties?.summary).toEqual({ type: 'string' });
+    });
+
+    it('carries the same fields as the contract it is derived from', () => {
+        // Derived, not written out, so a field added to one cannot go missing
+        // from the other.
+        const schema = strictSchema(VISION_RESULT_SCHEMA as JsonSchemaNode);
+        expect(Object.keys(schema.properties ?? {})).toEqual(
+            Object.keys(VISION_RESULT_SCHEMA.properties),
+        );
+        const format = visionResponseFormat() as {
+            type: string;
+            json_schema: { name: string; strict: boolean; schema: JsonSchemaNode };
+        };
+        expect(format.type).toBe('json_schema');
+        expect(format.json_schema.strict).toBe(true);
+        expect(format.json_schema.schema).toEqual(schema);
+    });
+
+    it('descends into array items', () => {
+        const schema = strictSchema(VISION_RESULT_SCHEMA as JsonSchemaNode);
+        const line = schema.properties?.ocr?.properties?.lines?.items;
+        expect(line?.additionalProperties).toBe(false);
+        expect(line?.properties?.language?.anyOf?.[1]).toEqual({ type: 'null' });
+        expect(line?.properties?.text).toEqual({ type: 'string' });
     });
 });
 

@@ -5,7 +5,7 @@
 import { readLocalImageBase64 } from '../imageInput.ts';
 import { apiFetch } from '../net/proxy.ts';
 import { buildVisionPrompt, JSON_TEMPLATE_INSTRUCTION } from '../prompt.ts';
-import { missingSchemaFields } from '../schema.ts';
+import { missingSchemaFields, visionResponseFormat } from '../schema.ts';
 import { mergeExtraBody } from '../util/extraBody.ts';
 import { extractJson, truncate } from '../util/json.ts';
 import { redactSecrets } from '../util/redact.ts';
@@ -54,6 +54,16 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
                 mergeExtraBody(
                     {
                         model,
+                        // Asked for, never assumed: a gateway without
+                        // structured-output support answers 400 for a field
+                        // it does not know (issue #37). A response_format the
+                        // caller supplied wins outright rather than being
+                        // merged into ours, since the two describe the same
+                        // thing and a blend of them describes neither.
+                        ...(options.settings?.structuredOutput &&
+                        options.settings?.extraBody?.response_format === undefined
+                            ? { response_format: visionResponseFormat() }
+                            : {}),
                         messages: [
                             {
                                 role: 'user',
@@ -102,7 +112,7 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
     const missing = missingSchemaFields(result);
     if (missing.length > 0) {
         throw new Error(
-            `OpenAI-compatible API returned JSON that does not match the vision schema (missing: ${missing.join(', ')}). Retry, or switch to gemini-api / anthropic for enforced schemas. Got: ${truncate(text)}`,
+            `OpenAI-compatible API returned JSON that does not match the vision schema (wrong or missing: ${missing.join(', ')}). Retry, or switch to gemini-api / anthropic for enforced schemas. Got: ${truncate(text)}`,
         );
     }
 
