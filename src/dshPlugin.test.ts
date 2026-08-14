@@ -970,6 +970,53 @@ describe('dsh paste-to-path host route', () => {
         expect((JSON.parse(out.body) as { takeover: boolean }).takeover).toBe(false);
     });
 
+    it('a longer text-only name cannot shadow the selected shorter vision model', async () => {
+        // The label's own prose can complete a longer name: with "Select
+        // model, current Pro" selected (a vision model named "Pro"), a text
+        // route named "Current Pro" also matches — and longest-match used to
+        // let it win. Every match must be text-only, so the vision "Pro"
+        // vetoes regardless of length.
+        const llm = {
+            listProviders: () => [{ id: 'vision' }, { id: 'text' }],
+            listModels: async (id: string) =>
+                id === 'vision'
+                    ? [{ id: 'pro-vision', name: 'Pro', inputModalities: ['text', 'image'] }]
+                    : [{ id: 'current-pro', name: 'Current Pro', inputModalities: ['text'] }],
+        };
+        const routes = await routeOf({}, llm);
+        const { out, res } = fakeRes();
+        await routes[0].handler(
+            fakeReq(
+                'GET',
+                Buffer.alloc(0),
+                `/modlens/paste?model=${encodeURIComponent('Select model, current Pro')}`,
+            ) as never,
+            res as never,
+        );
+        expect((JSON.parse(out.body) as { takeover: boolean }).takeover).toBe(false);
+    });
+
+    it('an unreadable provider catalog vetoes: the vision twin could live there', async () => {
+        const llm = {
+            listProviders: () => [{ id: 'broken' }, { id: 'text' }],
+            listModels: async (id: string) => {
+                if (id === 'broken') throw new Error('catalog offline');
+                return [{ id: 'shared', name: 'Shared Model', inputModalities: ['text'] }];
+            },
+        };
+        const routes = await routeOf({}, llm);
+        const { out, res } = fakeRes();
+        await routes[0].handler(
+            fakeReq(
+                'GET',
+                Buffer.alloc(0),
+                `/modlens/paste?model=${encodeURIComponent('current Shared Model')}`,
+            ) as never,
+            res as never,
+        );
+        expect((JSON.parse(out.body) as { takeover: boolean }).takeover).toBe(false);
+    });
+
     it('missing inputModalities means UNKNOWN, never confirmed text-only', async () => {
         const llm = {
             listProviders: () => [{ id: 'p1' }],
