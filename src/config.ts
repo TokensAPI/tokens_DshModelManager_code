@@ -13,6 +13,12 @@ export interface ProviderSettings {
     baseUrl?: string;
     model?: string;
     /**
+     * Proxy URL for this provider's API requests (issue #20). Falls back to
+     * the top-level `proxy`, then to HTTPS_PROXY/HTTP_PROXY. Never applies to
+     * the SSRF-guarded remote-image download path.
+     */
+    proxy?: string;
+    /**
      * Vendor-specific fields merged into the request body of the API providers
      * (turning thinking off is the usual reason). Not a string like the rest,
      * so the string-only fields have their own type below.
@@ -21,9 +27,9 @@ export interface ProviderSettings {
 }
 
 /** The settings that hold a plain string, the only ones env vars can bind to. */
-export type ProviderStringField = 'apiKey' | 'baseUrl' | 'model';
+export type ProviderStringField = 'apiKey' | 'baseUrl' | 'model' | 'proxy';
 
-const STRING_FIELDS: ProviderStringField[] = ['apiKey', 'baseUrl', 'model'];
+const STRING_FIELDS: ProviderStringField[] = ['apiKey', 'baseUrl', 'model', 'proxy'];
 
 /** Harnesses whose local logins modlens can be granted to borrow. */
 export const REUSE_HARNESSES = ['claude', 'codex', 'opencode', 'pi', 'grok'] as const;
@@ -31,6 +37,8 @@ export type ReuseHarness = (typeof REUSE_HARNESSES)[number];
 
 export interface ModlensConfig {
     provider?: string;
+    /** Default proxy URL for all API providers (see ProviderSettings.proxy). */
+    proxy?: string;
     providers?: Record<string, ProviderSettings>;
     /** Invocation guard: when the active model already sees images, skip the engine. */
     guards?: GuardsConfig;
@@ -103,6 +111,10 @@ export function resolveProviderSettings(
     const bindings = ENV_BINDINGS[providerName] ?? {};
 
     const settings: ProviderSettings = { ...fromFile };
+    // The top-level proxy is the default; a provider-level one overrides it.
+    if (!settings.proxy && config.proxy?.trim()) {
+        settings.proxy = config.proxy.trim();
+    }
     for (const [field, envName] of Object.entries(bindings) as Array<
         [ProviderStringField, string]
     >) {
@@ -120,6 +132,12 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
 
     if (dottedKey === 'provider') {
         config.provider = value;
+    } else if (dottedKey === 'proxy') {
+        if (value.trim() === '') {
+            delete config.proxy;
+        } else {
+            config.proxy = value.trim();
+        }
     } else if (dottedKey.startsWith('reuse.')) {
         const harness = dottedKey.slice('reuse.'.length);
         if (!(REUSE_HARNESSES as readonly string[]).includes(harness)) {
@@ -166,7 +184,7 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
             }
         } else if (!STRING_FIELDS.includes(field as ProviderStringField)) {
             throw new Error(
-                `Unknown config field: ${field}. Use apiKey, baseUrl, model, or extraBody.`,
+                `Unknown config field: ${field}. Use apiKey, baseUrl, model, proxy, or extraBody.`,
             );
         } else {
             config.providers ??= {};
@@ -295,6 +313,7 @@ export function renderEffectiveConfig(
 
     const effective: {
         provider?: string;
+        proxy?: string;
         providers: Record<string, Record<string, string>>;
         guards?: Record<string, string>;
         reuse?: Record<string, string>;
@@ -303,6 +322,11 @@ export function renderEffectiveConfig(
     };
     if (config.provider?.trim()) {
         effective.provider = config.provider.trim();
+    }
+    if (config.proxy?.trim()) {
+        effective.proxy = `${config.proxy.trim()} (file)`;
+    } else if (env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy) {
+        effective.proxy = `${(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy) as string} (env)`;
     }
     if (config.guards) {
         const guards: Record<string, string> = {};

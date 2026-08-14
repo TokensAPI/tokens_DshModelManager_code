@@ -154,6 +154,29 @@ The trade-off is honest either way: an explicit `@latest` (or the exclusion)
 opts modlens out of pnpm's supply-chain cooling-off window, so new releases
 install immediately.
 
+## fetch failed, or could not connect
+
+```
+Could not connect to generativelanguage.googleapis.com (UND_ERR_CONNECT_TIMEOUT). The request never reached the network. ...
+```
+
+The API request never left the machine. On networks that reach the internet
+through a proxy this is expected: Node's fetch ignores the proxy environment
+variables by default. modlens honors them once you ask it to route that way,
+in either form:
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7890 modlens -i shot.png -p gemini-api   # env (NO_PROXY honored too)
+modlens config set proxy http://127.0.0.1:7890                        # persistent, all API providers
+modlens config set openai.proxy http://127.0.0.1:7890                 # one provider only
+```
+
+The proxy applies to API provider requests only. The remote-image download
+path keeps its direct, IP-pinned connection on purpose: its SSRF guards
+validate the exact address being contacted, and a proxy would blind them. On
+a proxied machine, prefer local files or let the failover chain hand remote
+URLs to a provider that fetches them upstream.
+
 ## Config file problems
 
 ```

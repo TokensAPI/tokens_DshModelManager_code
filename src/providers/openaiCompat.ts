@@ -3,6 +3,7 @@
 // schema enforcement across vendors, so the schema rides in the prompt and the
 // response goes through tolerant JSON extraction.
 import { readLocalImageBase64 } from '../imageInput.ts';
+import { apiFetch } from '../net/proxy.ts';
 import { buildVisionPrompt, JSON_TEMPLATE_INSTRUCTION } from '../prompt.ts';
 import { missingSchemaFields } from '../schema.ts';
 import { mergeExtraBody } from '../util/extraBody.ts';
@@ -41,33 +42,37 @@ export async function executeOpenaiCompat(
 ${JSON_TEMPLATE_INSTRUCTION}`;
 
     const startedAt = Date.now();
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(
-            mergeExtraBody(
-                {
-                    model,
-                    messages: [
-                        {
-                            role: 'user',
-                            content: [
-                                { type: 'image_url', image_url: { url: imageUrl } },
-                                { type: 'text', text: prompt },
-                            ],
-                        },
-                    ],
-                },
-                options.settings?.extraBody,
-                ['model', 'messages', 'stream'],
-                'openai',
+    const response = await apiFetch(
+        `${baseUrl}/chat/completions`,
+        {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(
+                mergeExtraBody(
+                    {
+                        model,
+                        messages: [
+                            {
+                                role: 'user',
+                                content: [
+                                    { type: 'image_url', image_url: { url: imageUrl } },
+                                    { type: 'text', text: prompt },
+                                ],
+                            },
+                        ],
+                    },
+                    options.settings?.extraBody,
+                    ['model', 'messages', 'stream'],
+                    'openai',
+                ),
             ),
-        ),
-        signal: AbortSignal.timeout(options.timeoutMs),
-    });
+            signal: AbortSignal.timeout(options.timeoutMs),
+        },
+        options.settings?.proxy,
+    );
 
     if (!response.ok) {
         const body = await response.text();

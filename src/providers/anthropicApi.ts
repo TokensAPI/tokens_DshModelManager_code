@@ -1,6 +1,7 @@
 // Claude API provider. Structured output enforced the Anthropic way: a forced
 // tool call whose input_schema is the vision result schema.
 import { readLocalImageBase64 } from '../imageInput.ts';
+import { apiFetch } from '../net/proxy.ts';
 import { buildVisionPrompt } from '../prompt.ts';
 import { VISION_RESULT_SCHEMA } from '../schema.ts';
 import { mergeExtraBody } from '../util/extraBody.ts';
@@ -50,44 +51,48 @@ export async function executeAnthropicApi(
 Report your findings by calling the ${TOOL_NAME} tool.`;
 
     const startedAt = Date.now();
-    const response = await fetch(`${baseUrl}/v1/messages`, {
-        method: 'POST',
-        headers: {
-            'x-api-key': apiKey,
-            'anthropic-version': '2023-06-01',
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(
-            mergeExtraBody(
-                {
-                    model,
-                    max_tokens: 4096,
-                    tools: [
-                        {
-                            name: TOOL_NAME,
-                            description:
-                                'Report the structured visual evidence extracted from the image.',
-                            input_schema: VISION_RESULT_SCHEMA,
-                        },
-                    ],
-                    tool_choice: { type: 'tool', name: TOOL_NAME },
-                    messages: [
-                        {
-                            role: 'user',
-                            content: [
-                                { type: 'image', source: imageSource },
-                                { type: 'text', text: prompt },
-                            ],
-                        },
-                    ],
-                },
-                options.settings?.extraBody,
-                ['model', 'messages', 'tools', 'tool_choice', 'stream'],
-                'anthropic',
+    const response = await apiFetch(
+        `${baseUrl}/v1/messages`,
+        {
+            method: 'POST',
+            headers: {
+                'x-api-key': apiKey,
+                'anthropic-version': '2023-06-01',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(
+                mergeExtraBody(
+                    {
+                        model,
+                        max_tokens: 4096,
+                        tools: [
+                            {
+                                name: TOOL_NAME,
+                                description:
+                                    'Report the structured visual evidence extracted from the image.',
+                                input_schema: VISION_RESULT_SCHEMA,
+                            },
+                        ],
+                        tool_choice: { type: 'tool', name: TOOL_NAME },
+                        messages: [
+                            {
+                                role: 'user',
+                                content: [
+                                    { type: 'image', source: imageSource },
+                                    { type: 'text', text: prompt },
+                                ],
+                            },
+                        ],
+                    },
+                    options.settings?.extraBody,
+                    ['model', 'messages', 'tools', 'tool_choice', 'stream'],
+                    'anthropic',
+                ),
             ),
-        ),
-        signal: AbortSignal.timeout(options.timeoutMs),
-    });
+            signal: AbortSignal.timeout(options.timeoutMs),
+        },
+        options.settings?.proxy,
+    );
 
     if (!response.ok) {
         const body = await response.text();
