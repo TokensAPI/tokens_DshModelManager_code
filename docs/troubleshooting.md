@@ -137,7 +137,7 @@ simply lands on an older one. Name the exact version instead, which pnpm treats
 as a deliberate request rather than a resolution:
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.16.4
+npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.16.5
 ```
 
 `npm view @liustack/modlens version` prints the current one. pnpm 11 installs a named
@@ -152,7 +152,7 @@ file:
 
 ```yaml
 minimumReleaseAgeExclude:
-  - '@liustack/modlens@3.16.4'
+  - '@liustack/modlens@3.16.5'
 ```
 
 Or lift the gate for a single command, which lifts it for everything that

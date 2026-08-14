@@ -8,7 +8,7 @@ shell syntax.
 
 ## Pinned version
 
-- Pinned CLI version: 3.16.4
+- Pinned CLI version: 3.16.5
 - npm package: `@liustack/modlens`
 - CLI binary name: `modlens`
 
