@@ -1410,3 +1410,155 @@ describe('dsh vision provider auto-discovery (#29)', () => {
         expect(registered).toEqual(['deepseek-modlens']);
     });
 });
+
+describe('paste takeover verdict (#36)', () => {
+    // Drives the real apply() -> registerPasteRoute -> pasteTakeoverVerdict
+    // path against a registry shaped like a live dsh install, because the
+    // regression this covers only exists once the plugin's own wrapper is in
+    // the registry it scans.
+    const load = async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        return plugin;
+    };
+
+    type Model = { id: string; name: string; inputModalities?: string[] };
+    type Handler = (req: unknown, res: unknown) => Promise<void>;
+
+    const DEEPSEEK: Model[] = [
+        { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', inputModalities: ['text'] },
+        { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash', inputModalities: ['text'] },
+    ];
+
+    const install = (extra: { id: string; name: string; models: Model[] | Error }[] = []) => {
+        const adapters = new Map<string, { listModels: (id: string) => Promise<Model[]> }>();
+        const providers = [
+            { id: 'deepseek-official', name: 'DeepSeek' },
+            ...extra.map((route) => ({ id: route.id, name: route.name })),
+        ];
+        let handler: Handler | null = null;
+        const llm = {
+            listProviders: () => providers,
+            async listModels(providerId: string) {
+                if (providerId === 'deepseek-official') return DEEPSEEK;
+                const route = extra.find((candidate) => candidate.id === providerId);
+                if (route) {
+                    if (route.models instanceof Error) throw route.models;
+                    return route.models;
+                }
+                const adapter = adapters.get(providerId);
+                return adapter ? await adapter.listModels(providerId) : [];
+            },
+            async resolveModelInfo(_providerId: string, model: string) {
+                return DEEPSEEK.find((candidate) => candidate.id === model) ?? {};
+            },
+            stream: () => (async function* () {})(),
+            registerAdapter(
+                ids: string[],
+                adapter: {
+                    providerInfo: (id: string) => { name: string };
+                    listModels: (id: string) => Promise<Model[]>;
+                },
+            ) {
+                for (const id of ids) {
+                    adapters.set(id, adapter);
+                    // A wrapper shows up in the model selector, so it is in
+                    // the same enumeration the verdict walks.
+                    providers.push({ id, name: adapter.providerInfo(id).name });
+                }
+            },
+        };
+        return {
+            llm,
+            get handler() {
+                return handler;
+            },
+            ctx: {
+                llm,
+                tools: { register: () => {} },
+                agents: {},
+                attachments: {},
+                on: () => {},
+                inject: (_deps: string[], run: (scope: unknown) => void) =>
+                    run({
+                        webServer: {
+                            register: (route: { handler: Handler }) => {
+                                handler = route.handler;
+                            },
+                        },
+                    }),
+            } as never,
+        };
+    };
+
+    const ask = async (handler: Handler | null, label: string) => {
+        let body = '';
+        await handler?.(
+            { method: 'GET', url: `/modlens/paste?model=${encodeURIComponent(label)}` },
+            { writeHead: () => {}, end: (chunk: string) => (body = chunk) },
+        );
+        return JSON.parse(body).takeover as boolean;
+    };
+
+    it('takes over a plain text-only model even with the vision wrapper registered', async () => {
+        // The wrapper reuses the upstream model id and declares image input,
+        // so before the fix the plain label matched that twin by id and the
+        // twin's declaration vetoed the takeover this feature exists for.
+        const house = install();
+        (await load()).apply(house.ctx, {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(await ask(house.handler, 'DeepSeek-V4-Pro')).toBe(true);
+        expect(await ask(house.handler, 'DeepSeek-V4-Flash')).toBe(true);
+    });
+
+    it('leaves its own vision variant on the native paste path', async () => {
+        const house = install();
+        (await load()).apply(house.ctx, {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(await ask(house.handler, 'DeepSeek-V4-Pro (modlens vision)')).toBe(false);
+    });
+
+    it('still lets a real vision model on another route veto', async () => {
+        // The skip is by registered provider id, not by name shape, so a
+        // genuine vision model sharing the label still refuses the takeover.
+        const house = install([
+            {
+                id: 'some-gateway',
+                name: 'Gateway',
+                models: [
+                    { id: 'v4-pro', name: 'DeepSeek-V4-Pro', inputModalities: ['text', 'image'] },
+                ],
+            },
+        ]);
+        (await load()).apply(house.ctx, {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(await ask(house.handler, 'DeepSeek-V4-Pro')).toBe(false);
+    });
+
+    it('refuses when a matching model declares no modalities at all', async () => {
+        const house = install([
+            { id: 'mystery', name: 'Mystery', models: [{ id: 'deepseek-v4-pro', name: 'x' }] },
+        ]);
+        (await load()).apply(house.ctx, {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(await ask(house.handler, 'DeepSeek-V4-Pro')).toBe(false);
+    });
+
+    it('refuses when a provider catalog cannot be read', async () => {
+        const house = install([
+            { id: 'broken', name: 'Broken', models: new Error('catalog unavailable') },
+        ]);
+        (await load()).apply(house.ctx, {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(await ask(house.handler, 'DeepSeek-V4-Pro')).toBe(false);
+    });
+
+    it('refuses a label that matches nothing', async () => {
+        const house = install();
+        (await load()).apply(house.ctx, {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(await ask(house.handler, 'Some-Other-Model')).toBe(false);
+    });
+});
