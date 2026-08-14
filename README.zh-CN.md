@@ -71,9 +71,9 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 
 装好之后不需要记任何命令。正常聊天，粘贴图片或给出图片路径，提问即可，skill 自动触发：图片交给视觉引擎，答案基于读到的内容返回。
 
-## 视觉引擎：五个 provider，一条故障转移链
+## 视觉引擎：五个内置 provider，四家可复用 CLI，一条故障转移链
 
-ModLens 不绑定任何单一视觉服务。内置五个 provider，配好任意一个就能用：
+ModLens 不绑定任何单一视觉服务。视觉来源一共九个：五个内置 provider（配好任意一个就能用），加四家本机 agent CLI 的登录可以复用。先看内置的：
 
 | Provider | 需要什么 | 单次识别耗时 | 适合谁 |
 | :-- | :-- | :-- | :-- |
@@ -102,7 +102,14 @@ modlens config set openai.model   qwen3-vl-plus
 还有两处现成的视觉能力，一个新 key 都不用配，每家都在你明确同意后才启用：
 
 - **你正在对话的这个 harness 本身。**在登录了订阅的 Claude Code 里用？`claude-cli` 开箱即可借它读图。装进哪个 harness，安装流程就会问哪个 harness 的授权。
-- **机器上其他的 agent CLI。**已登录的 Codex、OpenCode 的视觉模型、Pi 持有的凭据、Grok 登录，`modlens doctor` 会逐个发现，你按家授权（`config set reuse.codex true`），它们与你自己的 key 平级入链，不插队。每次复用都在 `meta.warnings` 里标明花的是谁的额度，绝不无声扣费。
+- **机器上其他的 agent CLI。**`modlens doctor` 会逐个发现，你按家授权，它们与你自己的 key 平级入链，不插队。每次复用都在 `meta.warnings` 里标明花的是谁的额度，绝不无声扣费：
+
+| 复用来源 | 需要什么 | 授权命令 | 走哪条道 |
+| :-- | :-- | :-- | :-- |
+| Codex | 已登录且有视觉模型的 Codex CLI | `config set reuse.codex true` | agent 通道，15-45 秒 |
+| OpenCode | OpenCode 里配好的视觉模型 | `config set reuse.opencode true` | agent 通道，15-45 秒 |
+| Pi | Pi 持有的模型凭据 | `config set reuse.pi true` | API key 直接升级到 5-10 秒的快车道，OAuth 驱动 Pi 本体 |
+| Grok | 已登录的 Grok CLI（SuperGrok） | `config set reuse.grok true` | agent 通道，15-45 秒 |
 
 ### 选择与路由
 
