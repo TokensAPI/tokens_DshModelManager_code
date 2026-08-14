@@ -9,15 +9,19 @@ import {
     stampTargets,
 } from './stamp.mjs';
 
-/** Every markdown file in the repo, so a new doc cannot escape the check. */
-function markdownFiles(root, skip = new Set(['node_modules', '.git', '.issues', 'dist'])) {
+// Every prose file in the repo, so a new doc cannot escape the check. The
+// extension list is broad on purpose: a command in a .mdx or a .txt installs
+// just as badly as one in a .md.
+const PROSE_EXTENSIONS = ['.md', '.mdx', '.markdown', '.txt', '.rst'];
+
+function proseFiles(root, skip = new Set(['node_modules', '.git', '.issues', 'dist'])) {
     const found = [];
     for (const entry of readdirSync(root, { withFileTypes: true })) {
         if (skip.has(entry.name)) continue;
         const full = join(root, entry.name);
         if (entry.isDirectory()) {
-            found.push(...markdownFiles(full, skip));
-        } else if (entry.name.endsWith('.md')) {
+            found.push(...proseFiles(full, skip));
+        } else if (PROSE_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) {
             found.push(full);
         }
     }
@@ -38,7 +42,7 @@ describe('launcher version stamping', () => {
         // docs say, the command they print has to install the current release.
         // Every markdown file is scanned, not the stamp list: a new doc nobody
         // added to docTargets is exactly where a stale command would hide.
-        for (const file of markdownFiles(repoRoot)) {
+        for (const file of proseFiles(repoRoot)) {
             // Per command, not per file: troubleshooting carries both a
             // pinned command and the deliberate gate-lifting one, so a
             // file-wide search for the flag would pass a pinned command that
@@ -50,7 +54,10 @@ describe('launcher version stamping', () => {
                 // The whole spec, up to whitespace or the closing backtick of
                 // a command quoted in prose: a partial read would accept
                 // `3.16.4+local` by matching only the part that looks pinned.
-                const install = line.match(/add @liustack\/modlens(@[^\s`'")]*)?/);
+                // The opening quote is optional because a shell command may
+                // quote the whole spec, which hid it from an earlier version
+                // of this check.
+                const install = line.match(/add ['"`]?@liustack\/modlens(@[^\s`'")]*)?/);
                 if (install === null) {
                     continue;
                 }

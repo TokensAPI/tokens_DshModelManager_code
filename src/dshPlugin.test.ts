@@ -1562,3 +1562,80 @@ describe('paste takeover verdict (#36)', () => {
         expect(await ask(house.handler, 'Some-Other-Model')).toBe(false);
     });
 });
+
+describe('paste takeover verdict, second instance (#36)', () => {
+    // A second apply() in one process hits the duplicate-registration branch,
+    // so it never claims the provider id and its own record is empty. The
+    // first instance's twins are still in the registry it scans.
+    it('takes over even when another instance registered the wrapper', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const models = [
+            { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', inputModalities: ['text'] },
+        ];
+        const adapters = new Map<string, { listModels: (id: string) => Promise<unknown[]> }>();
+        const providers = [{ id: 'deepseek-official', name: 'DeepSeek' }];
+        let handler: ((req: unknown, res: unknown) => Promise<void>) | null = null;
+        const llm = {
+            listProviders: () => providers,
+            async listModels(providerId: string) {
+                if (providerId === 'deepseek-official') return models;
+                const adapter = adapters.get(providerId);
+                return adapter ? await adapter.listModels(providerId) : [];
+            },
+            async resolveModelInfo(_p: string, model: string) {
+                return models.find((candidate) => candidate.id === model) ?? {};
+            },
+            stream: () => (async function* () {})(),
+            registerAdapter(
+                ids: string[],
+                adapter: {
+                    providerInfo: (id: string) => { name: string };
+                    listModels: (id: string) => Promise<unknown[]>;
+                },
+            ) {
+                for (const id of ids) {
+                    if (adapters.has(id)) throw new Error(`provider "${id}" is already registered`);
+                    adapters.set(id, adapter);
+                    providers.push({ id, name: adapter.providerInfo(id).name });
+                }
+            },
+        };
+        const ctx = (withRoute: boolean) =>
+            ({
+                llm,
+                tools: { register: () => {} },
+                agents: {},
+                attachments: {},
+                on: () => {},
+                inject: (_deps: string[], run: (scope: unknown) => void) =>
+                    withRoute
+                        ? run({
+                              webServer: {
+                                  register: (route: {
+                                      handler: (req: unknown, res: unknown) => Promise<void>;
+                                  }) => {
+                                      handler = route.handler;
+                                  },
+                              },
+                          })
+                        : undefined,
+            }) as never;
+
+        // First instance registers the wrapper but no route.
+        plugin.apply(ctx(false), { pasteToPath: false });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        // Second instance owns the route and claims nothing.
+        plugin.apply(ctx(true), {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        let body = '';
+        await handler?.(
+            { method: 'GET', url: '/modlens/paste?model=DeepSeek-V4-Pro' },
+            { writeHead: () => {}, end: (chunk: string) => (body = chunk) },
+        );
+        expect(JSON.parse(body).takeover).toBe(true);
+    });
+});

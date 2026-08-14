@@ -251,6 +251,13 @@ async function pasteTakeoverVerdict(host, label, ownProviders) {
       return false
     }
     for (const model of models) {
+      // A twin from another instance of this plugin, which the set above
+      // cannot know about: a second apply() in the same process hits the
+      // duplicate branch, does not claim the id, and would otherwise be
+      // vetoed by the first instance's wrapper. Every wrapper model says so
+      // in its name, and the label check at the top of this function already
+      // trusts that same marker.
+      if (typeof model?.name === 'string' && /\(modlens vision\)/i.test(model.name)) continue
       for (const candidate of [model?.name, model?.id]) {
         if (typeof candidate !== 'string' || candidate.length === 0) continue
         if (!lowered.includes(candidate.toLowerCase())) continue
