@@ -854,3 +854,101 @@ describe('dsh paste-to-path host route', () => {
         expect(await routeOf({ pasteToPath: false })).toEqual([]);
     });
 });
+
+describe('dsh vision provider auto-discovery (#29)', () => {
+    interface FakeProvider {
+        id: string;
+        name?: string;
+        models: Array<{ id: string; name?: string; inputModalities?: string[] }>;
+    }
+
+    async function discoveryCtx(providers: FakeProvider[], config: Record<string, unknown> = {}) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const registered: string[] = [];
+        const handlers: Record<string, () => void> = {};
+        const live = [...providers];
+        const ctx = {
+            tools: { register: () => {} },
+            attachments: {},
+            on: (event: string, fn: () => void) => {
+                handlers[event] = fn;
+            },
+            llm: {
+                registerAdapter: (ids: string[]) => {
+                    registered.push(...ids);
+                },
+                listProviders: () => live.map((p) => ({ id: p.id, name: p.name })),
+                listModels: async (id: string) => live.find((p) => p.id === id)?.models ?? [],
+                resolveModelInfo: async () => ({}),
+                stream: () => (async function* () {})(),
+            },
+        };
+        plugin.apply(ctx as never, config);
+        // sweep is async; give it a tick.
+        await new Promise((r) => setTimeout(r, 10));
+        return { registered, handlers, live };
+    }
+
+    const deepseek: FakeProvider = {
+        id: 'deepseek-official',
+        name: 'DeepSeek',
+        models: [{ id: 'deepseek-v4-flash' }],
+    };
+    const opencode: FakeProvider = {
+        id: 'opencode-go',
+        name: 'opencode-go',
+        models: [{ id: 'glm-5.3' }],
+    };
+    const unrelated: FakeProvider = {
+        id: 'other-vendor',
+        models: [{ id: 'kimi-k2.5' }],
+    };
+
+    it('wraps every route carrying wrappable family models, once each', async () => {
+        const { registered } = await discoveryCtx([deepseek, opencode, unrelated]);
+        // deepseek-official keeps its historical id; others get modlens-<id>;
+        // a route with no family models is left alone.
+        expect(registered).toContain('deepseek-modlens');
+        expect(registered).toContain('modlens-opencode-go');
+        expect(registered).not.toContain('modlens-other-vendor');
+    });
+
+    it('honors the discover whitelist', async () => {
+        const { registered } = await discoveryCtx([deepseek, opencode], {
+            discover: ['opencode-go'],
+        });
+        expect(registered).toEqual(['modlens-opencode-go']);
+    });
+
+    it('a set upstream keeps single-route legacy mode', async () => {
+        const { registered } = await discoveryCtx([deepseek, opencode], {
+            upstream: 'deepseek-official',
+        });
+        expect(registered).toEqual(['deepseek-modlens']);
+    });
+
+    it('never wraps its own wrappers', async () => {
+        const { registered } = await discoveryCtx([
+            deepseek,
+            { id: 'modlens-opencode-go', models: [{ id: 'glm-5.3' }] },
+        ]);
+        expect(registered).toEqual(['deepseek-modlens']);
+    });
+
+    it('late routes are wrapped when the registry notifies', async () => {
+        const { registered, handlers, live } = await discoveryCtx([deepseek]);
+        expect(registered).toEqual(['deepseek-modlens']);
+        // llm-pi-ai style: a provider registering after plugin mount.
+        live.push(opencode);
+        handlers['llm/adapters-updated']();
+        await new Promise((r) => setTimeout(r, 10));
+        expect(registered).toContain('modlens-opencode-go');
+        // And the notification never duplicates existing wraps.
+        handlers['llm/adapters-updated']();
+        await new Promise((r) => setTimeout(r, 10));
+        expect(registered.filter((id) => id === 'modlens-opencode-go')).toHaveLength(1);
+    });
+});

@@ -220,15 +220,25 @@ function registerPasteRoute(ctx) {
  * text-only, so pastes are refused before any plugin hook runs. This wrapper
  * registers a NEW provider whose model metadata declares image input and
  * whose stream() is a one-line delegation back to the real route. Pick the
- * wrapped model in the model selector, paste, and the pre-step rewrite below
+ * wrapped model in the model selector, paste, and the request-time rewrite
  * turns the image into evidence text before the delegated request goes out;
  * the upstream serializer's own image rejection stays as the fail-closed
  * backstop. Guarded feature-detection: if the llm registration surface moved
  * (developer preview), the plugin quietly stays a read_image-only tool.
+ *
+ * Two modes (issue #29, design contributed by @zlycode01):
+ * - `config.upstream` set: wrap exactly that one route, legacy behavior.
+ * - unset: auto-discovery — every registered provider route carrying
+ *   wrappable text-only family models gets its own `modlens-<provider>`
+ *   wrapper, so a machine with several subscription packages (opencode-go,
+ *   zai, ...) wraps them all instead of hand-picking one. A `discover` array
+ *   of provider ids narrows the set. Routes that register late (llm-pi-ai
+ *   mounts its routes after settings load) are picked up by re-sweeping on
+ *   the registry's own `llm/adapters-updated` notification, no polling. The
+ *   deepseek-official wrap keeps its historical `deepseek-modlens` id, so a
+ *   selector remembering that provider survives the upgrade.
  */
 function registerVisionProvider(ctx, config) {
-  const upstream = config.upstream || 'deepseek-official'
-  const providerId = config.providerId || 'deepseek-modlens'
   // Wrap only the text-only members of these families. Their own vision
   // models (present or future: deepseek-vl/ocr/janus, glm-4.5v, glm-5v-...)
   // need no bridge and are excluded by name and by declared modality.
@@ -244,58 +254,112 @@ function registerVisionProvider(ctx, config) {
   if (typeof ctx.llm?.registerAdapter !== 'function' || typeof ctx.llm?.stream !== 'function') {
     return
   }
-  const withVision = (info) => ({
-    ...info,
-    provider: providerId,
-    inputModalities: ['text', 'image'],
-  })
-  try {
-    ctx.llm.registerAdapter([providerId], {
-      // Duck-typing LlmAdapter: providerInfo/providerRetryPolicy are base-class
-      // defaults a plain object must supply itself (their absence is exactly
-      // the silent registration failure this catch used to swallow).
-      providerInfo(provider) {
-        return { id: provider, name: 'DeepSeek (modlens vision)' }
-      },
-      providerRetryPolicy() {
-        return undefined
-      },
-      async listModels(_provider, signal) {
-        try {
-          const models = await ctx.llm.listModels(upstream, signal)
-          return models.filter(shouldWrap).map((model) => ({
-            ...withVision(model),
-            name: `${model.name ?? model.id} (modlens vision)`,
-          }))
-        } catch {
-          return []
-        }
-      },
-      async resolveModel(_provider, model, signal) {
-        const info = await ctx.llm.resolveModelInfo(upstream, model, signal)
-        if (!shouldWrap(info)) {
-          throw new Error(`model "${model}" is outside the modlens vision wrap scope`)
-        }
-        return { ...withVision(info), id: model }
-      },
-      stream(options) {
-        // Convert at request time, not at log time: the durable session log
-        // keeps the real image blocks (so the UI shows the paste natively),
-        // and only the wire messages carry evidence text. Cached per
-        // attachment, since the same history rides every later step.
-        const self = this
-        return (async function* () {
-          const messages = await convertImagesToEvidence(ctx, options.messages, options.signal, self)
-          yield* ctx.llm.stream({ ...options, provider: upstream, messages })
-        })()
-      },
-      evidenceCache: new Map(),
+
+  const registerWrapper = (upstream, providerId, displayName) => {
+    const withVision = (info) => ({
+      ...info,
+      provider: providerId,
+      inputModalities: ['text', 'image'],
     })
-  } catch (error) {
-    // DUPLICATE_ADAPTER or a preview-era surface change: degrade to the
-    // read_image-only plugin, but say so in the harness log instead of
-    // vanishing (a swallowed TypeError here once hid a missing base method).
-    console.error(`[modlens] vision provider registration skipped: ${error}`)
+    try {
+      ctx.llm.registerAdapter([providerId], {
+        // Duck-typing LlmAdapter: providerInfo/providerRetryPolicy are
+        // base-class defaults a plain object must supply itself (their
+        // absence is exactly the silent registration failure this catch
+        // used to swallow).
+        providerInfo(provider) {
+          return { id: provider, name: displayName }
+        },
+        providerRetryPolicy() {
+          return undefined
+        },
+        async listModels(_provider, signal) {
+          try {
+            const models = await ctx.llm.listModels(upstream, signal)
+            return models.filter(shouldWrap).map((model) => ({
+              ...withVision(model),
+              name: `${model.name ?? model.id} (modlens vision)`,
+            }))
+          } catch {
+            return []
+          }
+        },
+        async resolveModel(_provider, model, signal) {
+          const info = await ctx.llm.resolveModelInfo(upstream, model, signal)
+          if (!shouldWrap(info)) {
+            throw new Error(`model "${model}" is outside the modlens vision wrap scope`)
+          }
+          return { ...withVision(info), id: model }
+        },
+        stream(options) {
+          // Convert at request time, not at log time: the durable session
+          // log keeps the real image blocks (so the UI shows the paste
+          // natively), and only the wire messages carry evidence text.
+          // Cached per attachment, since the same history rides every step.
+          const self = this
+          return (async function* () {
+            const messages = await convertImagesToEvidence(ctx, options.messages, options.signal, self)
+            yield* ctx.llm.stream({ ...options, provider: upstream, messages })
+          })()
+        },
+        evidenceCache: new Map(),
+      })
+      return true
+    } catch (error) {
+      // DUPLICATE_ADAPTER or a preview-era surface change: degrade to the
+      // read_image-only plugin, but say so in the harness log instead of
+      // vanishing (a swallowed TypeError here once hid a missing base method).
+      console.error(`[modlens] vision provider registration skipped (${providerId}): ${error}`)
+      return false
+    }
+  }
+
+  if (config.upstream) {
+    registerWrapper(
+      config.upstream,
+      config.providerId || 'deepseek-modlens',
+      'DeepSeek (modlens vision)',
+    )
+    return
+  }
+
+  // Auto-discovery. `wrapped` guards both duplicates across sweeps and the
+  // self-nesting case (our own wrappers appear in listProviders too).
+  const discover = Array.isArray(config.discover) ? new Set(config.discover) : null
+  const wrapped = new Set(['deepseek-modlens'])
+  const sweep = async () => {
+    if (typeof ctx.llm.listProviders !== 'function') {
+      // Older registry surface: fall back to the single legacy wrap once.
+      if (!wrapped.has('__legacy_fallback__')) {
+        wrapped.add('__legacy_fallback__')
+        registerWrapper('deepseek-official', 'deepseek-modlens', 'DeepSeek (modlens vision)')
+      }
+      return
+    }
+    for (const info of ctx.llm.listProviders()) {
+      const id = info?.id
+      if (!id || wrapped.has(id) || String(id).startsWith('modlens-')) continue
+      if (discover && !discover.has(id)) continue
+      let models = []
+      try {
+        models = await ctx.llm.listModels(id)
+      } catch {
+        continue
+      }
+      if (!models.some(shouldWrap)) continue
+      wrapped.add(id)
+      const providerId = id === 'deepseek-official' ? 'deepseek-modlens' : `modlens-${id}`
+      const base = info.name ?? id
+      if (!registerWrapper(id, providerId, `${base} (modlens vision)`)) {
+        wrapped.delete(id)
+      }
+    }
+  }
+  void sweep()
+  if (typeof ctx.on === 'function') {
+    ctx.on('llm/adapters-updated', () => {
+      void sweep()
+    })
   }
 }
 
