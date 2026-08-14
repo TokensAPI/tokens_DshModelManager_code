@@ -34,7 +34,13 @@ DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助�
 
 ## 亮点
 
-**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `read_image` 工具读图。如果 dsh 提示 `declares no dsh.bundle`，是 pnpm 的发布冷静期把版本压旧了，一行配置可解，见[故障排查](docs/troubleshooting.zh-CN.md#dsh-提示-declares-no-dshbundle--installed-as-a-plain-dependency)。要粘贴识图，把模型选择器切到插件新增的两个条目之一：**`DeepSeek-V4-Flash (modlens vision)`** 或 **`DeepSeek-V4-Pro (modlens vision)`**，贴图放行、发请求时转成证据（你的消息保留原生缩略图）、仍由原 DeepSeek 路由回答。包装只覆盖 DeepSeek 与 GLM 的文本模型，两家自己的视觉型号自动排除。
+**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `read_image` 工具读图。如果 dsh 提示 `declares no dsh.bundle`，是 pnpm 缓存问题，一行配置可解，见[故障排查](docs/troubleshooting.zh-CN.md#dsh-提示-declares-no-dshbundle--installed-as-a-plain-dependency)。
+
+DeepSeek Harness 粘贴识图有两种玩法。
+
+**① 直接粘贴** 贴进来的图片自主转换成文件路径进输入框（与 OpenCode、Pi 同款交互），`read_image` 工具接手读图。
+
+**② 切到带 `(modlens vision)` 后缀的模型变体**（选择器有记忆，选一次就行）再粘贴：缩略图直接可见、所见即所得，体验更接近 Codex App。变体由插件自动发现生成：每条承载纯文本 DeepSeek 或 GLM 模型的 provider 路由各得一组包装条目（默认安装下就是 **`DeepSeek-V4-Flash (modlens vision)`** 和 **`DeepSeek-V4-Pro (modlens vision)`**，装了 opencode-go、zai 等额外路由的机器会各自多出一组），两家自己的视觉型号自动排除。走哪条通路由 host 依据真实模型元数据逐个裁决，真正的视觉模型永远保留原生贴图（[细节](docs/harness-setup.zh-CN.md)）。
 
 **直接粘贴图片识别** 无需先保存成文件再提供路径。
 
@@ -76,13 +82,13 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 
 ModLens 不绑定任何单一视觉服务。视觉来源一共九个：五个内置 provider（配好任意一个就能用），加四家本机 agent CLI 的登录可以复用。先看内置的：
 
-| Provider | 需要什么 | 单次识别耗时 | 适合谁 |
-| :-- | :-- | :-- | :-- |
-| `gemini-api` | 免费 Gemini key（[三分钟领取，无需信用卡](https://aistudio.google.com)） | 5-10 秒 | 推荐默认 |
-| `openai` | 任意 OpenAI 兼容端点（key + baseUrl + model） | 5-10 秒 | qwen-vl、GLM、自建网关 |
-| `anthropic` | Anthropic API key | 5-10 秒 | 手上已有 key 的机器 |
-| `antigravity-cli` | 免费的 `agy` CLI，浏览器登录一次，无需 key | 15-45 秒 | 完全免注册起步 |
-| `claude-cli` | 已登录的 Claude Code | 20-45 秒 | 复用现有 Claude 订阅 |
+| Provider          | 需要什么                                                                 | 单次识别耗时 | 适合谁                 |
+| :---------------- | :----------------------------------------------------------------------- | :----------- | :--------------------- |
+| `gemini-api`      | 免费 Gemini key（[三分钟领取，无需信用卡](https://aistudio.google.com)） | 5-10 秒      | 推荐默认               |
+| `openai`          | 任意 OpenAI 兼容端点（key + baseUrl + model）                            | 5-10 秒      | qwen-vl、GLM、自建网关 |
+| `anthropic`       | Anthropic API key                                                        | 5-10 秒      | 手上已有 key 的机器    |
+| `antigravity-cli` | 免费的 `agy` CLI，浏览器登录一次，无需 key                               | 15-45 秒     | 完全免注册起步         |
+| `claude-cli`      | 已登录的 Claude Code                                                     | 20-45 秒     | 复用现有 Claude 订阅   |
 
 不钉死 provider 时，所有配好的引擎组成一条故障转移链：API 快车道先试，agent CLI 兜底，第一个可用结果胜出，`meta.attempts` 记录每次尝试，回退永远不是无声的。
 
@@ -105,12 +111,12 @@ modlens config set openai.model   qwen3-vl-plus
 - **你正在对话的这个 harness 本身。**在登录了订阅的 Claude Code 里用？`claude-cli` 开箱即可借它读图。装进哪个 harness，安装流程就会问哪个 harness 的授权。
 - **机器上其他的 agent CLI。**`modlens doctor` 会逐个发现，你按家授权，它们与你自己的 key 平级入链，不插队。每次复用都在 `meta.warnings` 里标明花的是谁的额度，绝不无声扣费：
 
-| 复用来源 | 需要什么 | 授权命令 | 走哪条道 |
-| :-- | :-- | :-- | :-- |
-| Codex | 已登录且有视觉模型的 Codex CLI | `config set reuse.codex true` | agent 通道，15-45 秒 |
-| OpenCode | OpenCode 里配好的视觉模型 | `config set reuse.opencode true` | agent 通道，15-45 秒 |
-| Pi | Pi 持有的模型凭据 | `config set reuse.pi true` | API key 直接升级到 5-10 秒的快车道，OAuth 驱动 Pi 本体 |
-| Grok | 已登录的 Grok CLI（SuperGrok） | `config set reuse.grok true` | agent 通道，15-45 秒 |
+| 复用来源 | 需要什么                       | 授权命令                         | 走哪条道                                               |
+| :------- | :----------------------------- | :------------------------------- | :----------------------------------------------------- |
+| Codex    | 已登录且有视觉模型的 Codex CLI | `config set reuse.codex true`    | agent 通道，15-45 秒                                   |
+| OpenCode | OpenCode 里配好的视觉模型      | `config set reuse.opencode true` | agent 通道，15-45 秒                                   |
+| Pi       | Pi 持有的模型凭据              | `config set reuse.pi true`       | API key 直接升级到 5-10 秒的快车道，OAuth 驱动 Pi 本体 |
+| Grok     | 已登录的 Grok CLI（SuperGrok） | `config set reuse.grok true`     | agent 通道，15-45 秒                                   |
 
 ### 选择与路由
 
@@ -142,16 +148,16 @@ Codex 桌面 App 中识别一张推文截图。作者、配文、照片内容（
 
 ## 文档
 
-| 文档                                               | 适用场景                                   |
-| :------------------------------------------------- | :----------------------------------------- |
-| [安装手册](INSTALL.md)                             | 一步步安装 skill（为 agent 编写）          |
+| 文档                                                     | 适用场景                                   |
+| :------------------------------------------------------- | :----------------------------------------- |
+| [安装手册](INSTALL.md)                                   | 一步步安装 skill（为 agent 编写）          |
 | [CLI 手册](docs/cli.zh-CN.md)                            | skill 所驱动的 CLI：参数、配置与体检       |
 | [故障排查](docs/troubleshooting.zh-CN.md)                | 命令报错，查成因和解法                     |
 | [配置手册](skills/modlens/references/configure.zh-CN.md) | 配置 key、切换 provider、排查配置          |
 | [输出契约](docs/output-schema.zh-CN.md)                  | 解析 JSON 或构建下游工具                   |
 | [宿主接入](docs/harness-setup.zh-CN.md)                  | 在 Codex、Claude Code、Pi、OpenCode 中配置 |
 | [安全说明](docs/security.zh-CN.md)                       | 恢复文件的权限、图片内容作为不可信输入     |
-| [更新日志](CHANGELOG.md)                           | 查询版本变更                               |
+| [更新日志](CHANGELOG.md)                                 | 查询版本变更                               |
 
 ## 参与方式
 
