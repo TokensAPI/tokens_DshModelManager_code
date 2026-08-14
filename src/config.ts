@@ -178,6 +178,13 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
         const providerName = dottedKey.slice(0, dot);
         const field = dottedKey.slice(dot + 1);
         if (field === 'structuredOutput') {
+            // Only the openai route reads it, so accepting it anywhere else
+            // would report a saved setting that never does anything.
+            if ((providerAliases()[providerName] ?? providerName) !== 'openai') {
+                throw new Error(
+                    `structuredOutput applies to the openai provider only, not ${providerName}.`,
+                );
+            }
             const normalized = value.trim().toLowerCase();
             if (normalized !== '' && normalized !== 'true' && normalized !== 'false') {
                 throw new Error(
