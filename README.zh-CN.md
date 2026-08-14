@@ -71,6 +71,22 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 
 装好之后不需要记任何命令。正常聊天，粘贴图片或给出图片路径，提问即可，skill 自动触发：图片交给视觉引擎，答案基于读到的内容返回。
 
+## 视觉引擎：五个 provider，一条故障转移链
+
+ModLens 不绑定任何单一视觉服务。内置五个 provider，配好任意一个就能用：
+
+| Provider | 需要什么 | 单次识别耗时 | 适合谁 |
+| :-- | :-- | :-- | :-- |
+| `gemini-api` | 免费 Gemini key（[三分钟领取，无需信用卡](https://aistudio.google.com)） | 5-10 秒 | 推荐默认 |
+| `openai` | 任意 OpenAI 兼容端点（key + baseUrl + model） | 5-10 秒 | qwen-vl、GLM、自建网关 |
+| `anthropic` | Anthropic API key | 5-10 秒 | 手上已有 key 的机器 |
+| `antigravity-cli` | 免费的 `agy` CLI，浏览器登录一次，无需 key | 15-45 秒 | 完全免注册起步 |
+| `claude-cli` | 已登录的 Claude Code | 20-45 秒 | 复用现有 Claude 订阅 |
+
+不钉死 provider 时，所有配好的引擎组成一条故障转移链：API 快车道先试，agent CLI 兜底，第一个可用结果胜出，`meta.attempts` 记录每次尝试，回退永远不是无声的。内置引擎之外，ModLens 还能**复用你本机已有的登录**：已登录的 Codex、OpenCode 的视觉模型、Pi 持有的凭据、Grok 登录，每家经你明确同意后入池，每次复用都在结果里标明花的是谁的额度。
+
+选择只有两个旋钮：`modlens config set provider <name>` 表达偏好（链继续兜底），`-p <name>` 钉死单个不回退。代理环境设 `HTTPS_PROXY` 或 `modlens config set proxy <url>`，API provider 自动走代理。细节见 [CLI 手册](docs/cli.md)（默认模型与参数）、[配置手册](skills/modlens/references/configure.md)（全部配置键）、[安全说明](docs/security.md)（远程 URL 由谁抓取）。
+
 ## 实测
 
 以下均为原样记录，驱动的都是纯文本的 DeepSeek-V4-Flash。

@@ -63,6 +63,22 @@ The install also inventories vision reachable through your other local harness C
 
 Once installed, just chat. Paste an image or drop a path, ask anything, and the skill triggers on its own: the image goes to a vision engine and the answer comes back grounded in what it read.
 
+## Vision engines: five providers, one failover chain
+
+ModLens does not depend on any single vision service. Five providers are built in, and any one of them is enough:
+
+| Provider | What it needs | Speed per read | Good for |
+| :-- | :-- | :-- | :-- |
+| `gemini-api` | a free Gemini API key ([3 minutes, no card](https://aistudio.google.com)) | 5-10s | the recommended default |
+| `openai` | any OpenAI-compatible endpoint (key + baseUrl + model) | 5-10s | qwen-vl, GLM, self-hosted gateways |
+| `anthropic` | an Anthropic API key | 5-10s | machines already holding one |
+| `antigravity-cli` | the free `agy` CLI, one browser sign-in, no key | 15-45s | zero-signup starts |
+| `claude-cli` | a signed-in Claude Code | 20-45s | riding your existing Claude subscription |
+
+Without a pinned provider, every configured engine forms one failover chain: the fast API providers try first, the agent CLIs back them up, the first good result wins, and `meta.attempts` records every attempt so a fallback is never silent. On top of the built-ins, ModLens can **reuse the logins already on your machine**: a signed-in Codex, an OpenCode vision model, credentials held by Pi, or a Grok login can each join the chain, one explicit yes per harness, and every reused read is labeled with whose quota it spent.
+
+Picking is two knobs: `modlens config set provider <name>` states a preference (the chain still backs it up), `-p <name>` pins exactly one with no fallback. Machines behind a proxy set `HTTPS_PROXY` or `modlens config set proxy <url>` and the API providers route through it. Details: the [CLI manual](docs/cli.md) for defaults and flags, [Configuration](skills/modlens/references/configure.md) for every key, and [Security](docs/security.md) for who fetches what on remote URLs.
+
 ## See it work
 
 Unedited runs, all driving a text-only DeepSeek-V4-Flash.
