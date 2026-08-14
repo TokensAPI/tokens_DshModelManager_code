@@ -87,8 +87,9 @@ first time (that is how those runners work); after that it is served from the
 local cache.
 
 One capability note for the bunx path: Bun cannot load `node:sqlite`, which
-OpenCode paste recovery needs, so on a machine where the launcher resolved to
-bunx, `recover-paste` for OpenCode requires installing Node 22.19+ instead.
+OpenCode paste recovery needs (unflagged in Node since 22.13), so on a machine
+where the launcher resolved to bunx, `recover-paste` for OpenCode requires a
+real Node install — 22.19+, since that is the floor this launcher accepts.
 
 ## Delivery form: local CLI, long term
 
