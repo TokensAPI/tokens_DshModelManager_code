@@ -130,21 +130,23 @@ export function apply(ctx, config = {}) {
       return parsed.result
     },
   })
-  const preferred = config.toolName || 'read_image'
+  // A name of our own rather than the host's. dsh's registry is layered and
+  // a scoped tool shadows a global one, so a host `read_image` mounted in the
+  // agent-preset scope and ours registered globally are not a duplicate at
+  // all: the registration succeeds, nothing throws, and the model still
+  // resolves the host's (issue #34). Nor can that be detected here, since the
+  // global view this runs in cannot see a scoped tool either, before or
+  // after. So the collision is not detected, it is not entered: an
+  // unambiguous name cannot be shadowed by anything, and the model finds the
+  // tool through its schema, which reaches it on every request regardless of
+  // what the tool is called. `toolName` still pins whatever a host prefers.
+  const preferred = config.toolName || 'modlens_read_image'
   try {
     ctx.tools.register(readImageTool(preferred))
   } catch (error) {
-    const fallback = 'modlens_read_image'
-    if (preferred !== fallback && /already|duplicate/i.test(String(error))) {
-      try {
-        ctx.tools.register(readImageTool(fallback))
-        console.error(`[modlens] tool name "${preferred}" is taken by the host; registered as "${fallback}" instead`)
-      } catch (retryError) {
-        console.error(`[modlens] read_image registration skipped: ${retryError}`)
-      }
-    } else {
-      console.error(`[modlens] read_image registration skipped: ${error}`)
-    }
+    // Same-layer duplicate of the chosen name, or a preview-era surface
+    // change: degrade loudly instead of taking the whole plugin down.
+    console.error(`[modlens] ${preferred} registration skipped: ${error}`)
   }
 }
 

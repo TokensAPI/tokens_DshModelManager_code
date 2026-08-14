@@ -142,6 +142,18 @@ minimumReleaseAgeExclude:
 
 然后执行 `npx -y @deepseek-ai/dsh plugin --profile <name> update @liustack/modlens`。两种方式的代价都摆在明面上：显式 `@latest`（或这条排除）让 modlens 退出 pnpm 的供应链冷静期，新版本会立即装上。
 
+## dsh：模型看不到 read_image 工具
+
+插件注册的工具名是 `modlens_read_image`，不是 `read_image`。dsh 的工具注册表是分层的，scoped 层会遮蔽全局层：宿主的 `read_image` 挂在 agent preset 作用域、插件注册在全局层，两者根本不算重名，于是注册静默成功，模型解析到的仍是宿主那个，而它对纯文本模型直接拒绝（[#34](https://github.com/liustack/modlens/issues/34)）。用自己的名字就不会被任何东西遮蔽，模型是通过工具 schema 找到它的，而 schema 每次请求都会送达，与叫什么名字无关。
+
+想改名就在插件配置行里设 `toolName`：
+
+```yaml
+- id: modlens
+  config:
+    toolName: read_image
+```
+
 ## fetch failed 或连接失败
 
 ```

@@ -663,48 +663,56 @@ describe('dsh plugin request-time image conversion (v2)', () => {
     });
 });
 
-describe('dsh plugin tool-name collision (#21)', () => {
-    it('falls back to modlens_read_image and keeps the rest of the plugin alive', async () => {
+describe('dsh plugin tool name (#21, #34)', () => {
+    const load = async () => {
         // @ts-expect-error untyped on purpose
         const plugin = (await import('../dsh/index.js')) as {
             apply: (ctx: unknown, config?: Record<string, unknown>) => void;
         };
+        return plugin;
+    };
+
+    const ctxWith = (registered: string[], adapters: string[] = []) =>
+        ({
+            tools: {
+                register: (tool: { name: string }) => {
+                    registered.push(tool.name);
+                },
+            },
+            attachments: {},
+            on: () => {},
+            llm: {
+                registerAdapter: (providers: string[]) => {
+                    adapters.push(...providers);
+                },
+                listModels: async () => [],
+                resolveModelInfo: async () => ({}),
+                stream: () => (async function* () {})(),
+            },
+        }) as never;
+
+    it('registers under a name of its own, which nothing can shadow', async () => {
+        // dsh's registry is layered and a scoped tool shadows a global one, so
+        // a host read_image in the agent-preset scope and ours registered
+        // globally are not a duplicate: nothing throws, and the model still
+        // resolves the host's (issue #34). Taking a name of our own is what
+        // makes that unreachable.
         const registered: string[] = [];
         const adapters: string[] = [];
-        plugin.apply(
-            {
-                tools: {
-                    register: (tool: { name: string }) => {
-                        // The host's native read_image (dsh-tool-fs) is there first.
-                        if (tool.name === 'read_image') {
-                            throw new Error('tool "read_image" is already registered');
-                        }
-                        registered.push(tool.name);
-                    },
-                },
-                attachments: {},
-                on: () => {},
-                llm: {
-                    registerAdapter: (providers: string[]) => {
-                        adapters.push(...providers);
-                    },
-                    listModels: async () => [],
-                    resolveModelInfo: async () => ({}),
-                    stream: () => (async function* () {})(),
-                },
-            } as never,
-            {},
-        );
-        expect(registered).toContain('modlens_read_image');
-        // The collision no longer fails the fiber: the vision wrapper registered.
+        (await load()).apply(ctxWith(registered, adapters), {});
+        expect(registered).toEqual(['modlens_read_image']);
+        expect(registered).not.toContain('read_image');
         expect(adapters).toContain('deepseek-modlens');
     });
 
-    it('an unrelated registration error degrades without killing apply', async () => {
-        // @ts-expect-error untyped on purpose
-        const plugin = (await import('../dsh/index.js')) as {
-            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
-        };
+    it('honours an explicit toolName', async () => {
+        const registered: string[] = [];
+        (await load()).apply(ctxWith(registered), { toolName: 'house_read_image' });
+        expect(registered).toEqual(['house_read_image']);
+    });
+
+    it('a registration error degrades without killing apply', async () => {
+        const plugin = await load();
         expect(() =>
             plugin.apply(
                 {

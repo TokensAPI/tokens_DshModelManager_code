@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { missingSchemaFields, VISION_RESULT_SCHEMA } from './schema.ts';
+import { missingSchemaFields, schemaViolations, VISION_RESULT_SCHEMA } from './schema.ts';
 
 const VALID = {
     summary: 'a tweet screenshot',
@@ -36,10 +36,27 @@ describe('missingSchemaFields', () => {
         expect(missingSchemaFields(broken)).toContain('layout.regions[0].reading_order');
     });
 
-    it('enforces enums declared in the schema', () => {
-        const broken = structuredClone(VALID);
-        broken.layout.regions[0].type = 'banner';
-        expect(missingSchemaFields(broken)).toContain('layout.regions[0].type');
+    it('accepts a region kind outside the common vocabulary', () => {
+        // Region kinds are an open set: a closed list rejected `link` on any
+        // web screenshot, and a rejected result fails the whole read over a
+        // descriptive label (issue #34).
+        const open = structuredClone(VALID);
+        open.layout.regions[0].type = 'link';
+        expect(missingSchemaFields(open)).toEqual([]);
+        open.layout.regions[0].type = 'search';
+        expect(missingSchemaFields(open)).toEqual([]);
+    });
+
+    it('still enforces an enum wherever one is declared', () => {
+        // The vision schema declares none, so this pins the machinery
+        // directly: a future enum must not pass unchecked.
+        const schema = {
+            type: 'object',
+            properties: { kind: { type: 'string', enum: ['a', 'b'] } },
+            required: ['kind'],
+        } as const;
+        expect(schemaViolations(schema, { kind: 'a' }, '')).toEqual([]);
+        expect(schemaViolations(schema, { kind: 'z' }, '')).toContain('kind');
     });
 
     it('validates optional fields when they are present', () => {

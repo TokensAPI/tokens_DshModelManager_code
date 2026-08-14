@@ -156,6 +156,25 @@ The trade-off is honest either way: an explicit `@latest` (or the exclusion)
 opts modlens out of pnpm's supply-chain cooling-off window, so new releases
 install immediately.
 
+## dsh: the model cannot see the read_image tool
+
+The plugin registers its tool as `modlens_read_image`, not `read_image`. dsh's
+tool registry is layered, and a scoped tool shadows a global one: a host
+`read_image` mounted in the agent-preset scope and a plugin's registered
+globally are not a duplicate at all, so the registration succeeds silently and
+the model still resolves the host's, which refuses a text-only model outright
+([#34](https://github.com/liustack/modlens/issues/34)). A name of our own
+cannot be shadowed by anything, and the model finds the tool through its
+schema, which reaches it on every request regardless of the name.
+
+Set `toolName` in the plugin row to pin a different one:
+
+```yaml
+- id: modlens
+  config:
+    toolName: read_image
+```
+
 ## fetch failed, or could not connect
 
 ```

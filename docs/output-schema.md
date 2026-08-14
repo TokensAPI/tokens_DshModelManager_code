@@ -44,7 +44,7 @@ The CLI prints one JSON object to stdout:
   "layout": {
     "regions": [
       {
-        "type": "title|subtitle|paragraph|list|table|chart|form|code|image|icon|other",
+        "type": "string (a short kind: title, paragraph, list, table, chart, form, code, image, icon, link, nav, ...)",
         "reading_order": 1,
         "text": "string"
       }
@@ -71,4 +71,6 @@ The CLI prints one JSON object to stdout:
 
 Required fields: `summary`, `ocr`, `layout`, `semantics`, `visual`, `uncertainty` — every top-level field, `visual` included. (Earlier docs called `visual` optional; the enforced schema has always required it, so build to the schema.)
 
-Changes from v1: pixel `bbox` coordinates and numeric `confidence` scores were removed. Vision models fabricate both, so v2 stops pretending to provide them. `layout.regions[].type` gained `code`.
+`layout.regions[].type` is a free string, not a closed list. Region kinds are an open set: a fixed enum rejected `link` on any web screenshot and `search` on a portal, and a rejected result fails the whole read over a descriptive label. The prompt names the common vocabulary as guidance, so an unlisted kind costs nothing.
+
+Changes from v1: pixel `bbox` coordinates and numeric `confidence` scores were removed. Vision models fabricate both, so v2 stops pretending to provide them.
