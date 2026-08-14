@@ -2,7 +2,13 @@
     "$schema": "https://biomejs.dev/schemas/2.5.7/schema.json",
     "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
     "files": {
-        "includes": ["src/**/*.ts", "scripts/**/*.mjs", "scripts/**/*.js"]
+        "includes": [
+            "src/**/*.ts",
+            "src/**/*.mjs",
+            "scripts/**/*.mjs",
+            "scripts/**/*.js",
+            "dsh/**/*.js"
+        ]
     },
     "formatter": {
         "enabled": true,
@@ -28,5 +34,19 @@
                 "noTemplateCurlyInString": "off"
             }
         }
-    }
+    },
+    "overrides": [
+        {
+            "includes": ["dsh/**/*.js"],
+            "formatter": { "indentWidth": 2, "lineWidth": 120 },
+            "javascript": { "formatter": { "semicolons": "asNeeded" } },
+            "linter": {
+                "rules": {
+                    "complexity": { "noArguments": "off" },
+                    "correctness": { "noInnerDeclarations": "off" },
+                    "suspicious": { "noConsole": "off" }
+                }
+            }
+        }
+    ]
 }

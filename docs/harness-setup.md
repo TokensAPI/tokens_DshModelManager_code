@@ -72,8 +72,13 @@ OpenCode, and Claude Code hand their models, and the modlens skill's and
 `read_image` tool's primary trigger. Admission never fires because the message
 carries no image attachment.
 
-The takeover is conditional: when the selected model is a `(modlens vision)`
-variant or a known vision model, the native paste flow is left alone (variants
+The takeover is conditional, and the decision is the host's: the browser half
+asks the plugin's route whether the currently selected model is text-only,
+and the host answers from the provider registry's declared model metadata
+(`inputModalities`), not from a name heuristic. A `(modlens vision)` variant
+or any model that declares image input keeps its native paste flow (variants
 convert at request time with the thumbnail preserved; vision models read
-images themselves). `pasteToPath: false` in the plugin row turns the whole
-feature off.
+images themselves), and so does any model the host cannot resolve — pastes
+stay native until the host has confirmed a takeover is right. `pasteToPath:
+false` in the plugin row turns the whole feature off: without the route, the
+browser half stands down entirely.
