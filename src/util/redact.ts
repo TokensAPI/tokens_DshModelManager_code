@@ -54,18 +54,20 @@ const RAW_USERINFO = /^([a-z][a-z0-9+.-]*:[\\/]{2,4})[^\s/?#]*@/i;
  * gets masked, in normalized form. Returns null when the candidate is not a
  * parseable URL or carries no credentials.
  */
-function maskParsedUrl(candidate: string, replacement: string): string | null {
-    let url: URL;
+function parseUrl(candidate: string): URL | null {
     try {
-        url = new URL(candidate);
+        return new URL(candidate);
     } catch {
         return null;
     }
-    if (url.username === '' && url.password === '') {
-        return null;
-    }
-    // Rebuilt by hand: the URL serializer percent-encodes characters like
-    // brackets in the username, which would garble "[redacted]".
+}
+
+/**
+ * Rebuild a parsed URL with its userinfo replaced. Rebuilt by hand: the URL
+ * serializer percent-encodes characters like brackets in the username, which
+ * would garble "[redacted]".
+ */
+function rebuildMasked(url: URL, replacement: string): string {
     return `${url.protocol}//${replacement}@${url.host}${url.pathname}${url.search}${url.hash}`;
 }
 
@@ -77,7 +79,13 @@ function maskParsedUrl(candidate: string, replacement: string): string | null {
  * error text. A credential-free URL passes through untouched.
  */
 export function maskUrlCredentials(url: string): string {
-    return maskParsedUrl(url, '***') ?? url.replace(RAW_USERINFO, '$1***@');
+    const parsed = parseUrl(url);
+    if (parsed) {
+        return parsed.username !== '' || parsed.password !== ''
+            ? rebuildMasked(parsed, '***')
+            : url;
+    }
+    return url.replace(RAW_USERINFO, '$1***@');
 }
 
 /**
@@ -103,20 +111,39 @@ export function redactSecrets(
     // Each URL-shaped token is masked only when the parser confirms it
     // carries credentials, so scheme-less `//text@` prose and ordinary URLs
     // (query @s included) stay verbatim, while every shape the runtime would
-    // read credentials out of gets them removed. A tab or newline can
-    // separate two URLs just as legally as it can sit inside one, and a
-    // merged candidate would let the parser see only the first authority; so
-    // the token is split at every interior scheme start and each piece is
-    // judged alone.
-    out = out.replace(URL_CANDIDATE, (token) =>
-        token
-            .split(/(?<=[^a-z0-9+.-])(?=[a-z][a-z0-9+.-]*:[\\/]{2})/i)
-            .map(
-                (piece) =>
-                    maskParsedUrl(piece, '[redacted]') ??
-                    piece.replace(RAW_USERINFO, '$1[redacted]@'),
-            )
-            .join(''),
-    );
+    // read credentials out of gets them removed. A control character or a
+    // comma can separate two URLs just as legally as it can be swallowed by
+    // one, and a merged candidate would let the parser see only the first
+    // authority; so a token with interior scheme starts (any separator count
+    // the parser accepts, one slash included) is split and each piece judged
+    // alone. Pieces mask only on a full user:password pair, an unsplit token
+    // on any userinfo, so `note:http://user@host` prose survives while every
+    // credentialed neighbor is caught. A boundary that is itself a legal
+    // scheme and host character (dot, hyphen, plus) is genuinely ambiguous
+    // and stays with the parser's own one-URL reading.
+    out = out.replace(URL_CANDIDATE, (token) => {
+        const pieces = token.split(/(?<=[^a-z0-9+.-])(?=[a-z][a-z0-9+.-]*:[\\/]{1,4})/i);
+        if (pieces.length === 1) {
+            const parsed = parseUrl(token);
+            if (parsed) {
+                return parsed.username !== '' || parsed.password !== ''
+                    ? rebuildMasked(parsed, '[redacted]')
+                    : token;
+            }
+            return token.replace(RAW_USERINFO, '$1[redacted]@');
+        }
+        return pieces
+            .map((piece) => {
+                const parsed = parseUrl(piece);
+                // A parsed piece is judged by its parse alone: mask on a full
+                // user:password pair, keep prose addresses. The regex
+                // fallback serves only pieces the parser refuses.
+                if (parsed) {
+                    return parsed.password !== '' ? rebuildMasked(parsed, '[redacted]') : piece;
+                }
+                return piece.replace(RAW_USERINFO, '$1[redacted]@');
+            })
+            .join('');
+    });
     return out;
 }

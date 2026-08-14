@@ -77,6 +77,33 @@ describe('redactSecrets', () => {
         }
     });
 
+    it('adjacent second URLs with sparse separators are still caught', () => {
+        // The second URL needs no double slash for the runtime to accept it,
+        // and the separator can be any character an authority refuses (a
+        // control character, a comma, a pipe): each such piece is judged by
+        // its own parse.
+        for (const [separator, second] of [
+            ['\n', 'http:/bob:password@two.example'],
+            ['\t', 'http:\\bob:password@two.example'],
+            [',', 'http:/bob:password@two.example'],
+            ['|', 'http:/bob:password@two.example'],
+            ['\v', 'http:/bob:password@two.example'],
+            [' ', 'http:/bob:password@two.example'],
+        ]) {
+            const out = redactSecrets(`http://one.example${separator}${second}`);
+            expect(out, JSON.stringify(separator)).not.toContain('password');
+            expect(out).toContain('http://[redacted]@two.example');
+        }
+    });
+
+    it('a user-only @ torn out of opaque prose is an address, not a credential', () => {
+        // note:http://owner@example.net parses whole as an opaque note:
+        // token with no credentials; the interior http URL carries only a
+        // username. Neither reading is a proxy credential pair.
+        const prose = 'opaque note:http://owner@example.net stays prose';
+        expect(redactSecrets(prose)).toBe(prose);
+    });
+
     it('adjacent URLs separated only by tab or newline are each masked', () => {
         // Tab and newline can separate two URLs just as legally as they can
         // sit inside one; a merged candidate used to hand the parser only the
