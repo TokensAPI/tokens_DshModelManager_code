@@ -482,6 +482,7 @@ export function runCommand(
         let timedOut = false;
         let settled = false;
         let drainTimer: NodeJS.Timeout | undefined;
+        let killTimer: NodeJS.Timeout | undefined;
 
         const timer = setTimeout(() => {
             timedOut = true;
@@ -490,14 +491,19 @@ export function runCommand(
             // as long as it liked, so report the timeout now and make sure it
             // dies.
             settle(null);
-            setTimeout(() => {
+            // Deliberately ref'd: an unref'd escalation timer dies with the
+            // event loop, and after settle() nothing else keeps a standalone
+            // CLI alive, so a SIGTERM-ignoring provider survived its parent.
+            // The cost is bounded: the child's own 'exit' clears this, so only
+            // the stubborn case holds the process the full grace window.
+            killTimer = setTimeout(() => {
                 // child.killed only means a signal was delivered, not that the
                 // process left, so a child ignoring SIGTERM read as "killed" and
                 // never got SIGKILL. Escalate on "has not exited yet" instead.
                 if (!exited) {
                     child.kill('SIGKILL');
                 }
-            }, SIGKILL_GRACE_MS).unref();
+            }, SIGKILL_GRACE_MS);
         }, timeoutMs);
 
         // 'close' waits for every stdio pipe to close, but agy leaves a
@@ -570,6 +576,7 @@ export function runCommand(
             settled = true;
             clearTimeout(timer);
             clearTimeout(drainTimer);
+            clearTimeout(killTimer);
             if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
                 // spawn reports ENOENT for a missing cwd too, and naming the
                 // wrong cause sent people installing software they already had.
@@ -589,6 +596,7 @@ export function runCommand(
         child.on('exit', (code) => {
             exitCode = code;
             exited = true;
+            clearTimeout(killTimer);
             restartDrain();
         });
 
