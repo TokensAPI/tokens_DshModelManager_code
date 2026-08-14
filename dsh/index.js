@@ -199,16 +199,18 @@ const PASTE_MAX_BYTES = 25 * 1024 * 1024
  * structured model metadata: a name regex in the client called every vision
  * model it did not recognize text-only and hijacked its native paste.
  *
- * The label is matched against provider inventory (longest model name or id
- * it contains wins), and the answer is true only when EVERY model matching at
- * that length is positively confirmed text-only. Both conservative rules are
- * load-bearing: the selector label carries no provider id, so two providers
- * exposing the same display name with different modalities are
- * indistinguishable here (one image-capable match at the winning length
- * vetoes the takeover), and a model with no declared inputModalities is
- * UNKNOWN, not text-only (absent metadata must never cost a vision model its
- * native paste). Anything unresolvable answers false: the native path is the
- * safe default, and a text-only model merely keeps its old error message.
+ * The label carries no provider id, only prose plus a display name, so the
+ * host cannot know WHICH matching model is selected — a longest-match pick
+ * was still hijackable (a text route named "Current Pro" outscored a selected
+ * vision model named "Pro", because the label's own "current" prose completed
+ * the longer name). So no picking at all: the answer is true only when EVERY
+ * model whose name or id appears in the label is positively confirmed
+ * text-only. One image-capable match anywhere vetoes; a model with no
+ * declared inputModalities is UNKNOWN, not text-only; and a provider whose
+ * catalog cannot be read is unknown too — a veto, never a shrug, since the
+ * unreadable route is exactly where the vision twin could live. Anything
+ * unresolvable answers false: the native path is the safe default, and a
+ * text-only model merely keeps its old error message.
  */
 async function pasteTakeoverVerdict(host, label) {
   if (typeof label !== 'string' || label.trim() === '') return false
@@ -220,8 +222,7 @@ async function pasteTakeoverVerdict(host, label) {
     return false
   }
   const lowered = label.toLowerCase()
-  let matched = 0
-  let allConfirmedTextOnly = false
+  let matchedAny = false
   for (const info of llm.listProviders()) {
     const providerId = info?.id
     if (!providerId) continue
@@ -229,24 +230,21 @@ async function pasteTakeoverVerdict(host, label) {
     try {
       models = await llm.listModels(providerId)
     } catch {
-      continue
+      return false
     }
     for (const model of models) {
       for (const candidate of [model?.name, model?.id]) {
         if (typeof candidate !== 'string' || candidate.length < 3) continue
         if (!lowered.includes(candidate.toLowerCase())) continue
         const modalities = model?.inputModalities
-        const confirmedTextOnly = Array.isArray(modalities) && !modalities.includes('image')
-        if (candidate.length > matched) {
-          matched = candidate.length
-          allConfirmedTextOnly = confirmedTextOnly
-        } else if (candidate.length === matched) {
-          allConfirmedTextOnly = allConfirmedTextOnly && confirmedTextOnly
+        if (!Array.isArray(modalities) || modalities.includes('image')) {
+          return false
         }
+        matchedAny = true
       }
     }
   }
-  return matched > 0 && allConfirmedTextOnly
+  return matchedAny
 }
 
 // Verdicts are stable for the lifetime of a model route but the inventory can
