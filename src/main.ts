@@ -216,7 +216,7 @@ config
             process.stdout.write(
                 [
                     `Created ${CONFIG_PATH}`,
-                    'Everything is optional. Two things you can set:',
+                    'Everything is optional. The usual ones:',
                     '  modlens config set provider <name>                      which provider analyzes images',
                     '  modlens config set <provider>.<apiKey|baseUrl|model> <value>   provider credentials',
                     '  modlens config set <provider>.extraBody \'{"thinking":{"type":"disabled"}}\'   vendor request fields',
