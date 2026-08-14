@@ -34,7 +34,7 @@ DeepSeek 和 GLM 的主力对话模型是纯文本的，无法进行图片识别
 
 ## 亮点
 
-**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `modlens_read_image` 工具读图。如果 dsh 提示 `declares no dsh.bundle`，是 pnpm 的发布冷静期装了旧版，一行命令可解，见[故障排查](docs/troubleshooting.zh-CN.md#dsh-提示-declares-no-dshbundle--installed-as-a-plain-dependency)。
+**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `modlens_read_image` 工具读图。更新就是再跑一遍同一条命令，有一个坑值得知道：pnpm 11 会扣住最近 24 小时内发布的版本，而 `@latest` 跳不过去，所以想要当天的修复得点名版本号（[怎么更新](docs/harness-setup.zh-CN.md#保持更新)）。
 
 DeepSeek Harness 粘贴识图有两种玩法。
 

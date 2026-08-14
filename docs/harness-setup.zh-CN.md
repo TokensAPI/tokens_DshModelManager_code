@@ -60,6 +60,26 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 
 这会注册一个 `modlens_read_image` 工具，它的 schema 随每次请求抵达模型（不靠触发启发式），运行同一个包里自带的 modlens CLI，并把结构化证据作为工具的标准 JSON 输出返回。引擎、复用授权和 guard 规则仍在 `~/.modlens/config.json` 里，与其他所有 harness 共享。dsh 还在开发者预览阶段，插件接口可能变化。这个插件刻意保持很小的接触面（原生工具注册、视觉变体所用的 llm 适配层、附件读取器，以及一个 agent 执行前钩子），其中任何一处变动，它都会大声报错而不是无声退化。
 
+### 保持更新
+
+modlens 发布很频繁，而两种安装形态都会冻结在装进来的那个版本上。dsh 上重跑一遍安装即可。命令是 `add` 而不是 `update`：`update` 只在 package.json 里已记录的 semver 范围内挪动，所以一个当初装到 2.7.1 的 profile 只会更新到 2.8.0，永远进不了 3.x。
+
+```sh
+npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@latest
+```
+
+重启 dsh，然后用 `npx -y @deepseek-ai/dsh plugin --profile <name> list` 看看实际装到了什么。这一步值得做，因为拿到的未必是最新版：pnpm 11 会扣住最近 24 小时内发布的版本（`minimumReleaseAge`，默认开启），静默解析到比它更早的那个最新版本。`@latest` 改变不了这一点，dist-tag 会先被解析，然后和其他结果一样过冷静期。落后一天通常没关系。
+
+需要今天的版本时，改成点名版本号，而不是要一个 tag：
+
+```sh
+npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.16.4
+```
+
+`npm view @liustack/modlens version` 可以查到当前版本号。点名版本是一次明确指定而不是一次解析，所以 pnpm 11 会装上它，并把这一个版本作为已批准的例外写进该 profile 的 `pnpm-workspace.yaml`，其余一切仍留在窗口后面。更严格的情况（你自己配过 `minimumReleaseAge`，pnpm 会拒绝而不是批准）见[故障排查](troubleshooting.zh-CN.md#dsh-提示-declares-no-dshbundle--installed-as-a-plain-dependency)。
+
+skill 类 harness 上，skill 是一个拷贝出来的文件夹，拷贝会保留安装时的版本，重跑安装原地覆盖即可。`modlens doctor` 会读出它能找到的每一份拷贝里钉住的版本，并标出落后于当前 CLI 的那些，让版本漂移在坑到人之前就先暴露出来。
+
 ### 粘贴转路径（paste-to-path，web profile）
 
 过去在 dsh Web UI 里，**纯文本模型**下粘贴图片会死在图片准入检查这一步。插件现在带了一个浏览器端半边（由 dsh 的客户端插件系统自动加载），恰好在这种情况下接管粘贴：图片字节发到插件在 dsh web 服务器上的 `/modlens/paste` 路由（仅回环地址，校验 magic byte，上限 25 MB），落成一个私有临时文件，输入框收到的则是纯文本的文件路径。这与 Pi、OpenCode、Claude Code 递给模型的形态一致，也正是 modlens skill 和 `modlens_read_image` 工具的首要触发条件。消息里不带图片附件，准入检查根本不会触发。
