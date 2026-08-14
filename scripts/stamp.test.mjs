@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -36,8 +36,9 @@ describe('launcher version stamping', () => {
         const offenders = [];
         for (const file of trackedFiles(repoRoot)) {
             // This file's own table of bad forms is the fixture below, not a
-            // command anyone would run.
-            if (file.endsWith('stamp.test.mjs')) continue;
+            // command anyone would run. Matched by exact path: a suffix test
+            // would also excuse any other file ending in the same name.
+            if (file === join(repoRoot, 'scripts', 'stamp.test.mjs')) continue;
             for (const command of unpinnedInstalls(readFileSync(file, 'utf-8'))) {
                 offenders.push(`${file}: ${command}`);
             }
@@ -47,7 +48,8 @@ describe('launcher version stamping', () => {
 
     it('recognizes every shape of an unpinned install', () => {
         // The rules themselves, pinned. Reviewing this check by hand is how
-        // five different ways of writing an unpinned install got past it.
+        // eight different ways of writing an unpinned install got past it,
+        // most of them ordinary shell prose rather than exotic syntax.
         const unpinned = [
             'add @liustack/modlens@latest',
             "add '@liustack/modlens@latest'",
@@ -59,22 +61,52 @@ describe('launcher version stamping', () => {
             'add @liustack/modlens@3',
             'add @liustack/modlens@3.16.4+local',
             'add @liustack/modlens@$VERSION',
-            // Two commands on one row: the flag belongs to the first.
+            'pnpm add --save-prod @liustack/modlens@latest',
+            // The flag belongs to some other command, or to no command.
             'add @liustack/modlens@1.2.3 --config.minimumReleaseAge=0 | add @liustack/modlens@latest',
-            'dsh plugin \\\n  add @liustack/modlens@latest',
+            'pnpm add @liustack/modlens@latest && printf %s --config.minimumReleaseAge=0',
+            'pnpm add @liustack/modlens@latest; printf %s --config.minimumReleaseAge=0',
+            'pnpm add @liustack/modlens@latest | echo --config.minimumReleaseAge=0',
+            'pnpm add @liustack/modlens@latest # use --config.minimumReleaseAge=0 if you must',
+            // The spec travels in a variable.
+            'PKG=@liustack/modlens@latest; pnpm add "$PKG"',
+            "pnpm add $'@liustack/modlens@latest'",
         ];
         for (const command of unpinned) {
             expect(unpinnedInstalls(command), command).not.toEqual([]);
         }
+
+        // Two commands on one row: the offender is the one without the flag.
+        expect(
+            unpinnedInstalls(
+                'add @liustack/modlens@1.2.3 --config.minimumReleaseAge=0 | add @liustack/modlens@latest',
+            ),
+        ).toEqual(['add @liustack/modlens@latest']);
+
         const fine = [
             'add @liustack/modlens@1.2.3',
             'add @liustack/modlens@latest --config.minimumReleaseAge=0',
             'npx --yes --package @liustack/modlens@1.2.3 modlens',
             'the `@latest` tag does not skip the gate',
+            'installed with @liustack/modlens as the package name',
+            // A placeholder describing a command's shape, not a command.
+            'npx --yes --package @liustack/modlens@<pinned> modlens <args>',
         ];
         for (const command of fine) {
             expect(unpinnedInstalls(command), command).toEqual([]);
         }
+    });
+
+    it('joins a continuation before judging the command it belongs to', () => {
+        // Without the join, the flag sits on a line of its own and the
+        // install above it reads as unlifted: a false positive, which is the
+        // failure this fixture has to produce if the join is ever dropped.
+        const lifted = 'pnpm add @liustack/modlens@latest \\\n  --config.minimumReleaseAge=0';
+        expect(unpinnedInstalls(lifted)).toEqual([]);
+        // CRLF is the same command, so it has to reach the same verdict.
+        expect(unpinnedInstalls(lifted.replace(/\n/g, '\r\n'))).toEqual([]);
+        // And a continuation must not become a way to hide an unpinned one.
+        expect(unpinnedInstalls('pnpm add \\\n  @liustack/modlens@latest')).not.toEqual([]);
     });
 
     it('rewrites only the version value and leaves the line shape intact', () => {
