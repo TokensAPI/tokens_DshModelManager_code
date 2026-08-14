@@ -115,7 +115,7 @@ program
     .option('--out-dir <path>', 'Directory to write recovered images to')
     .option(
         '--session <id>',
-        'Claude Code session id for exact targeting (skills get it via ${CLAUDE_SESSION_ID})',
+        'Claude Code session id for exact targeting (skills get it via ${CLAUDE_CODE_SESSION_ID})',
     )
     .option('--transcript <path>', 'Explicit transcript .jsonl or .db (overrides --session)')
     .option(
