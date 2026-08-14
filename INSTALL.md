@@ -9,7 +9,7 @@ Linux). A Windows note follows each block that needs one.
 
 If you are, stop and read this section instead of the rest of the file. On dsh
 modlens is not a skill: it is a native plugin, and installing the skill folder
-alone leaves the user without the `read_image` tool and without the
+alone leaves the user without the `modlens_read_image` tool and without the
 `(modlens vision)` model entries they are looking for (issue
 [#32](https://github.com/liustack/modlens/issues/32)).
 

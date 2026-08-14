@@ -36,9 +36,15 @@ export const VISION_RESULT_SCHEMA = {
                             // web screenshot and `search` on a portal, and a
                             // rejected result fails the whole read over a
                             // descriptive label (issue #34). The common
-                            // vocabulary lives in the prompt as guidance
-                            // instead, where an unlisted kind costs nothing.
-                            type: { type: 'string' },
+                            // vocabulary moves into the description, which
+                            // guides without constraining and rides along to
+                            // every provider that enforces this schema
+                            // server-side.
+                            type: {
+                                type: 'string',
+                                description:
+                                    'A short kind for this region. Prefer a common one where it fits: title, heading, paragraph, list, table, chart, form, code, image, icon, link, nav, button, search. Any other short label is fine when none of those describe it.',
+                            },
                             reading_order: { type: 'number' },
                             text: { type: 'string' },
                         },
@@ -121,6 +127,8 @@ export interface JsonSchemaNode {
     required?: readonly string[];
     items?: JsonSchemaNode;
     enum?: readonly string[];
+    // Guidance for the model, ignored by the walk below.
+    description?: string;
 }
 
 /**

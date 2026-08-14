@@ -71,6 +71,6 @@ The CLI prints one JSON object to stdout:
 
 Required fields: `summary`, `ocr`, `layout`, `semantics`, `visual`, `uncertainty` — every top-level field, `visual` included. (Earlier docs called `visual` optional; the enforced schema has always required it, so build to the schema.)
 
-`layout.regions[].type` is a free string, not a closed list. Region kinds are an open set: a fixed enum rejected `link` on any web screenshot and `search` on a portal, and a rejected result fails the whole read over a descriptive label. The prompt names the common vocabulary as guidance, so an unlisted kind costs nothing.
+`layout.regions[].type` is a free string, not a closed list. Region kinds are an open set: a fixed enum rejected `link` on any web screenshot and `search` on a portal, and a rejected result fails the whole read over a descriptive label. The field's schema `description` names the common vocabulary as guidance, which reaches every provider that enforces this schema server-side, so an unlisted kind costs nothing.
 
 Changes from v1: pixel `bbox` coordinates and numeric `confidence` scores were removed. Vision models fabricate both, so v2 stops pretending to provide them.
