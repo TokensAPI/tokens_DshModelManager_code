@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 // The browser half (dsh/client.js) is a hand-written script in the
 // __ModuleLoader__ bundle protocol — no module exports, browser globals only.
@@ -32,10 +32,12 @@ interface Harness {
 function loadClient(options: {
     policy?: (label: string) => { status: number; takeover?: boolean };
     uploadPath?: string;
+    postStatus?: number;
 }): Harness {
     const fetchCalls: FetchCall[] = [];
     const policy = options.policy ?? (() => ({ status: 200, takeover: false }));
     const uploadPath = options.uploadPath ?? '/tmp/modlens-test/paste.png';
+    const postStatus = options.postStatus ?? 200;
 
     let modelLabel = '';
     let inserted = '';
@@ -90,9 +92,14 @@ function loadClient(options: {
         fetchCalls.push({ url, init });
         if (init?.method === 'POST') {
             return Promise.resolve({
-                ok: true,
-                status: 200,
-                json: () => Promise.resolve({ path: uploadPath }),
+                ok: postStatus >= 200 && postStatus < 300,
+                status: postStatus,
+                json: () =>
+                    Promise.resolve(
+                        postStatus >= 200 && postStatus < 300
+                            ? { path: uploadPath }
+                            : { error: `gone (${postStatus})` },
+                    ),
             });
         }
         const label = decodeURIComponent(url.split('model=')[1] ?? '');
@@ -210,6 +217,47 @@ describe('dsh paste-to-path browser half', () => {
         await harness.settle();
         expect(harness.fetchCalls.length).toBe(before);
         expect(harness.insertedText()).toBe('');
+    });
+
+    it('a POST 404 after a confirmed verdict stands the client down for good', async () => {
+        // The route can vanish between the policy GET and the paste (plugin
+        // disposed mid-session). That race costs at most the one in-flight
+        // paste; afterwards every verdict is forgotten and pastes go native.
+        const harness = loadClient({
+            policy: () => ({ status: 200, takeover: true }),
+            postStatus: 404,
+        });
+        harness.setModelLabel('DeepSeek-V4-Flash');
+        harness.focusComposer();
+        await harness.settle();
+        const swallowed = harness.dispatchPaste(IMAGE);
+        expect(swallowed.prevented).toBe(true);
+        await harness.settle();
+        expect(harness.insertedText()).toBe('');
+        const before = harness.fetchCalls.length;
+        const next = harness.dispatchPaste(IMAGE);
+        expect(next.prevented).toBe(false);
+        await harness.settle();
+        expect(harness.fetchCalls.length).toBe(before);
+    });
+
+    it('a verdict past its hard age bound is unknown again, not reused', async () => {
+        vi.useFakeTimers();
+        try {
+            const harness = loadClient({ policy: () => ({ status: 200, takeover: true }) });
+            harness.setModelLabel('DeepSeek-V4-Flash');
+            harness.focusComposer();
+            await harness.settle();
+            // Fresh verdict: the takeover works.
+            expect(harness.dispatchPaste(IMAGE).prevented).toBe(true);
+            await harness.settle();
+            // 61s later the cached true is stale: the model behind this label
+            // may have changed, so the paste stays native until reconfirmed.
+            vi.advanceTimersByTime(61_000);
+            expect(harness.dispatchPaste(IMAGE).prevented).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('ignores pastes with no image files', async () => {

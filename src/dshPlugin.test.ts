@@ -940,6 +940,54 @@ describe('dsh paste-to-path host route', () => {
         expect(await ask('')).toBe(false);
     });
 
+    it('one image-capable match vetoes same-name models across providers', async () => {
+        // The selector label carries no provider id: when two routes expose
+        // the same display name and disagree on modality, the host cannot
+        // know which one is selected, so it must refuse the takeover.
+        const llm = {
+            listProviders: () => [{ id: 'text-route' }, { id: 'vision-route' }],
+            listModels: async (id: string) =>
+                id === 'text-route'
+                    ? [{ id: 'shared-1', name: 'Shared Model', inputModalities: ['text'] }]
+                    : [
+                          {
+                              id: 'shared-2',
+                              name: 'Shared Model',
+                              inputModalities: ['text', 'image'],
+                          },
+                      ],
+        };
+        const routes = await routeOf({}, llm);
+        const { out, res } = fakeRes();
+        await routes[0].handler(
+            fakeReq(
+                'GET',
+                Buffer.alloc(0),
+                `/modlens/paste?model=${encodeURIComponent('current Shared Model')}`,
+            ) as never,
+            res as never,
+        );
+        expect((JSON.parse(out.body) as { takeover: boolean }).takeover).toBe(false);
+    });
+
+    it('missing inputModalities means UNKNOWN, never confirmed text-only', async () => {
+        const llm = {
+            listProviders: () => [{ id: 'p1' }],
+            listModels: async () => [{ id: 'vision-pro', name: 'Vision Pro' }],
+        };
+        const routes = await routeOf({}, llm);
+        const { out, res } = fakeRes();
+        await routes[0].handler(
+            fakeReq(
+                'GET',
+                Buffer.alloc(0),
+                `/modlens/paste?model=${encodeURIComponent('current Vision Pro')}`,
+            ) as never,
+            res as never,
+        );
+        expect((JSON.parse(out.body) as { takeover: boolean }).takeover).toBe(false);
+    });
+
     it('GET without an llm surface (or without a match) never takes over', async () => {
         const routes = await routeOf();
         const { out, res } = fakeRes();
