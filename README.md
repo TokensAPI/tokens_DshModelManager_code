@@ -63,9 +63,9 @@ The install also inventories vision reachable through your other local harness C
 
 Once installed, just chat. Paste an image or drop a path, ask anything, and the skill triggers on its own: the image goes to a vision engine and the answer comes back grounded in what it read.
 
-## Vision engines: five providers, one failover chain
+## Vision engines: five built-in providers, four reusable CLIs, one failover chain
 
-ModLens does not depend on any single vision service. Five providers are built in, and any one of them is enough:
+ModLens does not depend on any single vision service. Nine sources of vision in total: five built-in providers, any one of which is enough, plus four local agent CLIs whose logins can be reused. The built-ins:
 
 | Provider | What it needs | Speed per read | Good for |
 | :-- | :-- | :-- | :-- |
@@ -94,7 +94,14 @@ The same three keys work for GLM's open platform, SiliconFlow, OpenRouter, a sel
 Two more sources of vision need zero new keys, each behind one explicit consent recorded in config:
 
 - **The harness you are talking in right now.** Running inside Claude Code with a subscription signed in? `claude-cli` reads images through it out of the box. The install flow asks the same question for whichever harness you install into.
-- **Every other agent CLI on the machine.** A signed-in Codex, an OpenCode vision model, credentials held by Pi, a Grok login — `modlens doctor` discovers them, you grant per harness (`config set reuse.codex true`), and they join the same failover chain with no priority over your own keys. Every reused read is labeled in `meta.warnings` with whose quota it spent, so nothing is ever silently billed.
+- **Every other agent CLI on the machine.** `modlens doctor` discovers them, you grant per harness, and they join the same failover chain with no priority over your own keys. Every reused read is labeled in `meta.warnings` with whose quota it spent, so nothing is ever silently billed:
+
+| Reused CLI | What it needs | Grant with | Rides as |
+| :-- | :-- | :-- | :-- |
+| Codex | a signed-in Codex CLI with a vision model | `config set reuse.codex true` | agent lane, 15-45s |
+| OpenCode | a vision model configured in OpenCode | `config set reuse.opencode true` | agent lane, 15-45s |
+| Pi | model credentials held by Pi | `config set reuse.pi true` | an API key upgrades to the 5-10s inline lane, OAuth drives Pi itself |
+| Grok | a signed-in Grok CLI (SuperGrok) | `config set reuse.grok true` | agent lane, 15-45s |
 
 ### Picking and routing
 
