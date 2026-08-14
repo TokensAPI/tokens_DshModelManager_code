@@ -47,8 +47,16 @@ export function apply(ctx, config = {}) {
   // the developer-preview registry accepts these and out-of-tree resolution
   // of @deepseek-ai/dsh-tools is not yet reliable), so this plugin owns its
   // own argument validation inside execute.
-  ctx.tools.register({
-    name: 'read_image',
+  //
+  // The name can collide: hosts with a durable attachment store mount their
+  // own native read_image (dsh-tool-fs), and a duplicate registration throws,
+  // which used to fail the whole plugin fiber (issue #21). The collision
+  // falls back to a prefixed name — valuable exactly there, since the native
+  // tool is gated on the model declaring image input and vanishes for
+  // text-only models — and any other registration error degrades loudly
+  // instead of taking the vision wrapper down with it.
+  const readImageTool = (toolName) => ({
+    name: toolName,
     description:
       'Read an image through the modlens vision bridge. Use whenever a message references an image the current model cannot see: a local file path or an http(s) URL to a screenshot, photo, chart, diagram, or document scan. Returns structured evidence with every word transcribed (ocr.full_text), layout regions in reading order, semantics, and an uncertainty list; quote the evidence instead of guessing. Requires a configured modlens engine (run `npx @liustack/modlens doctor` in a terminal to check).',
     parameters: {
@@ -106,6 +114,24 @@ export function apply(ctx, config = {}) {
       return parsed.result
     },
   })
+  const preferred = config.toolName || 'read_image'
+  try {
+    ctx.tools.register(readImageTool(preferred))
+  } catch (error) {
+    const fallback = 'modlens_read_image'
+    if (preferred !== fallback && /already|duplicate/i.test(String(error))) {
+      try {
+        ctx.tools.register(readImageTool(fallback))
+        console.error(
+          `[modlens] tool name "${preferred}" is taken by the host; registered as "${fallback}" instead`,
+        )
+      } catch (retryError) {
+        console.error(`[modlens] read_image registration skipped: ${retryError}`)
+      }
+    } else {
+      console.error(`[modlens] read_image registration skipped: ${error}`)
+    }
+  }
 }
 
 /**
