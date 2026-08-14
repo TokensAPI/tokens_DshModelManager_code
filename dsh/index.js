@@ -339,6 +339,15 @@ function registerVisionProvider(ctx, config) {
   const discover = Array.isArray(config.discover) ? new Set(config.discover) : null
   const wrapped = new Set(['deepseek-modlens'])
   const sweepOnce = async () => {
+    try {
+      await sweepBody()
+    } catch (error) {
+      // A sweep failure must never become an unhandled rejection inside the
+      // host process; the next topology notification simply tries again.
+      console.error(`[modlens] vision provider discovery sweep failed: ${error}`)
+    }
+  }
+  const sweepBody = async () => {
     if (typeof ctx.llm.listProviders !== 'function') {
       // Older registry surface: fall back to the single legacy wrap once.
       if (!wrapped.has('__legacy_fallback__')) {

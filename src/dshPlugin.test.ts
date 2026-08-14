@@ -868,6 +868,7 @@ describe('dsh vision provider auto-discovery (#29)', () => {
             apply: (ctx: unknown, config?: Record<string, unknown>) => void;
         };
         const registered: string[] = [];
+        const attempts: string[] = [];
         const handlers: Record<string, () => void> = {};
         const live = [...providers];
         const ctx = {
@@ -878,6 +879,10 @@ describe('dsh vision provider auto-discovery (#29)', () => {
             },
             llm: {
                 registerAdapter: (ids: string[]) => {
+                    // Attempts are recorded BEFORE the duplicate check: a
+                    // re-entrancy bug shows up as extra attempts even when
+                    // the duplicate throw keeps `registered` clean.
+                    attempts.push(ids[0]);
                     if (registered.includes(ids[0])) {
                         throw new Error(`adapter "${ids[0]}" is already registered`);
                     }
@@ -895,7 +900,7 @@ describe('dsh vision provider auto-discovery (#29)', () => {
         plugin.apply(ctx as never, config);
         // sweep is async; give it a tick.
         await new Promise((r) => setTimeout(r, 10));
-        return { registered, handlers, live };
+        return { registered, attempts, handlers, live };
     }
 
     const deepseek: FakeProvider = {
@@ -958,16 +963,89 @@ describe('dsh vision provider auto-discovery (#29)', () => {
         expect(registered.filter((id) => id === 'modlens-opencode-go')).toHaveLength(1);
     });
 
-    it('storms of notifications mid-probe never double-register (re-entrancy)', async () => {
-        // Fire the update event while the first sweep is still awaiting
-        // listModels: the claim-before-await plus sweep serialization must
-        // keep every id single-registered.
-        const { registered, handlers } = await discoveryCtx([deepseek, opencode]);
+    it('notifications landing inside the probe window never double-register', async () => {
+        // A deferred listModels holds the first sweep suspended while
+        // notifications fire: the claim-before-await plus serialization must
+        // keep every id at exactly one registration ATTEMPT, not just one
+        // success behind duplicate errors.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const attempts: string[] = [];
+        const handlers: Record<string, () => void> = {};
+        let releaseProbe: (models: Array<{ id: string }>) => void = () => {};
+        const gate = new Promise<Array<{ id: string }>>((resolve) => {
+            releaseProbe = resolve;
+        });
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: (event: string, fn: () => void) => {
+                    handlers[event] = fn;
+                },
+                llm: {
+                    registerAdapter: (ids: string[]) => {
+                        attempts.push(ids[0]);
+                        handlers['llm/adapters-updated']?.();
+                    },
+                    listProviders: () => [{ id: 'opencode-go', name: 'opencode-go' }],
+                    listModels: () => gate,
+                    resolveModelInfo: async () => ({}),
+                    stream: () => (async function* () {})(),
+                },
+            } as never,
+            {},
+        );
+        // The sweep is now suspended inside listModels. Storm it.
         for (let i = 0; i < 5; i++) {
             handlers['llm/adapters-updated']();
         }
+        releaseProbe([{ id: 'glm-5.3' }]);
         await new Promise((r) => setTimeout(r, 30));
-        expect([...registered].sort()).toEqual(['deepseek-modlens', 'modlens-opencode-go']);
+        expect(attempts).toEqual(['modlens-opencode-go']);
+    });
+
+    it('a sweep failure is contained, and the next notification recovers', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const attempts: string[] = [];
+        const handlers: Record<string, () => void> = {};
+        let boom = true;
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: (event: string, fn: () => void) => {
+                    handlers[event] = fn;
+                },
+                llm: {
+                    registerAdapter: (ids: string[]) => {
+                        attempts.push(ids[0]);
+                    },
+                    listProviders: () => {
+                        if (boom) {
+                            throw new Error('registry mid-mutation');
+                        }
+                        return [{ id: 'opencode-go', name: 'opencode-go' }];
+                    },
+                    listModels: async () => [{ id: 'glm-5.3' }],
+                    resolveModelInfo: async () => ({}),
+                    stream: () => (async function* () {})(),
+                },
+            } as never,
+            {},
+        );
+        await new Promise((r) => setTimeout(r, 10));
+        // The throwing sweep neither killed the process nor registered.
+        expect(attempts).toEqual([]);
+        boom = false;
+        handlers['llm/adapters-updated']();
+        await new Promise((r) => setTimeout(r, 10));
+        expect(attempts).toEqual(['modlens-opencode-go']);
     });
 
     it('a route without eligible models is retried when models appear later', async () => {
