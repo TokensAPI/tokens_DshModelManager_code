@@ -84,6 +84,9 @@ describe('launcher version stamping', () => {
             'pnpm add @liustack/modlens@latest --config.minimumReleaseAge=0oops',
             'pnpm add @liustack/modlens@latest --registry=--config.minimumReleaseAge=0',
             'pnpm add @liustack/modlens@latest, or pass "--config.minimumReleaseAge=0"',
+            // The one-letter install verb installs just the same.
+            'pnpm i @liustack/modlens',
+            'npm i @liustack/modlens@latest',
         ];
         for (const command of unpinned) {
             expect(unpinnedInstalls(command), command).not.toEqual([]);
@@ -102,6 +105,8 @@ describe('launcher version stamping', () => {
             'npx --yes --package @liustack/modlens@1.2.3 modlens',
             'the `@latest` tag does not skip the gate',
             'installed with @liustack/modlens as the package name',
+            // Prose, not an install: the lone `i` here is part of "i.e.".
+            'the bundle, i.e. @liustack/modlens, ships its own engine',
             // A placeholder describing a command's shape, not a command.
             'npx --yes --package @liustack/modlens@<pinned> modlens <args>',
             'bunx --bun @liustack/modlens@<version> <args>',
