@@ -166,6 +166,47 @@ export function missingSchemaFields(result: unknown): string[] {
     return schemaViolations(VISION_RESULT_SCHEMA as JsonSchemaNode, result, '');
 }
 
+/**
+ * The result with `null` removed wherever this contract asks for nothing. A
+ * model with no visual notes writes `notes: null`, and leaving the field out
+ * was always fine, so the two say the same thing and rejecting one of them
+ * cost a whole read over an empty list (issue #37). Dropping the key rather
+ * than passing the null through is what keeps the promise the docs make:
+ * every field is absent or holds its declared type, never null, so nothing
+ * downstream has to guard against a shape the schema never advertised.
+ *
+ * A null on a required field is left in place, so the check that follows
+ * still refuses it: something was supposed to be there.
+ */
+export function withoutEmptyOptionals(value: unknown, schema: JsonSchemaNode): unknown {
+    if (schema.type === 'object') {
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+            return value;
+        }
+        const record = value as Record<string, unknown>;
+        const cleaned: Record<string, unknown> = {};
+        for (const [key, entry] of Object.entries(record)) {
+            const childSchema = schema.properties?.[key];
+            const isRequired = schema.required?.includes(key) ?? false;
+            if (entry === null && !isRequired && childSchema !== undefined) {
+                continue;
+            }
+            cleaned[key] = childSchema ? withoutEmptyOptionals(entry, childSchema) : entry;
+        }
+        return cleaned;
+    }
+    if (schema.type === 'array' && schema.items && Array.isArray(value)) {
+        const itemSchema = schema.items;
+        return value.map((item) => withoutEmptyOptionals(item, itemSchema));
+    }
+    return value;
+}
+
+/** The vision result with its empty optionals dropped. */
+export function normalizeVisionResult(result: unknown): unknown {
+    return withoutEmptyOptionals(result, VISION_RESULT_SCHEMA as JsonSchemaNode);
+}
+
 export interface JsonSchemaNode {
     type?: string;
     properties?: Record<string, JsonSchemaNode>;
@@ -197,16 +238,7 @@ export function schemaViolations(schema: JsonSchemaNode, value: unknown, path: s
         for (const [key, childSchema] of Object.entries(schema.properties ?? {})) {
             const childPath = path ? `${path}.${key}` : key;
             const isRequired = schema.required?.includes(key) ?? false;
-            // `null` on a field the schema does not require is the model
-            // saying there is nothing here, which is what leaving it out says
-            // too. Rejecting one and accepting the other cost a whole read
-            // over an empty notes list (issue #37). On a required field it
-            // stays a violation: there was supposed to be something.
-            const absent =
-                !(key in record) ||
-                record[key] === undefined ||
-                (record[key] === null && !isRequired);
-            if (absent) {
+            if (!(key in record) || record[key] === undefined) {
                 if (isRequired) {
                     violations.push(childPath);
                 }

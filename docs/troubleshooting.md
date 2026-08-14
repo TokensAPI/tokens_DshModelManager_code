@@ -103,6 +103,9 @@ OpenAI-compatible API returned JSON that does not match the vision schema
 
 That endpoint returned something the contract does not accept. Note the
 wording: a field named here can be absent, or present with the wrong shape.
+For an optional field like `visual.notes`, only the second is possible, since
+leaving it out is accepted. A `null` there is dropped rather than refused, so
+what remains is a genuinely wrong type.
 
 Most OpenAI-compatible gateways enforce nothing server-side, so the contract
 travels as a filled-in JSON template in the prompt and a weaker model can
@@ -116,8 +119,13 @@ modlens config set openai.structuredOutput true
 That sends the contract as `response_format: json_schema` in strict form,
 derived from the same schema modlens checks against, so there is nothing to
 keep in sync by hand. It is off by default because a gateway that does not
-support the field answers 400 for it; if that happens, turn it back off. A
-`response_format` you set yourself in `extraBody` wins over the derived one.
+support the field answers 400 for it. If that happens:
+
+```bash
+modlens config set openai.structuredOutput false
+```
+
+A `response_format` you set yourself in `extraBody` wins over the derived one.
 
 Failing that, retry once, then switch:
 

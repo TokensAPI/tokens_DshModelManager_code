@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     type JsonSchemaNode,
     missingSchemaFields,
+    normalizeVisionResult,
     schemaViolations,
     strictSchema,
     VISION_RESULT_SCHEMA,
@@ -65,14 +66,43 @@ describe('missingSchemaFields', () => {
         expect(kind).not.toHaveProperty('enum');
     });
 
-    it('accepts null on a field the schema does not require', () => {
+    it('drops null on a field the schema does not require, rather than passing it on', () => {
         // A model with nothing to note writes null, and leaving the field out
-        // was already fine, so rejecting null cost a whole read over an empty
-        // list (issue #37).
+        // was already fine, so the read used to die over an empty list
+        // (issue #37). Dropping the key keeps the promise the docs make:
+        // absent, or the declared type, never null.
         const quiet = structuredClone(VALID) as Record<string, unknown>;
-        (quiet.visual as Record<string, unknown>).notes = null;
-        (quiet.visual as Record<string, unknown>).style = null;
-        expect(missingSchemaFields(quiet)).toEqual([]);
+        const visual = quiet.visual as Record<string, unknown>;
+        visual.notes = null;
+        visual.style = null;
+        const clean = normalizeVisionResult(quiet) as typeof VALID;
+        expect(missingSchemaFields(clean)).toEqual([]);
+        expect('notes' in clean.visual).toBe(false);
+        expect('style' in clean.visual).toBe(false);
+        expect(clean.visual.dominant_colors).toEqual(['#fff']);
+    });
+
+    it('drops an empty optional at every place the contract has one', () => {
+        // Every optional field, so a null can never reach a caller that was
+        // promised an array or a string.
+        const noisy = {
+            ...structuredClone(VALID),
+            ocr: { full_text: 'hello', lines: [{ text: 'hello', language: null }] },
+            semantics: {
+                scene: 'social media',
+                intent: null,
+                entities: [{ name: 'hello', type: 'text', evidence: null }],
+                relations: null,
+            },
+            visual: { dominant_colors: null, style: null, notes: null },
+        } as unknown;
+        const clean = normalizeVisionResult(noisy) as Record<string, never>;
+        expect(missingSchemaFields(clean)).toEqual([]);
+        expect(JSON.stringify(clean)).not.toContain('null');
+        // And the required neighbours survive untouched.
+        const typed = clean as unknown as typeof VALID;
+        expect(typed.ocr.lines[0].text).toBe('hello');
+        expect(typed.semantics.entities[0].name).toBe('hello');
     });
 
     it('still refuses null where the contract requires a value', () => {

@@ -14,7 +14,7 @@ import {
     resolveProvider,
     type VisionProvider,
 } from './providers/index.ts';
-import { missingSchemaFields } from './schema.ts';
+import { missingSchemaFields, normalizeVisionResult } from './schema.ts';
 import { redactSecrets } from './util/redact.ts';
 import { resolveSpawnPlan } from './util/winExec.ts';
 
@@ -379,6 +379,10 @@ async function runProvider(
     // routes that have it can return a shell that only looks right. Verify the
     // shape here so a structurally broken result fails loudly for every
     // provider, and a failover peer gets its turn at a compliant answer.
+    // A model with nothing to say for an optional field writes null there,
+    // which means the same as leaving it out; dropping it before the check
+    // keeps the read alive and keeps null out of what callers receive.
+    parsed.result = normalizeVisionResult(parsed.result);
     const missing = missingSchemaFields(parsed.result);
     if (missing.length > 0) {
         throw new Error(
