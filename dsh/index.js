@@ -444,7 +444,13 @@ async function readImageBlock(ctx, block, signal) {
 
 function run(command, args, signal) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], signal })
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      signal,
+      // In the packaged desktop app process.execPath is the Electron binary;
+      // this makes it behave as plain node for the spawned CLI (issue #25).
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    })
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => {
