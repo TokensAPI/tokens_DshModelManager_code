@@ -193,6 +193,7 @@ export async function fetchRemoteImageBase64(
             if (response.status >= 300 && response.status < 400) {
                 const location = response.headers.get('location');
                 if (!location) {
+                    await response.body?.cancel().catch(() => {});
                     throw new Error(
                         `Redirect response (${response.status}) missing location header: ${safeUrl(current.toString())}`,
                     );
