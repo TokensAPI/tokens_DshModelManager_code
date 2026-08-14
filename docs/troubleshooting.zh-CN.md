@@ -123,24 +123,30 @@ Invocation guard denied this read: active model "gemini-3.1-pro" matches guards.
 
 ## dsh 提示 `declares no dsh.bundle — installed as a plain dependency`
 
-dsh profile 装到的是旧版 modlens。`dsh.bundle` 声明从 3.9.0 起才存在，而 pnpm v11 的发布冷静期机制（`minimumReleaseAge`，隔离刚发布的版本，pnpm 11.21 上实测窗口为 10 天）在所有较新版本都在窗口内时，会静默回退到更旧的版本。那个旧版本没有 bundle 声明，dsh 于是正确地把它当作普通依赖，一个工具都不会出现。
+dsh profile 装到的是旧版 modlens。`dsh.bundle` 声明从 3.9.0 起才存在，而 pnpm 11 会扣住最近 24 小时内发布的版本（`minimumReleaseAge`，自 11.1 起默认开启。`pnpm config get` 查不到它，因为那条命令只显示你自己设过的项）。当带声明的版本全都落在这个窗口内时，pnpm 会静默回退到更旧的版本，而旧版本没有 bundle 声明，dsh 于是正确地把它当作普通依赖，一个工具都不会出现。
 
-解法：把版本写死。pnpm 只在解析版本范围时应用冷静期，显式版本或 dist-tag 会跳过它（[pnpm#9989](https://github.com/pnpm/pnpm/issues/9989)，pnpm 11.21 上实测），安装命令带 `@latest` 就是这个原因：
+`@latest` 绕不开这一层。dist-tag 会先被解析，然后和其他结果一样过冷静期。本页早先的说法是错的。改成写死精确版本号，那是一次明确的指定，而不是一次解析：
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@latest
+npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.16.4
 ```
 
-dsh 的 reconcile 会注意到新版本上的 bundle 声明并激活它，随后重启 dsh。用 `npx -y @deepseek-ai/dsh plugin --profile <name> list` 验证，显示的版本应该是 3.9.0 或更新。
+`npm view @liustack/modlens version` 可以查到当前版本号。pnpm 11 会装上被点名的版本，并把它作为一条已批准的例外写进该 profile 的 `pnpm-workspace.yaml`，其余所有包和 modlens 以后的版本仍然留在窗口后面。
 
-如果将来的 pnpm 关掉了这条跳过通道，更持久的替代方案是在 `~/.dsh/profiles/<name>/pnpm-workspace.yaml` 里加一条一次性排除（写裸包名，不写 `name@version`，这样以后的新版本也能沿用）：
+如果你自己设过 `minimumReleaseAge`，pnpm 会把这条策略视为严格模式，转而拒绝安装并报出版本与截止时间（`ERR_PNPM_NO_MATURE_MATCHING_VERSION`）。在同一个文件里放行这一个版本：
 
 ```yaml
 minimumReleaseAgeExclude:
-  - '@liustack/modlens'
+  - '@liustack/modlens@3.16.4'
 ```
 
-然后执行 `npx -y @deepseek-ai/dsh plugin --profile <name> update @liustack/modlens`。两种方式的代价都摆在明面上：显式 `@latest`（或这条排除）让 modlens 退出 pnpm 的供应链冷静期，新版本会立即装上。
+或者只为这一条命令解除冷静期，注意它解除的是这条命令解析到的所有包，不只 modlens：
+
+```sh
+npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@latest --config.minimumReleaseAge=0
+```
+
+dsh 的 reconcile 会注意到新版本上的 bundle 声明并激活它，随后重启 dsh。用 `npx -y @deepseek-ai/dsh plugin --profile <name> list` 验证。
 
 ## dsh：模型看不到 read_image 工具
 

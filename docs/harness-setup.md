@@ -60,6 +60,45 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 
 This registers a `modlens_read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin keeps its touch small (raw tool registration, the llm adapter surface for the vision variants, the attachment reader, and one agent pre-step hook) and degrades loudly if any of them moves.
 
+### Keeping it up to date
+
+modlens ships often, and both install shapes freeze at whatever version they
+got. On dsh, re-run the install. `add` is the command, not `update`: `update`
+stays inside the semver range already recorded, so a profile that once landed
+on 2.7.1 updates to 2.8.0 and never crosses into 3.x.
+
+```sh
+npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@latest
+```
+
+Restart dsh, then check what actually landed with
+`npx -y @deepseek-ai/dsh plugin --profile <name> list`. That check is worth
+running, because what you get may not be the newest release: pnpm 11 holds back
+anything published in the last 24 hours (`minimumReleaseAge`, on by default) and
+resolves silently to the newest release older than that. `@latest` does not
+change it, since the dist-tag is resolved and then gated like any other result.
+Landing a day behind is usually fine.
+
+When it is not, name the version instead of asking for a tag:
+
+```sh
+npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.16.4
+```
+
+`npm view @liustack/modlens version` prints the current one. A named version is
+a deliberate request rather than a resolution, so pnpm 11 installs it and
+records that one version as an approved exception in the profile's
+`pnpm-workspace.yaml`; everything else stays behind the window. The
+[troubleshooting page](troubleshooting.md#dsh-says-declares-no-dshbundle--installed-as-a-plain-dependency)
+covers the stricter case, where you configured `minimumReleaseAge` yourself and
+pnpm refuses rather than approves.
+
+On the skill harnesses a skill is a copied folder, and the copy keeps its
+install-time version, so re-run the install to overwrite it in place.
+`modlens doctor` reads the pin out of every copy it can find and flags the ones
+behind the CLI doing the reporting, which makes the drift visible before it
+costs anyone a debugging session.
+
 ### Paste-to-path (web profile)
 
 Pasting an image into the dsh Web UI under a **text-only model** used to die at
