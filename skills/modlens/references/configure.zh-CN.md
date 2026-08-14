@@ -19,7 +19,7 @@ modlens config set <provider>.<field> <value>   # 字段：apiKey、baseUrl、mo
 
 ## 配置文件的完整形状
 
-所有内容都在四个顶层键之下，全部可选。下面的示例一次性展示了所有支持的键和字段（真实文件只需要写你用到的部分）。文件不存在就全用默认值。provider 的设置放在 `providers.<name>` 下面，不在顶层，手工编辑最常犯的就是这个错。
+所有内容都在五个顶层键之下，全部可选。下面的示例一次性展示了所有支持的键和字段（真实文件只需要写你用到的部分）。文件不存在就全用默认值。provider 的设置放在 `providers.<name>` 下面，不在顶层，手工编辑最常犯的就是这个错。
 
 ```json
 {
@@ -60,7 +60,7 @@ modlens config set <provider>.<field> <value>   # 字段：apiKey、baseUrl、mo
 
 - `provider`：不传 `-p` 时由哪个 provider 执行。标准名和别名都行（`agy`/`antigravity` 对应 `antigravity-cli`，`gemini` 对应 `gemini-api`，`openai-compat` 对应 `openai`，`claude` 对应 `anthropic`，`claude-code` 对应 `claude-cli`）。留空或缺失表示不钉任何一个：由失败切换链决定，已配置的 API provider 先于 agent CLI 被尝试。
 - `providers.<name>.<field>`：共六个字段，`apiKey`、`baseUrl`、`model`、`proxy`、`extraBody`、`structuredOutput`。每个 provider 条目都可选，条目里的每个字段也都可选。别名键同样会被读取（存在 `gemini` 下的设置在解析到 `gemini-api` 时也能找到），冲突时标准键胜出。
-- `providers.<name>.extraBody`：一个 JSON 对象，合并进 API provider（`gemini-api`、`openai`、`anthropic`）的请求体，用来传厂商有而 modlens 没有对应参数的开关。最常见的用途是关掉思考，见下文小节。嵌套对象逐键合并，所以加一个开关不会动到该块里的其他内容。承载图片、提示词和 schema 约束的字段会被拒绝，报错会点名该字段。两个 CLI provider 不发请求体，所以在 `antigravity-cli` 或 `claude-cli` 上运行时它会被忽略，并在 `meta.warnings` 里说明。
+- `providers.<name>.extraBody`：一个 JSON 对象，合并进 API provider（`gemini-api`、`openai`、`anthropic`）的请求体，用来传厂商有而 modlens 没有对应参数的开关。最常见的用途是关掉思考，见下文小节。嵌套对象逐键合并，所以加一个开关不会动到该块里的其他内容。承载图片、提示词和各路线自身强制机制的字段会被拒绝，报错会点名该字段。`openai` 路线上的 `response_format` 不在此列：在那里设置它就是有意替换掉 modlens 本来会发的那份 schema。两个 CLI provider 不发请求体，所以在 `antigravity-cli` 或 `claude-cli` 上运行时它会被忽略，并在 `meta.warnings` 里说明。
 - `providers.openai.structuredOutput`：设为 `true` 时，让 OpenAI 兼容网关自己强制执行视觉契约，以 `response_format: json_schema` 的严格形式发出。默认关闭，因为不支持结构化输出的网关会对这个字段返回 400。你在 `extraBody` 里设的 `response_format` 优先级更高。
 - `guards`：调用 guard，给在同一个客户端里既跑纯文本模型又跑视觉模型的人用。两个列表都放 glob 模式（支持 `*` 和 `?`，不区分大小写，同时匹配模型名和 `provider/model`），用 `modlens config set guards.denyModels '["gemini-3*"]'` 或 `guards.allowModels` 设置（JSON 数组或逗号分隔的列表都行，传空则清除）。两种写法表达同一个意图，选列表更短的那种：
   - 只用 `denyModels`：除了列出的视觉模型，其余全部运行引擎。适合你接入的模型大多是纯文本的情况。

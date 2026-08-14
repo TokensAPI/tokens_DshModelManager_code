@@ -252,6 +252,16 @@ describe('structuredOutput (#37)', () => {
         ).toBeUndefined();
     });
 
+    it('refuses it on a provider that would never read it', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-so-'));
+        const file = path.join(dir, 'config.json');
+        expect(() => setConfigValue('anthropic.structuredOutput', 'true', file)).toThrow(
+            /openai provider only/,
+        );
+        // The alias resolves to openai, so it is accepted.
+        expect(() => setConfigValue('openai-compat.structuredOutput', 'true', file)).not.toThrow();
+    });
+
     it('refuses a value that is neither true nor false', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-so-'));
         const file = path.join(dir, 'config.json');
