@@ -71,6 +71,15 @@ describe('launcher version stamping', () => {
             // The spec travels in a variable.
             'PKG=@liustack/modlens@latest; pnpm add "$PKG"',
             "pnpm add $'@liustack/modlens@latest'",
+            // The flag is a background-command argument, a redirection
+            // target, and a variable's value: none of them lift anything.
+            'pnpm add @liustack/modlens@latest & printf %s --config.minimumReleaseAge=0',
+            'pnpm add @liustack/modlens@latest > --config.minimumReleaseAge=0',
+            'FLAG=--config.minimumReleaseAge=0 pnpm add @liustack/modlens@latest',
+            // An exact spec must not vouch for a bare mention beside it.
+            'pnpm add @liustack/modlens@1.2.3 @liustack/modlens',
+            // Only <pinned> and <version> read as placeholders.
+            'pnpm add @liustack/modlens@<anything>',
         ];
         for (const command of unpinned) {
             expect(unpinnedInstalls(command), command).not.toEqual([]);
@@ -91,6 +100,7 @@ describe('launcher version stamping', () => {
             'installed with @liustack/modlens as the package name',
             // A placeholder describing a command's shape, not a command.
             'npx --yes --package @liustack/modlens@<pinned> modlens <args>',
+            'bunx --bun @liustack/modlens@<version> <args>',
         ];
         for (const command of fine) {
             expect(unpinnedInstalls(command), command).toEqual([]);

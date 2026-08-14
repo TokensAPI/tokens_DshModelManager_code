@@ -222,6 +222,13 @@ const PASTE_MAX_BYTES = 25 * 1024 * 1024
  * unresolvable answers false: the native path is the safe default, and a
  * text-only model merely keeps its old error message.
  */
+// The provider ids registerVisionProvider mints: the legacy deepseek wrap and
+// the `modlens-<upstream>` form auto-discovery uses. A sibling instance of
+// this plugin derives its ids the same way, which is what makes the pair of
+// checks below meaningful. A custom `config.providerId` is outside the
+// convention on purpose and is covered by the registered-id set instead.
+const OWN_PROVIDER_ID = /^(deepseek-modlens$|modlens-)/
+
 async function pasteTakeoverVerdict(host, label, ownProviders) {
   if (typeof label !== 'string' || label.trim() === '') return false
   // Our own wrappers convert pastes at request time with the thumbnail
@@ -254,10 +261,18 @@ async function pasteTakeoverVerdict(host, label, ownProviders) {
       // A twin from another instance of this plugin, which the set above
       // cannot know about: a second apply() in the same process hits the
       // duplicate branch, does not claim the id, and would otherwise be
-      // vetoed by the first instance's wrapper. Every wrapper model says so
-      // in its name, and the label check at the top of this function already
-      // trusts that same marker.
-      if (typeof model?.name === 'string' && /\(modlens vision\)/i.test(model.name)) continue
+      // vetoed by the first instance's wrapper. Both halves are required.
+      // The name marker alone proves nothing, since any provider can put that
+      // string in a model name and would then slip past a veto it deserves;
+      // the id is what makes it ours, because a sibling instance derives its
+      // provider id from the same rule this one does.
+      if (
+        OWN_PROVIDER_ID.test(providerId) &&
+        typeof model?.name === 'string' &&
+        /\(modlens vision\)/i.test(model.name)
+      ) {
+        continue
+      }
       for (const candidate of [model?.name, model?.id]) {
         if (typeof candidate !== 'string' || candidate.length === 0) continue
         if (!lowered.includes(candidate.toLowerCase())) continue
