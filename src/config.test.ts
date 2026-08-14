@@ -92,7 +92,7 @@ describe('setConfigValue + loadConfigFile + renderEffectiveConfig', () => {
                 {},
             ),
         ) as { proxy?: string; providers: Record<string, Record<string, string>> };
-        expect(fromFile.proxy).toBe('http://***@proxy.example:8080 (file)');
+        expect(fromFile.proxy).toBe('http://***@proxy.example:8080/ (file)');
         expect(fromFile.providers.openai.proxy).toBe('socks5://***@10.0.0.1:1080 (file)');
         expect(JSON.stringify(fromFile)).not.toContain('s3cr3t');
         expect(JSON.stringify(fromFile)).not.toContain('hunter2');
@@ -100,7 +100,7 @@ describe('setConfigValue + loadConfigFile + renderEffectiveConfig', () => {
         const fromEnv = JSON.parse(
             renderEffectiveConfig({}, { HTTPS_PROXY: 'http://carol:t0ps3cret@proxy.example:8080' }),
         ) as { proxy?: string };
-        expect(fromEnv.proxy).toBe('http://***@proxy.example:8080 (env)');
+        expect(fromEnv.proxy).toBe('http://***@proxy.example:8080/ (env)');
 
         // A proxy without credentials renders untouched.
         const plain = JSON.parse(
