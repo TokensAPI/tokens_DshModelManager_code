@@ -186,6 +186,9 @@ program
                 env: process.env,
                 providerFlag: options.provider,
                 configPath: CONFIG_PATH,
+                // Lets doctor name an installed skill copy that is older than
+                // the CLI reporting on it (issue #33).
+                version: __APP_VERSION__,
             });
             const output = options.json
                 ? JSON.stringify(report, null, 2)
