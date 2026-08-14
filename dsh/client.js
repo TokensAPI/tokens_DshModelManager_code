@@ -7,7 +7,7 @@
 // (POST /modlens/paste), land as a private temp file, and the returned path
 // is inserted into the composer as plain text. A text-only model then sees
 // exactly what Pi, OpenCode, and Claude Code hand their models: a file path,
-// which is also the modlens skill's and read_image tool's primary trigger.
+// which is also the modlens skill's and the read tool's primary trigger.
 //
 // Hand-written in the lazy-CJS bundle protocol (window.__ModuleLoader__.load
 // with a factory returning cordis-plugin exports), so no build step and no

@@ -163,16 +163,20 @@ tool registry is layered, and a scoped tool shadows a global one: a host
 `read_image` mounted in the agent-preset scope and a plugin's registered
 globally are not a duplicate at all, so the registration succeeds silently and
 the model still resolves the host's, which refuses a text-only model outright
-([#34](https://github.com/liustack/modlens/issues/34)). A name of our own
-cannot be shadowed by anything, and the model finds the tool through its
+([#34](https://github.com/liustack/modlens/issues/34)). Under our own name
+there is nothing to shadow it, and the model finds the tool through its
 schema, which reaches it on every request regardless of the name.
 
-Set `toolName` in the plugin row to pin a different one:
+If the model still cannot see it, check the harness log for
+`[modlens] ... registration skipped`. `toolName` in the plugin row pins a
+different name, but pick one nothing else uses: any name a scoped tool already
+holds will be shadowed exactly the way `read_image` is, which puts you back in
+this section.
 
 ```yaml
 - id: modlens
   config:
-    toolName: read_image
+    toolName: vision_read_image
 ```
 
 ## fetch failed, or could not connect

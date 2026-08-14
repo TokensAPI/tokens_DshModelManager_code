@@ -58,7 +58,7 @@ dsh is different from the other harnesses: modlens plugs in as a native tool, no
 npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 ```
 
-This registers a `read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin keeps its touch small (raw tool registration, the llm adapter surface for the vision variants, the attachment reader, and one agent pre-step hook) and degrades loudly if any of them moves.
+This registers a `modlens_read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin keeps its touch small (raw tool registration, the llm adapter surface for the vision variants, the attachment reader, and one agent pre-step hook) and degrades loudly if any of them moves.
 
 ### Paste-to-path (web profile)
 
@@ -69,7 +69,7 @@ the image bytes go to the plugin's `/modlens/paste` route on the dsh web
 server (loopback, magic-byte checked, 25 MB cap), land as a private temp file,
 and the composer receives the file path as plain text — the same shape Pi,
 OpenCode, and Claude Code hand their models, and the modlens skill's and
-`read_image` tool's primary trigger. Admission never fires because the message
+`modlens_read_image` tool's primary trigger. Admission never fires because the message
 carries no image attachment.
 
 The takeover is conditional, and the decision is the host's: the browser half

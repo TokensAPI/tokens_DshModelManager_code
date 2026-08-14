@@ -144,14 +144,14 @@ minimumReleaseAgeExclude:
 
 ## dsh：模型看不到 read_image 工具
 
-插件注册的工具名是 `modlens_read_image`，不是 `read_image`。dsh 的工具注册表是分层的，scoped 层会遮蔽全局层：宿主的 `read_image` 挂在 agent preset 作用域、插件注册在全局层，两者根本不算重名，于是注册静默成功，模型解析到的仍是宿主那个，而它对纯文本模型直接拒绝（[#34](https://github.com/liustack/modlens/issues/34)）。用自己的名字就不会被任何东西遮蔽，模型是通过工具 schema 找到它的，而 schema 每次请求都会送达，与叫什么名字无关。
+插件注册的工具名是 `modlens_read_image`，不是 `read_image`。dsh 的工具注册表是分层的，scoped 层会遮蔽全局层：宿主的 `read_image` 挂在 agent preset 作用域、插件注册在全局层，两者根本不算重名，于是注册静默成功，模型解析到的仍是宿主那个，而它对纯文本模型直接拒绝（[#34](https://github.com/liustack/modlens/issues/34)）。用自己的名字就没有东西会遮蔽它，模型是通过工具 schema 找到它的，而 schema 每次请求都会送达，与叫什么名字无关。
 
-想改名就在插件配置行里设 `toolName`：
+如果模型仍然看不到，去 harness 日志里搜 `[modlens] ... registration skipped`。想改名就在插件配置行里设 `toolName`，但要挑一个别人没用的：任何已被某个 scoped 工具占用的名字，都会像 `read_image` 一样被遮蔽，那就又绕回本节了。
 
 ```yaml
 - id: modlens
   config:
-    toolName: read_image
+    toolName: vision_read_image
 ```
 
 ## fetch failed 或连接失败

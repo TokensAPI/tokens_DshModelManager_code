@@ -47,6 +47,17 @@ describe('missingSchemaFields', () => {
         expect(missingSchemaFields(open)).toEqual([]);
     });
 
+    it('carries the region vocabulary in the schema, not only in the prompt template', () => {
+        // Dropping the enum also dropped the only hint those kinds existed.
+        // The description restores it for gemini, anthropic, agy, and
+        // claude-cli, which send this schema and not the JSON template.
+        const kind =
+            VISION_RESULT_SCHEMA.properties.layout.properties.regions.items.properties.type;
+        expect(kind.description).toContain('paragraph');
+        expect(kind.description).toContain('link');
+        expect(kind).not.toHaveProperty('enum');
+    });
+
     it('still enforces an enum wherever one is declared', () => {
         // The vision schema declares none, so this pins the machinery
         // directly: a future enum must not pass unchecked.

@@ -1,8 +1,10 @@
-// DeepSeek Harness (dsh) plugin: registers a read_image tool backed by the
-// modlens CLI that ships in this very package. dsh models are text-only, so
-// the tool is the vision bridge; unlike prompt-triggered skills, a registered
-// tool schema reaches the model on every request, so there is no trigger
-// gamble. The engine is spawned from ../dist/main.js inside this package:
+// DeepSeek Harness (dsh) plugin: registers a modlens_read_image tool backed
+// by the modlens CLI that ships in this very package. dsh models are
+// text-only, so the tool is the vision bridge; unlike prompt-triggered
+// skills, a registered tool schema reaches the model on every request, so
+// there is no trigger gamble. The name is ours rather than the host's
+// `read_image` (see the registration in apply, and issue #34).
+// The engine is spawned from ../dist/main.js inside this package:
 // no PATH lookup, no npx, the plugin and its engine version-lock together.
 //
 // Loaded via the cordis.patch.yml row `@liustack/modlens/dsh` (see the
@@ -66,13 +68,11 @@ export function apply(ctx, config = {}) {
   // of @deepseek-ai/dsh-tools is not yet reliable), so this plugin owns its
   // own argument validation inside execute.
   //
-  // The name can collide: hosts with a durable attachment store mount their
-  // own native read_image (dsh-tool-fs), and a duplicate registration throws,
-  // which used to fail the whole plugin fiber (issue #21). The collision
-  // falls back to a prefixed name — valuable exactly there, since the native
-  // tool is gated on the model declaring image input and vanishes for
-  // text-only models — and any other registration error degrades loudly
-  // instead of taking the vision wrapper down with it.
+  // The name is ours by default (see the registration below): hosts with a
+  // durable attachment store mount their own native read_image (dsh-tool-fs),
+  // which is gated on the model declaring image input and so refuses the
+  // text-only models this plugin exists for. Any registration error degrades
+  // loudly instead of taking the vision wrapper down with it (issue #21).
   const readImageTool = (toolName) => ({
     name: toolName,
     description:
@@ -100,7 +100,7 @@ export function apply(ctx, config = {}) {
     isConcurrencySafe: () => true,
     presentCall: (args) => ({
       card: 'generic',
-      title: 'read_image',
+      title: toolName,
       kind: 'read',
       rawInput: args,
       ...(typeof args?.path === 'string' && !/^https?:\/\//i.test(args.path)
@@ -109,7 +109,7 @@ export function apply(ctx, config = {}) {
     }),
     async execute(args, exec) {
       if (typeof args?.path !== 'string' || args.path.trim() === '') {
-        throw new Error('read_image needs a non-empty string "path".')
+        throw new Error(`${toolName} needs a non-empty string "path".`)
       }
       const cliArgs = [CLI_PATH, '-i', args.path, '--timeout', String(CLI_TIMEOUT_MS)]
       if (args.prompt) {
@@ -134,12 +134,13 @@ export function apply(ctx, config = {}) {
   // a scoped tool shadows a global one, so a host `read_image` mounted in the
   // agent-preset scope and ours registered globally are not a duplicate at
   // all: the registration succeeds, nothing throws, and the model still
-  // resolves the host's (issue #34). Nor can that be detected here, since the
-  // global view this runs in cannot see a scoped tool either, before or
-  // after. So the collision is not detected, it is not entered: an
-  // unambiguous name cannot be shadowed by anything, and the model finds the
-  // tool through its schema, which reaches it on every request regardless of
-  // what the tool is called. `toolName` still pins whatever a host prefers.
+  // resolves the host's (issue #34). Detecting that from here would mean
+  // walking every agent (`agents.list()` plus `agent/created`) and asking
+  // `tools.get(name, agent)` per scope, then mutating a global catalog per
+  // agent. Not entering the collision is cheaper: no host tool is known to
+  // use this name, and the model finds ours through its schema, which reaches
+  // it on every request regardless of what the tool is called. `toolName`
+  // still pins whatever a host prefers.
   const preferred = config.toolName || 'modlens_read_image'
   try {
     ctx.tools.register(readImageTool(preferred))
@@ -383,7 +384,7 @@ function registerPasteRoute(ctx, host) {
  * turns the image into evidence text before the delegated request goes out;
  * the upstream serializer's own image rejection stays as the fail-closed
  * backstop. Guarded feature-detection: if the llm registration surface moved
- * (developer preview), the plugin quietly stays a read_image-only tool.
+ * (developer preview), the plugin quietly stays a read-only-tool plugin.
  *
  * Two modes (issue #29, design contributed by @zlycode01):
  * - `config.upstream` set: wrap exactly that one route, legacy behavior.
@@ -471,7 +472,7 @@ function registerVisionProvider(ctx, config) {
         console.error(`[modlens] vision provider ${providerId} already registered, keeping the existing one`)
         return true
       }
-      // A preview-era surface change: degrade to the read_image-only plugin,
+      // A preview-era surface change: degrade to the tool-only plugin,
       // but say so in the harness log instead of vanishing (a swallowed
       // TypeError here once hid a missing base method).
       console.error(`[modlens] vision provider registration skipped (${providerId}): ${error}`)
