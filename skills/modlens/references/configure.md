@@ -22,6 +22,7 @@ Everything lives under four top-level keys, all optional. This example shows eve
 ```json
 {
   "provider": "gemini-api",
+  "proxy": "http://127.0.0.1:7890",
   "reuse": { "claude": true, "codex": true, "opencode": false, "pi": true, "grok": true },
   "guards": {
     "allowModels": ["deepseek-v4-*", "glm-5.*", "minimax-m2.5*", "qwen3-coder*"],

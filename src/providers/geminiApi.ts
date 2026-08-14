@@ -1,6 +1,7 @@
 // Gemini Developer API provider: direct generateContent call with a free
 // AI Studio key. Structured output enforced via responseJsonSchema.
 import { fetchRemoteImageBase64, readLocalImageBase64 } from '../imageInput.ts';
+import { apiFetch } from '../net/proxy.ts';
 import { buildVisionPrompt } from '../prompt.ts';
 import { VISION_RESULT_SCHEMA } from '../schema.ts';
 import { mergeExtraBody } from '../util/extraBody.ts';
@@ -40,39 +41,48 @@ export async function executeGeminiApi(
     });
 
     const startedAt = Date.now();
-    const response = await fetch(`${baseUrl}/v1beta/models/${model}:generateContent`, {
-        method: 'POST',
-        headers: {
-            'x-goog-api-key': apiKey,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(
-            mergeExtraBody(
-                {
-                    contents: [
-                        {
-                            parts: [
-                                { inline_data: { mime_type: image.mimeType, data: image.data } },
-                                { text: prompt },
-                            ],
+    const response = await apiFetch(
+        `${baseUrl}/v1beta/models/${model}:generateContent`,
+        {
+            method: 'POST',
+            headers: {
+                'x-goog-api-key': apiKey,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(
+                mergeExtraBody(
+                    {
+                        contents: [
+                            {
+                                parts: [
+                                    {
+                                        inline_data: {
+                                            mime_type: image.mimeType,
+                                            data: image.data,
+                                        },
+                                    },
+                                    { text: prompt },
+                                ],
+                            },
+                        ],
+                        generationConfig: {
+                            responseMimeType: 'application/json',
+                            responseJsonSchema: VISION_RESULT_SCHEMA,
                         },
-                    ],
-                    generationConfig: {
-                        responseMimeType: 'application/json',
-                        responseJsonSchema: VISION_RESULT_SCHEMA,
                     },
-                },
-                options.settings?.extraBody,
-                [
-                    'contents',
-                    'generationConfig.responseMimeType',
-                    'generationConfig.responseJsonSchema',
-                ],
-                'gemini-api',
+                    options.settings?.extraBody,
+                    [
+                        'contents',
+                        'generationConfig.responseMimeType',
+                        'generationConfig.responseJsonSchema',
+                    ],
+                    'gemini-api',
+                ),
             ),
-        ),
-        signal: AbortSignal.timeout(options.timeoutMs),
-    });
+            signal: AbortSignal.timeout(options.timeoutMs),
+        },
+        options.settings?.proxy,
+    );
 
     if (!response.ok) {
         const body = await response.text();

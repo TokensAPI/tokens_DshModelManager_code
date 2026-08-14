@@ -95,6 +95,6 @@ Five providers: `antigravity-cli` (no key), `gemini-api` (fastest free route), `
 Other subcommands:
 
 - `modlens guard [--model <id>]`: should the engine run for the active model at all? Exit 0 allow, 1 deny, verdict as JSON.
-- `modlens config <init|set|show>`: keys are `provider`, `reuse.<claude|codex|opencode|pi|grok>`, `guards.<denyModels|allowModels|denyWhenUnknown>`, and `<provider>.<apiKey|baseUrl|model|extraBody>`.
+- `modlens config <init|set|show>`: keys are `provider`, `proxy` (HTTP/HTTPS proxy for the API providers, `HTTPS_PROXY`/`HTTP_PROXY` also honored), `reuse.<claude|codex|opencode|pi|grok>`, `guards.<denyModels|allowModels|denyWhenUnknown>`, and `<provider>.<apiKey|baseUrl|model|proxy|extraBody>`.
 - `modlens doctor`: Node and node:sqlite, provider readiness, the failover chains for this machine, the detected harness, the guard's rules with a live verdict, and the Reuse section with per-harness grant decisions and discovered vision. Spends no quota; `--json` for a machine-readable report.
 
