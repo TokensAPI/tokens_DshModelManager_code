@@ -5,7 +5,7 @@
 import { readLocalImageBase64 } from '../imageInput.ts';
 import { apiFetch } from '../net/proxy.ts';
 import { buildVisionPrompt, JSON_TEMPLATE_INSTRUCTION } from '../prompt.ts';
-import { missingSchemaFields, visionResponseFormat } from '../schema.ts';
+import { missingSchemaFields, normalizeVisionResult, visionResponseFormat } from '../schema.ts';
 import { mergeExtraBody } from '../util/extraBody.ts';
 import { extractJson, truncate } from '../util/json.ts';
 import { redactSecrets } from '../util/redact.ts';
@@ -101,14 +101,17 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
         throw new Error('OpenAI-compatible API returned no message content.');
     }
 
-    const result = extractJson(text);
-    if (result === null) {
+    const rawResult = extractJson(text);
+    if (rawResult === null) {
         throw new Error(`OpenAI-compatible API returned non-JSON output: ${truncate(text)}`);
     }
     // No portable server-side schema enforcement on this route, so verify the
     // shape instead of silently returning something that only looks right.
     // Checking only top-level keys still let {"ocr":{}} through, so the model
     // received an empty shell that looked like evidence.
+    // null on an optional field means the same as leaving it out, so it is
+    // dropped before the check rather than failing the read (issue #37).
+    const result = normalizeVisionResult(rawResult);
     const missing = missingSchemaFields(result);
     if (missing.length > 0) {
         throw new Error(

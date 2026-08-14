@@ -239,6 +239,19 @@ describe('structuredOutput (#37)', () => {
         expect(loadConfigFile(file).providers?.openai?.structuredOutput).toBeUndefined();
     });
 
+    it('shows in the effective config, both ways', () => {
+        for (const value of [true, false]) {
+            const rendered = renderEffectiveConfig({
+                providers: { openai: { structuredOutput: value } },
+            });
+            expect(JSON.parse(rendered).providers.openai.structuredOutput).toBe(`${value} (file)`);
+        }
+        expect(
+            JSON.parse(renderEffectiveConfig({ providers: { openai: { model: 'x' } } })).providers
+                .openai.structuredOutput,
+        ).toBeUndefined();
+    });
+
     it('refuses a value that is neither true nor false', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-so-'));
         const file = path.join(dir, 'config.json');

@@ -332,6 +332,9 @@ export function renderEffectiveConfig(
         }
         // No env binding and no secret to mask, but it changes what gets sent,
         // so it belongs in the effective view.
+        if (fileSettings.structuredOutput !== undefined) {
+            fields.structuredOutput = `${fileSettings.structuredOutput} (file)`;
+        }
         if (fileSettings.extraBody !== undefined) {
             fields.extraBody = `${JSON.stringify(fileSettings.extraBody)} (file)`;
         }
