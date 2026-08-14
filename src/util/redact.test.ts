@@ -77,6 +77,25 @@ describe('redactSecrets', () => {
         }
     });
 
+    it('adjacent URLs separated only by tab or newline are each masked', () => {
+        // Tab and newline can separate two URLs just as legally as they can
+        // sit inside one; a merged candidate used to hand the parser only the
+        // first authority and leak the second URL's credentials.
+        const both = redactSecrets(
+            'http://alice:secret@one.example\nhttp://bob:password@two.example',
+        );
+        expect(both).not.toContain('secret');
+        expect(both).not.toContain('password');
+        expect(both).toContain('two.example');
+        const secondOnly = redactSecrets('http://one.example\thttp://bob:password@two.example');
+        expect(secondOnly).toBe('http://one.example\thttp://[redacted]@two.example/');
+        const mixedSchemes = redactSecrets(
+            'http://alice:secret@[2001:db8::1]\nsocks5://bob:password@proxy.example:1080',
+        );
+        expect(mixedSchemes).not.toContain('password');
+        expect(mixedSchemes).toContain('socks5://[redacted]@proxy.example:1080');
+    });
+
     it('leaves scheme-and-@ prose alone when the parse finds no credentials', () => {
         const ratio = 'render at ratio:3@2x for retina';
         expect(redactSecrets(ratio)).toBe(ratio);
