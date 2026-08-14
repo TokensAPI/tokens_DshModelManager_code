@@ -22,7 +22,7 @@ launcher/reference copies ever drift from `package.json`.
 Each call resolves a way to run the CLI, in this order:
 
 1. **A compatible `modlens` already on `PATH`** — run it directly, by name.
-2. **`npx` present, and `node` meets the CLI's 22.13 floor** — `npx --yes --package @liustack/modlens@<pinned> modlens <args>`. An npx sitting on an older node is skipped: it would select a path known to fail at run time.
+2. **`npx` present, and `node` meets the CLI's 22.19 floor** — `npx --yes --package @liustack/modlens@<pinned> modlens <args>`. An npx sitting on an older node is skipped: it would select a path known to fail at run time.
 3. **`bunx` present** — `bunx --bun @liustack/modlens@<pinned> <args>`.
 4. **A native artifact** — reserved for phase B. None is published yet, so this
    branch reports `nativeArtifact.available: false` and moves on.
@@ -70,13 +70,13 @@ would have set.
 - `checked.pathCli` — `{ present, path, version, compatible }` for a `modlens`
   on `PATH`, with `compatible` applying the rule above.
 - `checked.npx` — `{ present, path, nodeMeetsFloor }`; `nodeMeetsFloor` is whether
-  the local node satisfies the CLI's 22.13 floor, required for the npx path.
+  the local node satisfies the CLI's 22.19 floor, required for the npx path.
 - `checked.bunx` — `{ present, path }`.
 - `checked.node` — `{ present, version }`.
 - `nativeArtifact` — `{ available, note }`; `available` is `false` in phase A.
 - `selected` — the resolved path: `path`, `npx`, `bunx`, or `none`.
 - `nextSteps` — when `selected` is `none`, one or two plain-language actions for
-  the user (install Node 22.13+, or Bun); empty otherwise.
+  the user (install Node 22.19+, or Bun); empty otherwise.
 - `cliDoctor` — when a CLI is resolvable, the CLI's own `doctor --json` report
   (provider, config, and harness diagnosis) is nested here; `null` otherwise.
 
@@ -88,7 +88,7 @@ local cache.
 
 One capability note for the bunx path: Bun cannot load `node:sqlite`, which
 OpenCode paste recovery needs, so on a machine where the launcher resolved to
-bunx, `recover-paste` for OpenCode requires installing Node 22.13+ instead.
+bunx, `recover-paste` for OpenCode requires installing Node 22.19+ instead.
 
 ## Delivery form: local CLI, long term
 

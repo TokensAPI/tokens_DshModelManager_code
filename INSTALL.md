@@ -258,7 +258,7 @@ Common lines and what they mean:
 
 | Line | Meaning | Fix |
 | :-- | :-- | :-- |
-| `[!!] ... (minimum 22.13)` under `Node` | Node is too old | Upgrade Node to 22.13+ |
+| `[!!] ... (minimum 22.19)` under `Node` | Node is too old | Upgrade Node to 22.19+ |
 | `Selected provider: antigravity-cli` when you configured Gemini | The provider was never switched | Re-run `config set provider gemini-api` (Step 3) |
 | `[!!] gemini-api: missing: apiKey` | The key was not saved | Re-run the Step 3 Path 1 commands |
 | `[!!] antigravity-cli: agy not on PATH` | Antigravity is not installed | Use Path 1, or complete Step 3 Path 2 |
@@ -270,7 +270,7 @@ Add `--json` for a machine-readable report you can parse directly.
 - The launcher printed a JSON diagnosis and exited 78 -> no runtime could run
   modlens: no compatible `modlens` on PATH, no `npx`, and no `bunx`. Read the
   `nextSteps` field in that JSON and relay it. The manual fix is to install
-  Node 22.13+ (https://nodejs.org) or Bun (https://bun.sh), then re-run this
+  Node 22.19+ (https://nodejs.org) or Bun (https://bun.sh), then re-run this
   step. Do not report modlens as broken.
 - Any other message -> it is catalogued with its cause and fix in
   [`docs/troubleshooting.md`](docs/troubleshooting.md).

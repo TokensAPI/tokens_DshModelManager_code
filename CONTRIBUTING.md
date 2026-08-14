@@ -30,7 +30,7 @@ pnpm build       # must produce a single dist/main.js
 pnpm lint        # Biome
 ```
 
-Requires Node 22.13+.
+Requires Node 22.19+.
 
 ## Tests
 
