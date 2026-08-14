@@ -878,7 +878,13 @@ describe('dsh vision provider auto-discovery (#29)', () => {
             },
             llm: {
                 registerAdapter: (ids: string[]) => {
+                    if (registered.includes(ids[0])) {
+                        throw new Error(`adapter "${ids[0]}" is already registered`);
+                    }
                     registered.push(...ids);
+                    // The real registry broadcasts on every topology commit,
+                    // which is exactly what makes sweeps re-enter mid-flight.
+                    handlers['llm/adapters-updated']?.();
                 },
                 listProviders: () => live.map((p) => ({ id: p.id, name: p.name })),
                 listModels: async (id: string) => live.find((p) => p.id === id)?.models ?? [],
@@ -907,13 +913,13 @@ describe('dsh vision provider auto-discovery (#29)', () => {
         models: [{ id: 'kimi-k2.5' }],
     };
 
-    it('wraps every route carrying wrappable family models, once each', async () => {
+    it('wraps every route carrying wrappable family models, exactly once each', async () => {
         const { registered } = await discoveryCtx([deepseek, opencode, unrelated]);
         // deepseek-official keeps its historical id; others get modlens-<id>;
-        // a route with no family models is left alone.
-        expect(registered).toContain('deepseek-modlens');
-        expect(registered).toContain('modlens-opencode-go');
-        expect(registered).not.toContain('modlens-other-vendor');
+        // a route with no family models is left alone. Exact-count assertions:
+        // the fake registry broadcasts on every registration like the real
+        // one, so a re-entrancy bug would show up here as duplicates.
+        expect([...registered].sort()).toEqual(['deepseek-modlens', 'modlens-opencode-go']);
     });
 
     it('honors the discover whitelist', async () => {
@@ -950,5 +956,58 @@ describe('dsh vision provider auto-discovery (#29)', () => {
         handlers['llm/adapters-updated']();
         await new Promise((r) => setTimeout(r, 10));
         expect(registered.filter((id) => id === 'modlens-opencode-go')).toHaveLength(1);
+    });
+
+    it('storms of notifications mid-probe never double-register (re-entrancy)', async () => {
+        // Fire the update event while the first sweep is still awaiting
+        // listModels: the claim-before-await plus sweep serialization must
+        // keep every id single-registered.
+        const { registered, handlers } = await discoveryCtx([deepseek, opencode]);
+        for (let i = 0; i < 5; i++) {
+            handlers['llm/adapters-updated']();
+        }
+        await new Promise((r) => setTimeout(r, 30));
+        expect([...registered].sort()).toEqual(['deepseek-modlens', 'modlens-opencode-go']);
+    });
+
+    it('a route without eligible models is retried when models appear later', async () => {
+        const bare: FakeProvider = { id: 'opencode-go', name: 'opencode-go', models: [] };
+        const { registered, handlers, live } = await discoveryCtx([bare]);
+        expect(registered).toEqual([]);
+        live[0].models.push({ id: 'glm-5.3' });
+        handlers['llm/adapters-updated']();
+        await new Promise((r) => setTimeout(r, 10));
+        expect(registered).toEqual(['modlens-opencode-go']);
+    });
+
+    it('the legacy fallback on an old registry surface registers exactly once', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const registered: string[] = [];
+        const handlers: Record<string, () => void> = {};
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: (event: string, fn: () => void) => {
+                    handlers[event] = fn;
+                },
+                llm: {
+                    // No listProviders: the pre-discovery registry surface.
+                    registerAdapter: (ids: string[]) => registered.push(...ids),
+                    listModels: async () => [],
+                    resolveModelInfo: async () => ({}),
+                    stream: () => (async function* () {})(),
+                },
+            } as never,
+            {},
+        );
+        await new Promise((r) => setTimeout(r, 10));
+        handlers['llm/adapters-updated']();
+        handlers['llm/adapters-updated']();
+        await new Promise((r) => setTimeout(r, 10));
+        expect(registered).toEqual(['deepseek-modlens']);
     });
 });
