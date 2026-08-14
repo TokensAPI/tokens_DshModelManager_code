@@ -80,6 +80,35 @@ describe('setConfigValue + loadConfigFile + renderEffectiveConfig', () => {
         expect(parsed.providers['gemini-api'].model).toBe('m1 (file)');
     });
 
+    it('masks proxy credentials everywhere config show renders them', () => {
+        // config show output is written to be pasted into issues; a proxy
+        // URL's userinfo is a credential exactly like an apiKey.
+        const fromFile = JSON.parse(
+            renderEffectiveConfig(
+                {
+                    proxy: 'http://alice:s3cr3t@proxy.example:8080',
+                    providers: { openai: { proxy: 'socks5://bob:hunter2@10.0.0.1:1080' } },
+                },
+                {},
+            ),
+        ) as { proxy?: string; providers: Record<string, Record<string, string>> };
+        expect(fromFile.proxy).toBe('http://***@proxy.example:8080 (file)');
+        expect(fromFile.providers.openai.proxy).toBe('socks5://***@10.0.0.1:1080 (file)');
+        expect(JSON.stringify(fromFile)).not.toContain('s3cr3t');
+        expect(JSON.stringify(fromFile)).not.toContain('hunter2');
+
+        const fromEnv = JSON.parse(
+            renderEffectiveConfig({}, { HTTPS_PROXY: 'http://carol:t0ps3cret@proxy.example:8080' }),
+        ) as { proxy?: string };
+        expect(fromEnv.proxy).toBe('http://***@proxy.example:8080 (env)');
+
+        // A proxy without credentials renders untouched.
+        const plain = JSON.parse(
+            renderEffectiveConfig({ proxy: 'http://proxy.example:8080' }, {}),
+        ) as { proxy?: string };
+        expect(plain.proxy).toBe('http://proxy.example:8080 (file)');
+    });
+
     it('stores extraBody as parsed JSON, clears it on an empty value, and shows it', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
         const file = path.join(dir, 'config.json');
