@@ -21,12 +21,24 @@ describe('launcher version stamping', () => {
         // it hands a new reader a version from a day ago. Whatever else the
         // docs say, the command they print has to install the current release.
         for (const target of docTargets(repoRoot, '@liustack/modlens')) {
-            const content = readFileSync(target.file, 'utf-8');
-            const installs = content.match(/add @liustack\/modlens@\S+/g) ?? [];
-            for (const install of installs) {
-                if (install.includes('@latest')) {
-                    expect(content).toContain('--config.minimumReleaseAge=0');
+            // Per command, not per file: troubleshooting carries both a
+            // pinned command and the deliberate gate-lifting one, so a
+            // file-wide search for the flag would pass a pinned command that
+            // had been reverted to @latest.
+            for (const line of readFileSync(target.file, 'utf-8').split('\n')) {
+                // The spec stops at the first character that cannot be part
+                // of one, since these commands sit inside prose and code
+                // fences (a trailing backtick is not part of the version).
+                const install = line.match(/add @liustack\/modlens@([\w.-]+)/);
+                if (install === null) {
+                    continue;
                 }
+                const spec = install[1];
+                const lifted = line.includes('--config.minimumReleaseAge=0');
+                expect(
+                    /^\d+\.\d+\.\d+$/.test(spec) || lifted,
+                    `${target.file}: "${line.trim()}" installs whatever survived the release-age gate`,
+                ).toBe(true);
             }
         }
     });
