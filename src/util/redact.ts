@@ -103,11 +103,20 @@ export function redactSecrets(
     // Each URL-shaped token is masked only when the parser confirms it
     // carries credentials, so scheme-less `//text@` prose and ordinary URLs
     // (query @s included) stay verbatim, while every shape the runtime would
-    // read credentials out of gets them removed.
-    out = out.replace(
-        URL_CANDIDATE,
-        (token) =>
-            maskParsedUrl(token, '[redacted]') ?? token.replace(RAW_USERINFO, '$1[redacted]@'),
+    // read credentials out of gets them removed. A tab or newline can
+    // separate two URLs just as legally as it can sit inside one, and a
+    // merged candidate would let the parser see only the first authority; so
+    // the token is split at every interior scheme start and each piece is
+    // judged alone.
+    out = out.replace(URL_CANDIDATE, (token) =>
+        token
+            .split(/(?<=[^a-z0-9+.-])(?=[a-z][a-z0-9+.-]*:[\\/]{2})/i)
+            .map(
+                (piece) =>
+                    maskParsedUrl(piece, '[redacted]') ??
+                    piece.replace(RAW_USERINFO, '$1[redacted]@'),
+            )
+            .join(''),
     );
     return out;
 }
