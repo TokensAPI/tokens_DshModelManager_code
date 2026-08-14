@@ -8,6 +8,8 @@ read_when:
 
 # Security
 
+English | [中文](security.zh-CN.md)
+
 ## Recovered images are private
 
 Images pulled out of session storage are written 0600 into a 0700 directory. By default that directory is a fresh, unpredictable `<tmpdir>/modlens-paste-*` minted per run, so nobody on a shared machine can pre-create a known path (`recursive` mkdir leaves an existing directory's mode alone) and read the bytes. A pasted screenshot can hold anything. An explicit `--out-dir` is honoured but refused when unsafe: it must be a real directory, not a symlink, owned by you, with no group or world access.

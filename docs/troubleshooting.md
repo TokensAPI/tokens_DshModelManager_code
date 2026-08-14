@@ -8,6 +8,8 @@ read_when:
 
 # Troubleshooting
 
+English | [中文](troubleshooting.zh-CN.md)
+
 Start with `modlens doctor`: it checks your Node version, which providers are ready, which one will be selected and why, and the detected harness, all without spending quota or making a network request. It catches most setup problems before you read any further.
 
 Every message below is one modlens actually prints. Search this file for the words you saw.

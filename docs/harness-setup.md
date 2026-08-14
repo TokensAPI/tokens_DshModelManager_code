@@ -8,6 +8,8 @@ read_when:
 
 # Harness setup
 
+English | [中文](harness-setup.zh-CN.md)
+
 Where a pasted image ends up differs per harness, and modlens takes a different route in each. `recover-paste` detects which harness it runs inside (process ancestry, then environment fingerprints) and reads only that harness's storage.
 
 ## Codex

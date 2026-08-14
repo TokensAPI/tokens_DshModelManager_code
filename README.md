@@ -75,9 +75,30 @@ ModLens does not depend on any single vision service. Five providers are built i
 | `antigravity-cli` | the free `agy` CLI, one browser sign-in, no key | 15-45s | zero-signup starts |
 | `claude-cli` | a signed-in Claude Code | 20-45s | riding your existing Claude subscription |
 
-Without a pinned provider, every configured engine forms one failover chain: the fast API providers try first, the agent CLIs back them up, the first good result wins, and `meta.attempts` records every attempt so a fallback is never silent. On top of the built-ins, ModLens can **reuse the logins already on your machine**: a signed-in Codex, an OpenCode vision model, credentials held by Pi, or a Grok login can each join the chain, one explicit yes per harness, and every reused read is labeled with whose quota it spent.
+Without a pinned provider, every configured engine forms one failover chain: the fast API providers try first, the agent CLIs back them up, the first good result wins, and `meta.attempts` records every attempt so a fallback is never silent.
 
-Picking is two knobs: `modlens config set provider <name>` states a preference (the chain still backs it up), `-p <name>` pins exactly one with no fallback. Machines behind a proxy set `HTTPS_PROXY` or `modlens config set proxy <url>` and the API providers route through it. Details: the [CLI manual](docs/cli.md) for defaults and flags, [Configuration](skills/modlens/references/configure.md) for every key, and [Security](docs/security.md) for who fetches what on remote URLs.
+### `openai` is a universal socket, not just OpenAI
+
+Any endpoint speaking the OpenAI chat-completions protocol with image input plugs straight in — that covers most of the vision-model world:
+
+```bash
+modlens config set openai.baseUrl https://dashscope.aliyuncs.com/compatible-mode/v1   # qwen-vl
+modlens config set openai.apiKey  <key>
+modlens config set openai.model   qwen3-vl-plus
+```
+
+The same three keys work for GLM's open platform, SiliconFlow, OpenRouter, a self-hosted vLLM/Ollama, or any gateway of your own. If your favorite vision model has an OpenAI-compatible API, ModLens can drive it.
+
+### Reusing what your machine already has
+
+Two more sources of vision need zero new keys, each behind one explicit consent recorded in config:
+
+- **The harness you are talking in right now.** Running inside Claude Code with a subscription signed in? `claude-cli` reads images through it out of the box. The install flow asks the same question for whichever harness you install into.
+- **Every other agent CLI on the machine.** A signed-in Codex, an OpenCode vision model, credentials held by Pi, a Grok login — `modlens doctor` discovers them, you grant per harness (`config set reuse.codex true`), and they join the same failover chain with no priority over your own keys. Every reused read is labeled in `meta.warnings` with whose quota it spent, so nothing is ever silently billed.
+
+### Picking and routing
+
+Two knobs: `modlens config set provider <name>` states a preference (the chain still backs it up), `-p <name>` pins exactly one with no fallback. Machines behind a proxy set `HTTPS_PROXY` or `modlens config set proxy <url>` and the API providers route through it. Details: the [CLI manual](docs/cli.md) for defaults and flags, [Configuration](skills/modlens/references/configure.md) for every key, and [Security](docs/security.md) for who fetches what on remote URLs.
 
 ## See it work
 

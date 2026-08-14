@@ -7,6 +7,8 @@ read_when:
 
 # ModLens CLI manual
 
+English | [中文](cli.zh-CN.md)
+
 The skill drives this CLI through its launcher. This page is for running it directly.
 
 ## Direct usage

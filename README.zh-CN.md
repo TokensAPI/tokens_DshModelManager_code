@@ -10,10 +10,10 @@
 
 <p align="center">
   <a href="./README.md">English</a> ·
-  <a href="docs/troubleshooting.md">故障排查</a> ·
-  <a href="skills/modlens/references/configure.md">配置</a> ·
-  <a href="docs/output-schema.md">输出契约</a> ·
-  <a href="docs/security.md">安全</a> ·
+  <a href="docs/troubleshooting.zh-CN.md">故障排查</a> ·
+  <a href="skills/modlens/references/configure.zh-CN.md">配置</a> ·
+  <a href="docs/output-schema.zh-CN.md">输出契约</a> ·
+  <a href="docs/security.zh-CN.md">安全</a> ·
   <a href="https://github.com/liustack/modsearch">ModSearch（联网）</a>
 </p>
 
@@ -34,7 +34,7 @@ DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助�
 
 ## 亮点
 
-**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `read_image` 工具读图。如果 dsh 提示 `declares no dsh.bundle`，是 pnpm 的发布冷静期把版本压旧了，一行配置可解，见[故障排查](docs/troubleshooting.md#dsh-says-declares-no-dshbundle--installed-as-a-plain-dependency)。要粘贴识图，把模型选择器切到插件新增的两个条目之一：**`DeepSeek-V4-Flash (modlens vision)`** 或 **`DeepSeek-V4-Pro (modlens vision)`**，贴图放行、发请求时转成证据（你的消息保留原生缩略图）、仍由原 DeepSeek 路由回答。包装只覆盖 DeepSeek 与 GLM 的文本模型，两家自己的视觉型号自动排除。
+**🥇 全网第一个支持 DeepSeek Harness（dsh）的外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `read_image` 工具读图。如果 dsh 提示 `declares no dsh.bundle`，是 pnpm 的发布冷静期把版本压旧了，一行配置可解，见[故障排查](docs/troubleshooting.zh-CN.md#dsh-提示-declares-no-dshbundle--installed-as-a-plain-dependency)。要粘贴识图，把模型选择器切到插件新增的两个条目之一：**`DeepSeek-V4-Flash (modlens vision)`** 或 **`DeepSeek-V4-Pro (modlens vision)`**，贴图放行、发请求时转成证据（你的消息保留原生缩略图）、仍由原 DeepSeek 路由回答。包装只覆盖 DeepSeek 与 GLM 的文本模型，两家自己的视觉型号自动排除。
 
 **直接粘贴图片识别** 无需先保存成文件再提供路径。
 
@@ -65,7 +65,7 @@ agy                                                           # 浏览器完成�
 npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 ```
 
-装完即有 `read_image` 工具，选「(modlens vision)」模型变体即可直接粘贴识图。引擎配置同样在 `~/.modlens`，详见[宿主接入](docs/harness-setup.md)。
+装完即有 `read_image` 工具，选「(modlens vision)」模型变体即可直接粘贴识图。引擎配置同样在 `~/.modlens`，详见[宿主接入](docs/harness-setup.zh-CN.md)。
 
 ## 用法
 
@@ -83,9 +83,30 @@ ModLens 不绑定任何单一视觉服务。内置五个 provider，配好任意
 | `antigravity-cli` | 免费的 `agy` CLI，浏览器登录一次，无需 key | 15-45 秒 | 完全免注册起步 |
 | `claude-cli` | 已登录的 Claude Code | 20-45 秒 | 复用现有 Claude 订阅 |
 
-不钉死 provider 时，所有配好的引擎组成一条故障转移链：API 快车道先试，agent CLI 兜底，第一个可用结果胜出，`meta.attempts` 记录每次尝试，回退永远不是无声的。内置引擎之外，ModLens 还能**复用你本机已有的登录**：已登录的 Codex、OpenCode 的视觉模型、Pi 持有的凭据、Grok 登录，每家经你明确同意后入池，每次复用都在结果里标明花的是谁的额度。
+不钉死 provider 时，所有配好的引擎组成一条故障转移链：API 快车道先试，agent CLI 兜底，第一个可用结果胜出，`meta.attempts` 记录每次尝试，回退永远不是无声的。
 
-选择只有两个旋钮：`modlens config set provider <name>` 表达偏好（链继续兜底），`-p <name>` 钉死单个不回退。代理环境设 `HTTPS_PROXY` 或 `modlens config set proxy <url>`，API provider 自动走代理。细节见 [CLI 手册](docs/cli.md)（默认模型与参数）、[配置手册](skills/modlens/references/configure.md)（全部配置键）、[安全说明](docs/security.md)（远程 URL 由谁抓取）。
+### `openai` 是万能接口，不只是 OpenAI
+
+任何讲 OpenAI chat-completions 协议、支持图片输入的端点都能直接插上，这基本覆盖了视觉模型的大半个世界：
+
+```bash
+modlens config set openai.baseUrl https://dashscope.aliyuncs.com/compatible-mode/v1   # qwen-vl
+modlens config set openai.apiKey  <key>
+modlens config set openai.model   qwen3-vl-plus
+```
+
+同样三个键，换成 GLM 开放平台、SiliconFlow、OpenRouter、自建 vLLM/Ollama 或你自己的网关都一样。你常用的视觉模型只要有 OpenAI 兼容 API，ModLens 就能驱动它。
+
+### 复用你机器上已有的东西
+
+还有两处现成的视觉能力，一个新 key 都不用配，每家都在你明确同意后才启用：
+
+- **你正在对话的这个 harness 本身。**在登录了订阅的 Claude Code 里用？`claude-cli` 开箱即可借它读图。装进哪个 harness，安装流程就会问哪个 harness 的授权。
+- **机器上其他的 agent CLI。**已登录的 Codex、OpenCode 的视觉模型、Pi 持有的凭据、Grok 登录，`modlens doctor` 会逐个发现，你按家授权（`config set reuse.codex true`），它们与你自己的 key 平级入链，不插队。每次复用都在 `meta.warnings` 里标明花的是谁的额度，绝不无声扣费。
+
+### 选择与路由
+
+两个旋钮：`modlens config set provider <name>` 表达偏好（链继续兜底），`-p <name>` 钉死单个不回退。代理环境设 `HTTPS_PROXY` 或 `modlens config set proxy <url>`，API provider 自动走代理。细节见 [CLI 手册](docs/cli.zh-CN.md)（默认模型与参数）、[配置手册](skills/modlens/references/configure.zh-CN.md)（全部配置键）、[安全说明](docs/security.zh-CN.md)（远程 URL 由谁抓取）。
 
 ## 实测
 
@@ -116,12 +137,12 @@ Codex 桌面 App 中识别一张推文截图。作者、配文、照片内容（
 | 文档                                               | 适用场景                                   |
 | :------------------------------------------------- | :----------------------------------------- |
 | [安装手册](INSTALL.md)                             | 一步步安装 skill（为 agent 编写）          |
-| [CLI 手册](docs/cli.md)                            | skill 所驱动的 CLI：参数、配置与体检       |
-| [故障排查](docs/troubleshooting.md)                | 命令报错，查成因和解法                     |
-| [配置手册](skills/modlens/references/configure.md) | 配置 key、切换 provider、排查配置          |
-| [输出契约](docs/output-schema.md)                  | 解析 JSON 或构建下游工具                   |
-| [宿主接入](docs/harness-setup.md)                  | 在 Codex、Claude Code、Pi、OpenCode 中配置 |
-| [安全说明](docs/security.md)                       | 恢复文件的权限、图片内容作为不可信输入     |
+| [CLI 手册](docs/cli.zh-CN.md)                            | skill 所驱动的 CLI：参数、配置与体检       |
+| [故障排查](docs/troubleshooting.zh-CN.md)                | 命令报错，查成因和解法                     |
+| [配置手册](skills/modlens/references/configure.zh-CN.md) | 配置 key、切换 provider、排查配置          |
+| [输出契约](docs/output-schema.zh-CN.md)                  | 解析 JSON 或构建下游工具                   |
+| [宿主接入](docs/harness-setup.zh-CN.md)                  | 在 Codex、Claude Code、Pi、OpenCode 中配置 |
+| [安全说明](docs/security.zh-CN.md)                       | 恢复文件的权限、图片内容作为不可信输入     |
 | [更新日志](CHANGELOG.md)                           | 查询版本变更                               |
 
 ## 参与方式
