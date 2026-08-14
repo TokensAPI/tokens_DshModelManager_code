@@ -80,6 +80,10 @@ describe('launcher version stamping', () => {
             'pnpm add @liustack/modlens@1.2.3 @liustack/modlens',
             // Only <pinned> and <version> read as placeholders.
             'pnpm add @liustack/modlens@<anything>',
+            // The flag has to be the exact argument, standing on its own.
+            'pnpm add @liustack/modlens@latest --config.minimumReleaseAge=0oops',
+            'pnpm add @liustack/modlens@latest --registry=--config.minimumReleaseAge=0',
+            'pnpm add @liustack/modlens@latest, or pass "--config.minimumReleaseAge=0"',
         ];
         for (const command of unpinned) {
             expect(unpinnedInstalls(command), command).not.toEqual([]);

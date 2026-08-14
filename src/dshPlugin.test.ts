@@ -1719,6 +1719,9 @@ describe('paste takeover verdict, ownership proof (#36)', () => {
     };
 
     it('does not let a foreign provider borrow the marker to dodge the veto', async () => {
+        // The label deliberately carries no marker: a label that did would be
+        // refused by the check at the top of the verdict, and this test would
+        // pass without the scan it is here to exercise.
         // @ts-expect-error untyped on purpose
         const plugin = (await import('../dsh/index.js')) as {
             apply: (ctx: unknown, config?: Record<string, unknown>) => void;
@@ -1729,8 +1732,8 @@ describe('paste takeover verdict, ownership proof (#36)', () => {
                 name: 'Gateway',
                 models: [
                     {
-                        id: 'v4-pro',
-                        name: 'DeepSeek-V4-Pro (modlens vision)',
+                        id: 'deepseek-v4-pro',
+                        name: 'Gateway V4 (modlens vision)',
                         inputModalities: ['text', 'image'],
                     },
                 ],
@@ -1738,8 +1741,35 @@ describe('paste takeover verdict, ownership proof (#36)', () => {
         ]);
         plugin.apply(house.ctx, {});
         await new Promise((resolve) => setTimeout(resolve, 10));
-        // It matches the label, it accepts images, and it is not ours: veto.
-        expect(await ask(house.captured.handler, 'DeepSeek-V4-Pro (modlens vision)')).toBe(false);
+        // It matches the label by id, it accepts images, and its provider id
+        // is not one this plugin mints: veto, marker or no marker.
+        expect(await ask(house.captured.handler, 'DeepSeek-V4-Pro')).toBe(false);
+    });
+
+    it('still vetoes a real vision model sitting on a modlens-shaped id', async () => {
+        // The other half: an id inside the convention is not enough either.
+        // A route that takes such an id while serving genuine vision models
+        // keeps its veto, because those models carry no twin marker.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const house = scaffold([
+            {
+                id: 'modlens-lookalike',
+                name: 'Lookalike',
+                models: [
+                    {
+                        id: 'deepseek-v4-pro',
+                        name: 'DeepSeek-V4-Pro',
+                        inputModalities: ['text', 'image'],
+                    },
+                ],
+            },
+        ]);
+        plugin.apply(house.ctx, {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(await ask(house.captured.handler, 'DeepSeek-V4-Pro')).toBe(false);
     });
 
     it('trusts a wrapper under a custom providerId through the registered set', async () => {
@@ -1753,5 +1783,83 @@ describe('paste takeover verdict, ownership proof (#36)', () => {
         plugin.apply(house.ctx, { upstream: 'deepseek-official', providerId: 'house-vision' });
         await new Promise((resolve) => setTimeout(resolve, 10));
         expect(await ask(house.captured.handler, 'DeepSeek-V4-Pro')).toBe(true);
+    });
+});
+
+describe('paste takeover verdict, auto-discovered wrapper id (#36)', () => {
+    // Auto-discovery mints `modlens-<upstream>` for every route but the
+    // legacy deepseek one, so that branch of the ownership rule needs its own
+    // case: a sibling instance's wrapper on such a route must still be
+    // recognized as a twin rather than vetoing the model it wraps.
+    it('recognizes a twin on an auto-discovered route', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const upstream = [{ id: 'glm-5.3', name: 'GLM-5.3', inputModalities: ['text'] }];
+        const adapters = new Map<string, { listModels: (id: string) => Promise<unknown[]> }>();
+        const providers = [{ id: 'zai', name: 'Z.ai' }];
+        const captured: { handler: ((req: unknown, res: unknown) => Promise<void>) | null } = {
+            handler: null,
+        };
+        const llm = {
+            listProviders: () => providers,
+            async listModels(providerId: string) {
+                if (providerId === 'zai') return upstream;
+                const adapter = adapters.get(providerId);
+                return adapter ? await adapter.listModels(providerId) : [];
+            },
+            async resolveModelInfo(_p: string, model: string) {
+                return upstream.find((candidate) => candidate.id === model) ?? {};
+            },
+            stream: () => (async function* () {})(),
+            registerAdapter(
+                ids: string[],
+                adapter: {
+                    providerInfo: (id: string) => { name: string };
+                    listModels: (id: string) => Promise<unknown[]>;
+                },
+            ) {
+                for (const id of ids) {
+                    if (adapters.has(id)) throw new Error(`provider "${id}" is already registered`);
+                    adapters.set(id, adapter);
+                    providers.push({ id, name: adapter.providerInfo(id).name });
+                }
+            },
+        };
+        const ctx = (withRoute: boolean) =>
+            ({
+                llm,
+                tools: { register: () => {} },
+                agents: {},
+                attachments: {},
+                on: () => {},
+                inject: (_deps: string[], run: (scope: unknown) => void) =>
+                    withRoute
+                        ? run({
+                              webServer: {
+                                  register: (route: {
+                                      handler: (req: unknown, res: unknown) => Promise<void>;
+                                  }) => {
+                                      captured.handler = route.handler;
+                                  },
+                              },
+                          })
+                        : undefined,
+            }) as never;
+
+        plugin.apply(ctx(false), { pasteToPath: false });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(providers.some((route) => route.id === 'modlens-zai')).toBe(true);
+        // Second instance: duplicate registration, so nothing of its own.
+        plugin.apply(ctx(true), {});
+        await new Promise((resolve) => setTimeout(resolve, 20));
+
+        let body = '';
+        await captured.handler?.(
+            { method: 'GET', url: '/modlens/paste?model=GLM-5.3' },
+            { writeHead: () => {}, end: (chunk: string) => (body = chunk) },
+        );
+        expect(JSON.parse(body).takeover).toBe(true);
     });
 });
