@@ -38,6 +38,7 @@ DeepSeek 和 GLM 没有视觉能力，无法进行图片识别。ModLens 借助�
 
 **直接粘贴图片识别** 无需先保存成文件再提供路径。
 
+- **全网最轻量。** 不用 hook，不套壳，不跑本地代理进程，不改任何 harness 配置的一行字：在 skill 类 harness 里它就是一个 skill 文件夹，在 dsh 里就是一个插件。卸载等于删个文件夹，你的 agent 立刻回到原样。
 - **零配置起手。** 复用 Claude Code、Codex、OpenCode、Pi 已配置，直接复用你本机的其他多模态模型。什么都没有？Antigravity CLI 是免 key 的免费通道，配一个免费 Gemini key 可将识别耗时降至 5 到 10 秒。
 - **基于证据而非想象。** 全文转录、按阅读顺序划分的版面区块、实体与关系列表，模型引用的是具体内容。
 - **一次安装，多端可用。** Claude Code、Codex、Pi、OpenCode 均经真机验证。

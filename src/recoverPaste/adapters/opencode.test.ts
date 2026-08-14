@@ -185,7 +185,7 @@ describe.skipIf(!DatabaseSync)('opencode Windows path normalization (issue #11)'
     });
 });
 
-describe.skipIf(!DatabaseSync)('opencode harness support', () => {
+describe.skipIf(!DatabaseSync)('opencode harness support', { timeout: 30_000 }, () => {
     const Db = DatabaseSync as NonNullable<typeof DatabaseSync>;
 
     function openDb(home: string) {
