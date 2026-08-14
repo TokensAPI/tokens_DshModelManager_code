@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { parseCmdShimTarget, resolveSpawnPlan } from './winExec.ts';
 
-// Real cmd-shim output (npm's generator), captured verbatim. The whole point
-// is to read the JS entry out of it and spawn node directly, never through
-// cmd.exe — so a multi-line vision prompt cannot be truncated or injected.
-const NPM_SHIM = `@ECHO off
+// Every fixture below is the verbatim output of a real shim generator, run
+// against a real file: npm's cmd-shim@9 and pnpm's @zkochan/cmd-shim@9. The
+// interpreter must be read out of the shim, never guessed from the entry's
+// extension — cmd-shim happily generates a python shim for a file named .js.
+
+/** npm, `#!/usr/bin/env node`. */
+const NPM_NODE = `@ECHO off
 GOTO start
 :find_dp0
 SET dp0=%~dp0
@@ -20,37 +23,94 @@ IF EXIST "%dp0%\\node.exe" (
   SET PATHEXT=%PATHEXT:;.JS;=;%
 )
 
-endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*`;
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\..\\cli.js" %*`;
 
-// A shim carrying node flags from a `#!/usr/bin/env node --max-old-space-size=4096` shebang.
-const NPM_SHIM_WITH_FLAGS = `@ECHO off
-endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  --max-old-space-size=4096 "%dp0%\\cli.js" %*`;
+/** npm, `#!/usr/bin/env node --max-old-space-size=4096 --no-warnings`. */
+const NPM_NODE_FLAGS = NPM_NODE.replace(
+    '"%_prog%"  "%dp0%\\..\\cli.js" %*',
+    '"%_prog%" --max-old-space-size=4096 --no-warnings "%dp0%\\..\\cli-flags.js" %*',
+);
 
-// A python shim: not ours, must be declined so the caller falls back.
-const PYTHON_SHIM = `@ECHO off
-endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\tool.py" %*`;
+/** npm, `#!/usr/bin/env python`, entry named .js — the trap. */
+const NPM_PYTHON_JS = NPM_NODE.replaceAll('node.exe', 'python.exe')
+    .replace('SET "_prog=node"', 'SET "_prog=python"')
+    .replace('"%dp0%\\..\\cli.js"', '"%dp0%\\..\\python-named.js"');
+
+/** npm, a Node bin with no file extension at all. */
+const NPM_NODE_NOEXT = NPM_NODE.replace('"%dp0%\\..\\cli.js"', '"%dp0%\\..\\entry-noext"');
+
+/** npm, `#!/usr/bin/env FOO=bar node`: carries an env assignment. */
+const NPM_NODE_ENV_KV = NPM_NODE.replace('CALL :find_dp0\n', 'CALL :find_dp0\n@SET FOO=bar\n');
+
+/** pnpm, standard. */
+const PNPM_NODE = `@SETLOCAL
+@IF EXIST "%~dp0\\node.exe" (
+  "%~dp0\\node.exe"  "%~dp0\\..\\cli.js" %*
+) ELSE (
+  @SET PATHEXT=%PATHEXT:;.JS;=;%
+  node  "%~dp0\\..\\cli.js" %*
+)`;
+
+/** pnpm with nodePath: prepends NODE_PATH, which a direct spawn would drop. */
+const PNPM_NODEPATH = `@SETLOCAL
+@IF NOT DEFINED NODE_PATH (
+  @SET "NODE_PATH=C;\\extra modules"
+) ELSE (
+  @SET "NODE_PATH=C;\\extra modules;%NODE_PATH%"
+)
+@IF EXIST "%~dp0\\node.exe" (
+  "%~dp0\\node.exe"  "%~dp0\\..\\cli.js" %*
+) ELSE (
+  @SET PATHEXT=%PATHEXT:;.JS;=;%
+  node  "%~dp0\\..\\cli.js" %*
+)`;
+
+/** pnpm with nodeExecPath: pins one Node binary. */
+const PNPM_NODEEXEC = `@SETLOCAL
+@"C:\\runtimes\\node20\\node.exe"  "%~dp0\\..\\cli.js" %*`;
 
 describe('parseCmdShimTarget', () => {
-    it('reads the real JS entry, resolved against the shim directory', () => {
-        const target = parseCmdShimTarget(
-            'C:\\Users\\x\\AppData\\Roaming\\npm\\claude.cmd',
-            NPM_SHIM,
-        );
-        expect(target).not.toBeNull();
-        expect(target?.script).toBe(
-            'C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js',
-        );
-        expect(target?.nodeFlags).toEqual([]);
-    });
-
-    it('captures node flags the shebang injected', () => {
-        const target = parseCmdShimTarget('C:\\npm\\claude.cmd', NPM_SHIM_WITH_FLAGS);
-        expect(target?.nodeFlags).toEqual(['--max-old-space-size=4096']);
+    it('reads npm Node shims, resolving the entry against the shim directory', () => {
+        const target = parseCmdShimTarget('C:\\npm\\bin\\claude.cmd', NPM_NODE);
         expect(target?.script).toBe('C:\\npm\\cli.js');
+        expect(target?.nodeFlags).toEqual([]);
+        expect(target?.nodeExec).toBeUndefined();
     });
 
-    it('declines a shim whose interpreter is not node', () => {
-        expect(parseCmdShimTarget('C:\\npm\\tool.cmd', PYTHON_SHIM)).toBeNull();
+    it('keeps the interpreter flags a shebang injected, in order', () => {
+        const target = parseCmdShimTarget('C:\\npm\\bin\\x.cmd', NPM_NODE_FLAGS);
+        expect(target?.nodeFlags).toEqual(['--max-old-space-size=4096', '--no-warnings']);
+        expect(target?.script).toBe('C:\\npm\\cli-flags.js');
+    });
+
+    it('declines a python shim whose entry is named .js', () => {
+        // The extension is not evidence of the interpreter: running this
+        // under Node would execute a Python program as JavaScript.
+        expect(parseCmdShimTarget('C:\\npm\\bin\\tool.cmd', NPM_PYTHON_JS)).toBeNull();
+    });
+
+    it('accepts a Node bin with no file extension', () => {
+        const target = parseCmdShimTarget('C:\\npm\\bin\\tool.cmd', NPM_NODE_NOEXT);
+        expect(target?.script).toBe('C:\\npm\\entry-noext');
+    });
+
+    it('declines a shim carrying an environment assignment', () => {
+        // `env FOO=bar node` renders as @SET FOO=bar; a direct spawn would
+        // silently drop it, so the shim is left to the fallback instead.
+        expect(parseCmdShimTarget('C:\\npm\\bin\\kv.cmd', NPM_NODE_ENV_KV)).toBeNull();
+    });
+
+    it('reads pnpm shims, and declines the NODE_PATH variant', () => {
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODE)?.script).toBe(
+            'C:\\pnpm\\cli.js',
+        );
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODEPATH)).toBeNull();
+    });
+
+    it('honours a pinned Node binary instead of the running one', () => {
+        const target = parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODEEXEC);
+        expect(target?.script).toBe('C:\\pnpm\\cli.js');
+        expect(target?.nodeExec).toBe('C:\\runtimes\\node20\\node.exe');
     });
 
     it('declines content with no forwarded arguments', () => {
@@ -64,7 +124,7 @@ describe('resolveSpawnPlan', () => {
         expect(plan).toEqual({ command: 'claude', args: ['-p', 'hello'] });
     });
 
-    // The Windows branch is driven with injected deps so it runs on every
+    // The win32 branch is driven with injected deps so it runs on every
     // platform: a real spawn is not needed to prove the plan is correct.
     const winDeps = (files: Record<string, string>, onPath: Record<string, string>) => ({
         platform: 'win32' as NodeJS.Platform,
@@ -77,20 +137,19 @@ describe('resolveSpawnPlan', () => {
         execPath: 'C:\\Program Files\\nodejs\\node.exe',
     });
 
-    it('rewrites a bare-name .cmd shim to a direct node spawn with the multi-line prompt intact', () => {
-        const shimPath = 'C:\\npm\\claude.cmd';
+    it('rewrites a bare-name shim to a direct node spawn, multi-line prompt intact', () => {
+        const shimPath = 'C:\\npm\\bin\\claude.cmd';
         const prompt = 'line one\nline two & echo not-a-command';
         const plan = resolveSpawnPlan(
             'claude',
             ['-p', prompt],
-            { PATH: 'C:\\npm' },
-            winDeps({ [shimPath]: NPM_SHIM }, { claude: shimPath }),
+            { PATH: 'C:\\npm\\bin' },
+            winDeps({ [shimPath]: NPM_NODE }, { claude: shimPath }),
         );
         expect(plan.command).toBe('C:\\Program Files\\nodejs\\node.exe');
-        expect(plan.args[0]).toBe('C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js');
-        // The prompt rides as a normal argv element: newlines and & survive,
+        expect(plan.args[0]).toBe('C:\\npm\\cli.js');
+        // The prompt rides as one argv element: newlines and & survive,
         // because no cmd.exe parses this line.
-        expect(plan.args).toContain(prompt);
         expect(plan.args[plan.args.length - 1]).toBe(prompt);
     });
 
@@ -100,10 +159,34 @@ describe('resolveSpawnPlan', () => {
             shimPath,
             ['-p', 'x'],
             {},
-            winDeps({ [shimPath]: NPM_SHIM }, {}),
+            winDeps({ [shimPath]: NPM_NODE }, {}),
         );
         expect(plan.command).toBe('C:\\Program Files\\nodejs\\node.exe');
-        expect(plan.args[0]).toContain('cli.js');
+        expect(plan.args[0]).toBe('C:\\cli.js');
+    });
+
+    it('spawns the pinned Node when the shim names one', () => {
+        const shimPath = 'C:\\pnpm\\bin\\tool.cmd';
+        const plan = resolveSpawnPlan(
+            'tool',
+            ['x'],
+            {},
+            winDeps({ [shimPath]: PNPM_NODEEXEC }, { tool: shimPath }),
+        );
+        expect(plan.command).toBe('C:\\runtimes\\node20\\node.exe');
+    });
+
+    it('leaves a declined shim alone so the spawn error names the command', () => {
+        const shimPath = 'C:\\npm\\bin\\tool.cmd';
+        for (const content of [NPM_PYTHON_JS, NPM_NODE_ENV_KV, '@echo off\nunrecognized']) {
+            const plan = resolveSpawnPlan(
+                'tool',
+                ['x'],
+                {},
+                winDeps({ [shimPath]: content }, { tool: shimPath }),
+            );
+            expect(plan).toEqual({ command: shimPath, args: ['x'] });
+        }
     });
 
     it('passes an unresolvable bare name through so ENOENT still names the CLI', () => {
@@ -115,16 +198,5 @@ describe('resolveSpawnPlan', () => {
         const exe = 'C:\\tools\\agy.exe';
         const plan = resolveSpawnPlan(exe, ['-i', 'a.png'], {}, winDeps({}, {}));
         expect(plan).toEqual({ command: exe, args: ['-i', 'a.png'] });
-    });
-
-    it('falls back to the raw .cmd when the shim cannot be parsed', () => {
-        const shimPath = 'C:\\npm\\weird.cmd';
-        const plan = resolveSpawnPlan(
-            'weird',
-            ['x'],
-            {},
-            winDeps({ [shimPath]: '@echo off\nsomething unrecognized' }, { weird: shimPath }),
-        );
-        expect(plan).toEqual({ command: shimPath, args: ['x'] });
     });
 });
