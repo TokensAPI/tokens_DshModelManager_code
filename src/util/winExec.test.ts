@@ -221,6 +221,44 @@ describe('parseCmdShimTarget', () => {
         ]);
     });
 
+    it('keeps a quoted run glued to the text touching it, and declines the pair', () => {
+        // `"quoted"suffix` is ONE argument to Windows. Pulling the quoted half
+        // out would hand the program two, so the whole argument is refused.
+        const withFixed = (fixed: string) =>
+            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('"quoted"suffix'))).toBeNull();
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('prefix"quoted"'))).toBeNull();
+        // A flag whose value is quoted is one argument too, and equally
+        // unprovable, rather than two half-tokens.
+        expect(
+            parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('--label="two words"')),
+        ).toBeNull();
+    });
+
+    it('requires the forwarder to be the last thing on the line', () => {
+        // A token after `%*` is passed AFTER the caller's arguments, which
+        // appending them at the end cannot reproduce.
+        for (const line of [
+            '@node "%~dp0\\..\\cli.js" %* trailing',
+            '@node "%~dp0\\..\\cli.js" %* "%*"',
+        ]) {
+            expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', `${line}\r\n`), line).toBeNull();
+        }
+    });
+
+    it('declines when one execution branch is unprovable, even if another is fine', () => {
+        // The machine picks the branch, not the parser: proving the ELSE while
+        // the IF forwards twice would leave the taken path unchecked.
+        const branches = [
+            '@IF EXIST "%~dp0\\node.exe" (',
+            '  "%~dp0\\node.exe" "%~dp0\\..\\cli.js" %* %*',
+            ') ELSE (',
+            '  node "%~dp0\\..\\cli.js" %*',
+            ')',
+        ].join('\r\n');
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', branches)).toBeNull();
+    });
+
     it('declines a line that forwards the caller arguments more than once', () => {
         // `node <entry> %* %*` passes each caller argument twice; appending
         // them once is a different argv, so the shim is not reproducible.

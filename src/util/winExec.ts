@@ -50,31 +50,26 @@ interface CmdToken {
 }
 
 /**
- * Split one cmd line into quoted and bare tokens, outer quotes stripped but
- * remembered: inside quotes cmd treats `&`, `|`, `<`, `>` and `^` as ordinary
- * characters, and a real generator quotes any path that contains one. The
- * optional `@` is batch's echo-off prefix, which pnpm puts directly against
- * the opening quote of a pinned interpreter path.
+ * Split one cmd line into whole whitespace-delimited arguments, then classify
+ * each. Splitting on whitespace FIRST is what keeps a quoted run and the text
+ * touching it in the same argument: `"quoted"suffix` is one argument to
+ * Windows, and pulling the quoted half out would hand the program two.
+ *
+ * An argument that is exactly one quoted run is a quoted token, where cmd
+ * treats `&`, `|`, `<`, `>` and `^` as ordinary characters, and where a real
+ * generator writes any path containing one. Anything else keeps its text
+ * verbatim, so a mixed argument still carries its quotes and is refused as
+ * unprovable downstream. The optional `@` is batch's echo-off prefix.
  */
 function tokenizeCmdLine(line: string): CmdToken[] {
-    const tokens: CmdToken[] = [];
-    const re = /@?"([^"]*)"|(\S+)/g;
-    let match: RegExpExecArray | null;
-    // biome-ignore lint/suspicious/noAssignInExpressions: standard exec loop
-    while ((match = re.exec(line)) !== null) {
-        tokens.push(
-            match[1] !== undefined
-                ? { value: match[1], quoted: true }
-                : { value: match[2], quoted: false },
-        );
-    }
-    // The echo-off prefix also appears against an unquoted command
-    // (`@node "..." %*`), where it is part of the first token's text.
-    const first = tokens[0];
-    if (first && !first.quoted && first.value.startsWith('@')) {
-        first.value = first.value.slice(1);
-    }
-    return tokens;
+    // Each match is one argument: quoted runs and bare characters glued
+    // together until whitespace outside quotes ends it.
+    const args = line.match(/(?:"[^"]*"|[^\s"])+/g) ?? [];
+    return args.map((raw, index) => {
+        const text = index === 0 ? raw.replace(/^@/, '') : raw;
+        const whole = /^"([^"]*)"$/.exec(text);
+        return whole ? { value: whole[1], quoted: true } : { value: text, quoted: false };
+    });
 }
 
 /** Expand the shim-directory placeholders cmd shims use for their own paths. */
@@ -200,21 +195,48 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
     if (carriesForeignEnv(content)) {
         return null;
     }
-    for (const line of content.split(/\r?\n/)) {
-        if (!line.includes('%*')) {
-            continue;
+    // Every line that forwards the caller's arguments is a line the shim can
+    // take at run time (npm writes one, pnpm writes an IF and an ELSE), so
+    // all of them have to be provable and agree. Proving one and ignoring
+    // another would leave the branch the machine actually takes unchecked.
+    const executionLines = content.split(/\r?\n/).filter((line) => line.includes('%*'));
+    if (executionLines.length === 0) {
+        return null;
+    }
+    let agreed: CmdShimTarget | null = null;
+    for (const line of executionLines) {
+        const parsed = parseExecutionLine(line, content, shimDir);
+        if (!parsed) {
+            return null;
         }
+        if (agreed && !sameTarget(agreed, parsed)) {
+            return null;
+        }
+        agreed ??= parsed;
+    }
+    return agreed;
+}
+
+/** Whether two parses describe the same spawn. */
+function sameTarget(a: CmdShimTarget, b: CmdShimTarget): boolean {
+    return (
+        a.nodeExec === b.nodeExec &&
+        a.args.length === b.args.length &&
+        a.args.every((value, index) => value === b.args[index])
+    );
+}
+
+/** One `%*`-forwarding line, or null when it cannot be proven. */
+function parseExecutionLine(line: string, content: string, shimDir: string): CmdShimTarget | null {
+    {
         const tokens = tokenizeCmdLine(line);
-        const forwarders = tokens.filter((token) => !token.quoted && token.value === '%*');
-        // One forwarding point, or none of this is reproducible: a line that
-        // forwards the caller's arguments twice passes each of them twice,
-        // which appending them once does not do.
-        if (forwarders.length !== 1) {
-            continue;
-        }
         const forwardIndex = tokens.findIndex((token) => !token.quoted && token.value === '%*');
-        if (forwardIndex < 2) {
-            continue;
+        // The forwarder has to be the last thing on the line and the only one:
+        // a token after it would be passed AFTER the caller's arguments, and a
+        // second forwarder would pass each of them twice, neither of which
+        // appending once reproduces.
+        if (forwardIndex < 2 || forwardIndex !== tokens.length - 1) {
+            return null;
         }
         // Everything the shim runs, minus the `%*` it forwards our args into.
         // The npm template prefixes its execution line with batch plumbing
@@ -228,7 +250,7 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
         );
         let words = lastAmp >= 0 ? runTokens.slice(lastAmp + 1) : runTokens;
         if (words.length < 2) {
-            continue;
+            return null;
         }
         let nodeExec: string | undefined;
         // `env -S node --flags` renders as an `-S` interpreter followed by the
@@ -240,13 +262,13 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
         if (interpreter === '%_prog%') {
             const prog = progIsNode(content, shimDir);
             if (!prog.ok) {
-                continue;
+                return null;
             }
             nodeExec = prog.absolute;
         } else {
             const expanded = expandShimPath(interpreter, shimDir) ?? interpreter;
             if (!isNodeInterpreter(expanded)) {
-                continue;
+                return null;
             }
             if (path.win32.isAbsolute(interpreter)) {
                 nodeExec = interpreter;
@@ -270,11 +292,10 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
             args.push(expanded);
         }
         if (!expandable || args.length === 0) {
-            continue;
+            return null;
         }
         return { args, ...(nodeExec ? { nodeExec } : {}) };
     }
-    return null;
 }
 
 interface ResolveDeps {
