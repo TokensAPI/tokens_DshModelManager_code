@@ -1577,7 +1577,9 @@ describe('paste takeover verdict, second instance (#36)', () => {
         ];
         const adapters = new Map<string, { listModels: (id: string) => Promise<unknown[]> }>();
         const providers = [{ id: 'deepseek-official', name: 'DeepSeek' }];
-        let handler: ((req: unknown, res: unknown) => Promise<void>) | null = null;
+        const captured: { handler: ((req: unknown, res: unknown) => Promise<void>) | null } = {
+            handler: null,
+        };
         const llm = {
             listProviders: () => providers,
             async listModels(providerId: string) {
@@ -1617,7 +1619,7 @@ describe('paste takeover verdict, second instance (#36)', () => {
                                   register: (route: {
                                       handler: (req: unknown, res: unknown) => Promise<void>;
                                   }) => {
-                                      handler = route.handler;
+                                      captured.handler = route.handler;
                                   },
                               },
                           })
@@ -1632,7 +1634,7 @@ describe('paste takeover verdict, second instance (#36)', () => {
         await new Promise((resolve) => setTimeout(resolve, 10));
 
         let body = '';
-        await handler?.(
+        await captured.handler?.(
             { method: 'GET', url: '/modlens/paste?model=DeepSeek-V4-Pro' },
             { writeHead: () => {}, end: (chunk: string) => (body = chunk) },
         );
