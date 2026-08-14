@@ -98,10 +98,20 @@ tag in the message carries its path.
 
 ```
 OpenAI-compatible API returned JSON that does not match the vision schema
-(missing: ocr, ocr.full_text, ...)
+(wrong or missing: visual.notes, ...)
 ```
 
-那个端点返回了残缺的结果。只有 agy、gemini-api、anthropic 和 claude-cli 在服务端强制执行 schema，较弱的网关可能只产出半个结果。重试一次，然后换 provider：
+那个端点返回了不符合契约的内容。注意措辞：被点名的字段可能是缺失，也可能是存在但形状不对。
+
+大多数 OpenAI 兼容网关在服务端什么都不强制，契约是以填好的 JSON 模板形式随提示词发过去的，能力弱一些的模型可能只答出一半，关掉思考时尤其明显。可以改成让网关自己强制执行：
+
+```bash
+modlens config set openai.structuredOutput true
+```
+
+这会把契约以 `response_format: json_schema` 的严格形式发过去，schema 由 modlens 校验用的那份推导而来，没有需要手工同步的副本。默认关闭，因为不支持这个字段的网关会直接 400；真遇到就关回去。你自己在 `extraBody` 里设的 `response_format` 优先级更高。
+
+还是不行就重试一次，然后换 provider：
 
 ```bash
 modlens -i <image> -p gemini-api

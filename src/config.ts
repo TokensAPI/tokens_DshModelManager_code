@@ -25,6 +25,13 @@ export interface ProviderSettings {
      * so the string-only fields have their own type below.
      */
     extraBody?: Record<string, unknown>;
+    /**
+     * Ask an OpenAI-compatible gateway to enforce the vision contract itself,
+     * by sending it as `response_format: json_schema` (issue #37). Off by
+     * default: an endpoint that does not support the field answers 400, and
+     * the prompt template is what carries the contract everywhere else.
+     */
+    structuredOutput?: boolean;
 }
 
 /** The settings that hold a plain string, the only ones env vars can bind to. */
@@ -165,12 +172,26 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
         const dot = dottedKey.indexOf('.');
         if (dot <= 0 || dot === dottedKey.length - 1) {
             throw new Error(
-                `Invalid config key: ${dottedKey}. Use "provider", "reuse.<claude|codex|opencode|pi|grok>", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody>".`,
+                `Invalid config key: ${dottedKey}. Use "provider", "reuse.<claude|codex|opencode|pi|grok>", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|extraBody|structuredOutput>".`,
             );
         }
         const providerName = dottedKey.slice(0, dot);
         const field = dottedKey.slice(dot + 1);
-        if (field === 'extraBody') {
+        if (field === 'structuredOutput') {
+            const normalized = value.trim().toLowerCase();
+            if (normalized !== '' && normalized !== 'true' && normalized !== 'false') {
+                throw new Error(
+                    `${providerName}.structuredOutput must be true or false (empty clears).`,
+                );
+            }
+            config.providers ??= {};
+            config.providers[providerName] ??= {};
+            if (normalized === '') {
+                delete config.providers[providerName].structuredOutput;
+            } else {
+                config.providers[providerName].structuredOutput = normalized === 'true';
+            }
+        } else if (field === 'extraBody') {
             config.providers ??= {};
             config.providers[providerName] ??= {};
             // An empty value clears it, so a user who no longer wants the
@@ -185,7 +206,7 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
             }
         } else if (!STRING_FIELDS.includes(field as ProviderStringField)) {
             throw new Error(
-                `Unknown config field: ${field}. Use apiKey, baseUrl, model, proxy, or extraBody.`,
+                `Unknown config field: ${field}. Use apiKey, baseUrl, model, proxy, extraBody, or structuredOutput.`,
             );
         } else {
             config.providers ??= {};

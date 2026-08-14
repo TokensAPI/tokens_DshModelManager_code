@@ -166,6 +166,68 @@ describe('executeOpenaiCompat', () => {
     });
 });
 
+describe('structured output (#37)', () => {
+    const capture = () => {
+        const calls: Array<{ init: RequestInit }> = [];
+        vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+            calls.push({ init });
+            return new Response(
+                JSON.stringify({ choices: [{ message: { content: JSON.stringify(structured) } }] }),
+                { status: 200 },
+            );
+        });
+        return calls;
+    };
+
+    it('asks the gateway to enforce the contract only when told to', async () => {
+        const calls = capture();
+        await executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings: { ...settings, structuredOutput: true },
+        });
+        const body = JSON.parse(String(calls[0].init.body));
+        expect(body.response_format.type).toBe('json_schema');
+        expect(body.response_format.json_schema.strict).toBe(true);
+        // The derived strict form, not the contract verbatim: the gateway
+        // rejects a schema with optional properties.
+        const schema = body.response_format.json_schema.schema;
+        expect(schema.additionalProperties).toBe(false);
+        expect(schema.properties.visual.properties.notes.anyOf[1]).toEqual({ type: 'null' });
+    });
+
+    it('sends nothing extra by default, since a gateway can 400 on it', async () => {
+        const calls = capture();
+        await executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings,
+        });
+        expect(JSON.parse(String(calls[0].init.body))).not.toHaveProperty('response_format');
+    });
+
+    it('lets extraBody override the derived schema', async () => {
+        // Someone with a gateway that wants a different shape keeps the
+        // escape hatch they already had.
+        const calls = capture();
+        await executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings: {
+                ...settings,
+                structuredOutput: true,
+                extraBody: { response_format: { type: 'json_object' } },
+            },
+        });
+        expect(JSON.parse(String(calls[0].init.body)).response_format).toEqual({
+            type: 'json_object',
+        });
+    });
+});
+
 describe('schema shape enforcement', () => {
     it('rejects a partial result that used to pass the token check', async () => {
         // {"summary":"x","ocr":null} satisfied the old check and reached the model
@@ -188,6 +250,6 @@ describe('schema shape enforcement', () => {
                 timeoutMs: 1000,
                 settings: { apiKey: 'k', baseUrl: 'https://api.example.com', model: 'm' },
             }),
-        ).rejects.toThrow(/does not match the vision schema \(missing: ocr, layout/);
+        ).rejects.toThrow(/does not match the vision schema \(wrong or missing: ocr, layout/);
     });
 });

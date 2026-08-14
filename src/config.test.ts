@@ -226,3 +226,24 @@ describe('initConfigFile', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 });
+
+describe('structuredOutput (#37)', () => {
+    it('stores a boolean and clears on empty', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-so-'));
+        const file = path.join(dir, 'config.json');
+        setConfigValue('openai.structuredOutput', 'true', file);
+        expect(loadConfigFile(file).providers?.openai?.structuredOutput).toBe(true);
+        setConfigValue('openai.structuredOutput', 'false', file);
+        expect(loadConfigFile(file).providers?.openai?.structuredOutput).toBe(false);
+        setConfigValue('openai.structuredOutput', '', file);
+        expect(loadConfigFile(file).providers?.openai?.structuredOutput).toBeUndefined();
+    });
+
+    it('refuses a value that is neither true nor false', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-so-'));
+        const file = path.join(dir, 'config.json');
+        expect(() => setConfigValue('openai.structuredOutput', 'yes', file)).toThrow(
+            /must be true or false/,
+        );
+    });
+});

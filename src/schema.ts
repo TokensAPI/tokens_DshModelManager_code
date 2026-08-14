@@ -99,6 +99,51 @@ export const VISION_RESULT_SCHEMA = {
     required: ['summary', 'ocr', 'layout', 'semantics', 'visual', 'uncertainty'],
 } as const;
 
+/**
+ * The same contract in the shape OpenAI's structured-output mode demands:
+ * every property listed in `required`, `additionalProperties: false`
+ * everywhere, and the ones this schema does not require made nullable so a
+ * model with nothing to say can still answer. Derived from the schema above
+ * rather than written out, so the two cannot drift, and only used when a
+ * gateway is asked to enforce it (issue #37: hand-writing this by hand was
+ * the workaround it replaces).
+ */
+export function strictSchema(node: JsonSchemaNode): JsonSchemaNode {
+    if (node.type === 'object') {
+        const properties: Record<string, JsonSchemaNode> = {};
+        const required = node.required ?? [];
+        for (const [key, child] of Object.entries(node.properties ?? {})) {
+            const strict = strictSchema(child);
+            properties[key] = required.includes(key)
+                ? strict
+                : // Strict mode has no optional properties, only nullable ones.
+                  { anyOf: [strict, { type: 'null' }] };
+        }
+        return {
+            type: 'object',
+            properties,
+            required: Object.keys(properties),
+            additionalProperties: false,
+        };
+    }
+    if (node.type === 'array' && node.items) {
+        return { ...node, items: strictSchema(node.items) };
+    }
+    return node;
+}
+
+/** The vision contract as an OpenAI `response_format` value. */
+export function visionResponseFormat(): Record<string, unknown> {
+    return {
+        type: 'json_schema',
+        json_schema: {
+            name: 'vision_result',
+            strict: true,
+            schema: strictSchema(VISION_RESULT_SCHEMA),
+        },
+    };
+}
+
 export function visionResultSchemaJson(): string {
     return JSON.stringify(VISION_RESULT_SCHEMA);
 }
@@ -129,6 +174,10 @@ export interface JsonSchemaNode {
     enum?: readonly string[];
     // Guidance for the model, ignored by the walk below.
     description?: string;
+    // Only produced by strictSchema for a gateway that enforces the contract;
+    // the walk never sees these, since it reads VISION_RESULT_SCHEMA.
+    anyOf?: JsonSchemaNode[];
+    additionalProperties?: boolean;
 }
 
 /**
@@ -148,7 +197,16 @@ export function schemaViolations(schema: JsonSchemaNode, value: unknown, path: s
         for (const [key, childSchema] of Object.entries(schema.properties ?? {})) {
             const childPath = path ? `${path}.${key}` : key;
             const isRequired = schema.required?.includes(key) ?? false;
-            if (!(key in record) || record[key] === undefined) {
+            // `null` on a field the schema does not require is the model
+            // saying there is nothing here, which is what leaving it out says
+            // too. Rejecting one and accepting the other cost a whole read
+            // over an empty notes list (issue #37). On a required field it
+            // stays a violation: there was supposed to be something.
+            const absent =
+                !(key in record) ||
+                record[key] === undefined ||
+                (record[key] === null && !isRequired);
+            if (absent) {
                 if (isRequired) {
                     violations.push(childPath);
                 }
