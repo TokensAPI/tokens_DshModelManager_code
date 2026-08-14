@@ -85,7 +85,9 @@ describe('resolveSpawnPlan', () => {
                     comspec: 'cmd.exe',
                 });
                 expect(plan.command).toBe('cmd.exe');
-                expect(plan.args[3]).toContain('claude.cmd');
+                // findOnPath assembles candidates from PATHEXT's own casing
+                // (claude.CMD): assert case-insensitively, like the OS does.
+                expect(plan.args[3].toLowerCase()).toContain('claude.cmd');
                 expect(plan.windowsVerbatimArguments).toBe(true);
             } finally {
                 fs.rmSync(dir, { recursive: true, force: true });
