@@ -104,6 +104,33 @@ describe('top-level wiring', () => {
         const { stderr } = run(['--version']);
         expect(stderr).not.toContain('ExperimentalWarning');
     });
+
+    it('parses argv with node semantics when an Electron runtime is present (#25)', () => {
+        // In a packaged Electron host, process.versions.electron makes
+        // commander slice argv as an app (script path becomes a stray
+        // positional) unless parseAsync pins { from: 'node' }. The shim
+        // recreates that runtime shape around the real built CLI.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-electron-'));
+        const shim = path.join(dir, 'electron-shim.cjs');
+        fs.writeFileSync(
+            shim,
+            "Object.defineProperty(process.versions, 'electron', { value: '30.0.0', configurable: true });\n",
+        );
+        const version = spawnSync(process.execPath, ['--require', shim, cli, '--version'], {
+            encoding: 'utf-8',
+            env: baseEnv(),
+        });
+        expect(version.status).toBe(0);
+        expect(version.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+        const sub = spawnSync(
+            process.execPath,
+            ['--require', shim, cli, 'recover-paste', '--help'],
+            { encoding: 'utf-8', env: baseEnv() },
+        );
+        expect(sub.status).toBe(0);
+        expect(sub.stdout).toContain('recover-paste');
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
 });
 
 describe('guard', () => {
