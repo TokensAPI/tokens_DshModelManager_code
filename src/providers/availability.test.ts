@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { providerAvailable, providerChain } from './availability.ts';
+import { findOnPath, providerAvailable, providerChain } from './availability.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -45,6 +45,21 @@ describe('providerAvailable', () => {
         ).toBe(true);
         expect(providerAvailable('antigravity-cli', {}, { PATH: pathWith('agy.xyz') })).toBe(false);
     });
+
+    it.skipIf(process.platform !== 'win32')(
+        'prefers the executable extension over an npm POSIX shim (#30)',
+        () => {
+            // npm installs a bare-named sh shim right next to opencode.cmd;
+            // resolving the bare file first hands spawnSync something Windows
+            // cannot execute.
+            const dir = pathWith('opencode', 'opencode.cmd', 'opencode.ps1');
+            const found = findOnPath('opencode', {
+                PATH: dir,
+                PATHEXT: '.COM;.EXE;.BAT;.CMD',
+            });
+            expect(found?.toLowerCase().endsWith('opencode.cmd')).toBe(true);
+        },
+    );
 
     it('requires every setting for openai, not just the key', () => {
         const env = { PATH: pathWith() };

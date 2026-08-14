@@ -8,8 +8,9 @@
 // launched from inside Claude Code) to the innermost harness, the one whose
 // input box received the paste. Env fingerprints are the fallback: Claude Code
 // injects CLAUDECODE/CLAUDE_CODE_SESSION_ID, pi sets PI_CODING_AGENT, codex
-// injects CODEX_THREAD_ID; opencode injects nothing, which is exactly why
-// ancestry comes first.
+// injects CODEX_THREAD_ID, and opencode servers (OpenChamber included, issue
+// #30) inject OPENCODE/OPENCODE_PID. Ancestry still comes first where it
+// exists: it resolves nesting to the innermost harness.
 import * as childProcess from 'child_process';
 import * as path from 'path';
 
@@ -76,28 +77,50 @@ export function detectHarnessDetailed(): HarnessDetection {
     if (override) {
         return { harness: override === 'none' ? null : override, source: 'override' };
     }
-    try {
-        const ps = childProcess.execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], {
-            encoding: 'utf-8',
-            maxBuffer: 16 * 1024 * 1024,
-        });
-        const found = harnessFromPsTable(ps, process.pid);
-        if (found) {
-            return { harness: found, source: 'ancestry' };
+    // The ancestry pass runs only where a POSIX ps exists. Windows machines
+    // often carry an MSYS/Git ps that exists but rejects -Ao, and execFileSync
+    // prints the child's stderr to ours on failure by default, so every run
+    // used to lead with "ps: unknown option" noise (issue #30).
+    if (process.platform !== 'win32') {
+        try {
+            const ps = childProcess.execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], {
+                encoding: 'utf-8',
+                maxBuffer: 16 * 1024 * 1024,
+                stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            const found = harnessFromPsTable(ps, process.pid);
+            if (found) {
+                return { harness: found, source: 'ancestry' };
+            }
+        } catch {
+            // ps unavailable: fall through to env fingerprints
         }
-    } catch {
-        // ps unavailable (e.g. Windows): fall through to env fingerprints
     }
-    if (process.env.PI_CODING_AGENT) {
-        return { harness: 'pi', source: 'env' };
-    }
-    if (process.env.CODEX_THREAD_ID || process.env.CODEX_SANDBOX) {
-        return { harness: 'codex', source: 'env' };
-    }
-    if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_SESSION_ID) {
-        return { harness: 'claude-code', source: 'env' };
+    const fromEnv = harnessFromEnv(process.env);
+    if (fromEnv) {
+        return { harness: fromEnv, source: 'env' };
     }
     return { harness: null, source: 'none' };
+}
+
+/** The env-fingerprint fallback, one pure function so tests can pin it. */
+export function harnessFromEnv(env: NodeJS.ProcessEnv): string | null {
+    if (env.PI_CODING_AGENT) {
+        return 'pi';
+    }
+    if (env.CODEX_THREAD_ID || env.CODEX_SANDBOX) {
+        return 'codex';
+    }
+    // Before Claude Code: an opencode launched from inside Claude Code
+    // carries both fingerprints, and the innermost harness (the input box
+    // that received the paste) is the opencode one.
+    if (env.OPENCODE || env.OPENCODE_PID || env.OPENCODE_BINARY) {
+        return 'opencode';
+    }
+    if (env.CLAUDECODE || env.CLAUDE_CODE_SESSION_ID) {
+        return 'claude-code';
+    }
+    return null;
 }
 
 export function detectHarness(): string | null {
