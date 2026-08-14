@@ -6,9 +6,9 @@
 //
 // Nothing here reaches the network. The check is a comparison between the
 // pin inside each installed copy and the version of the CLI doing the
-// reporting, which is meaningful exactly when they differ: the dsh plugin and
-// an `npx @liustack/modlens@latest doctor` both run a current CLI, so a stale
-// copy shows up the moment the user asks for a health check.
+// reporting, which is meaningful exactly when they differ: a copy is frozen at
+// install time while the CLI reporting is whatever was just launched, so a
+// stale copy shows up the moment the user asks for a health check.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';

@@ -62,13 +62,13 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 
 ### 保持更新
 
-modlens 发布很频繁，而两种安装形态都会冻结在装进来的那个版本上。dsh 上重跑一遍安装即可。命令是 `add` 而不是 `update`：`update` 只在 package.json 里已记录的 semver 范围内挪动，所以一个当初装到 2.7.1 的 profile 只会更新到 2.8.0，永远进不了 3.x。
+modlens 发布很频繁，而两种安装形态都会冻结在装进来的那个版本上。dsh 上重跑一遍安装即可。命令是 `add` 而不是 `update`：`update` 只在 package.json 里已记录的 semver 范围内挪动，而普通安装写进去的是 caret 范围，所以一个当初装到 2.7.1 的 profile 只会更新到 2.8.0，永远进不了 3.x。
 
 ```sh
 npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@latest
 ```
 
-重启 dsh，然后用 `npx -y @deepseek-ai/dsh plugin --profile <name> list` 看看实际装到了什么。这一步值得做，因为拿到的未必是最新版：pnpm 11 会扣住最近 24 小时内发布的版本（`minimumReleaseAge`，默认开启），静默解析到比它更早的那个最新版本。`@latest` 改变不了这一点，dist-tag 会先被解析，然后和其他结果一样过冷静期。落后一天通常没关系。
+重启 dsh，然后用 `npx -y @deepseek-ai/dsh plugin --profile <name> list` 看看实际装到了什么。这一步值得做，因为拿到的未必是最新版：pnpm 11 会扣住最近 24 小时内发布的版本（`minimumReleaseAge`，默认开启），静默解析到比它更早的那个最新版本。`@latest` 改变不了这一点：冷静期先把候选版本过滤掉，dist-tag 才在剩下的里面解析，于是它落到了更旧的那个上。代价是一天的自然时间，不是一个版本，发布密集的一周里可能落后好几个版本。
 
 需要今天的版本时，改成点名版本号，而不是要一个 tag：
 
@@ -76,7 +76,7 @@ npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@latest
 npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.16.4
 ```
 
-`npm view @liustack/modlens version` 可以查到当前版本号。点名版本是一次明确指定而不是一次解析，所以 pnpm 11 会装上它，并把这一个版本作为已批准的例外写进该 profile 的 `pnpm-workspace.yaml`，其余一切仍留在窗口后面。更严格的情况（你自己配过 `minimumReleaseAge`，pnpm 会拒绝而不是批准）见[故障排查](troubleshooting.zh-CN.md#dsh-提示-declares-no-dshbundle--installed-as-a-plain-dependency)。
+`npm view @liustack/modlens version` 可以查到当前版本号。点名版本是一次明确指定而不是一次解析，所以 pnpm 11 会装上它，11.1.3 起还会把这一个版本作为已批准的例外写进该 profile 的 `pnpm-workspace.yaml`，其余一切仍留在窗口后面。更严格的情况（你自己配过 `minimumReleaseAge`，pnpm 会拒绝而不是批准）见[故障排查](troubleshooting.zh-CN.md#dsh-提示-declares-no-dshbundle--installed-as-a-plain-dependency)。
 
 skill 类 harness 上，skill 是一个拷贝出来的文件夹，拷贝会保留安装时的版本，重跑安装原地覆盖即可。`modlens doctor` 会读出它能找到的每一份拷贝里钉住的版本，并标出落后于当前 CLI 的那些，让版本漂移在坑到人之前就先暴露出来。
 

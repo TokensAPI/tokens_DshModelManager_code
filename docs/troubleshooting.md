@@ -125,24 +125,25 @@ Note that the hard refusal above only fires on an actual `denyModels` match agai
 
 The dsh profile installed an old modlens version. The `dsh.bundle` declaration
 exists since 3.9.0, and pnpm 11 holds back releases published in the last 24
-hours (`minimumReleaseAge`, on by default since 11.1; `pnpm config get` prints
-nothing for it because that command only shows settings you set yourself). When
+hours (`minimumReleaseAge`, on by default since 11.0; `pnpm config get` does not
+surface this particular default, so it prints nothing for it). When
 every version carrying the declaration was inside that window, pnpm silently
 resolved to an older one, which has no declaration, so dsh correctly treated it
 as a plain dependency and none of the tools appeared.
 
-`@latest` does not avoid this. The dist-tag is resolved first and then gated
-like any other result, which earlier versions of this page got wrong. Name the
-exact version instead, which is a deliberate request rather than a resolution:
+`@latest` does not avoid this, which earlier versions of this page got wrong.
+The gate filters the candidate versions before the tag is resolved, so the tag
+simply lands on an older one. Name the exact version instead, which pnpm treats
+as a deliberate request rather than a resolution:
 
 ```sh
 npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.16.4
 ```
 
-`npm view @liustack/modlens version` prints the current one. pnpm 11 installs a
-named version and records it as an approved exception in the profile's
-`pnpm-workspace.yaml`, leaving every other package and every future modlens
-release behind the window.
+`npm view @liustack/modlens version` prints the current one. pnpm 11 installs a named
+version, and since 11.1.3 also records it as an approved exception in the
+profile's `pnpm-workspace.yaml`, leaving every other package and every future
+modlens release behind the window.
 
 If you set `minimumReleaseAge` yourself, pnpm treats the policy as strict and
 refuses instead, naming the version and the cutoff
