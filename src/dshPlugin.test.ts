@@ -919,12 +919,15 @@ describe('dsh vision provider auto-discovery (#29)', () => {
     };
 
     it('wraps every route carrying wrappable family models, exactly once each', async () => {
-        const { registered } = await discoveryCtx([deepseek, opencode, unrelated]);
+        const { registered, attempts } = await discoveryCtx([deepseek, opencode, unrelated]);
         // deepseek-official keeps its historical id; others get modlens-<id>;
-        // a route with no family models is left alone. Exact-count assertions:
-        // the fake registry broadcasts on every registration like the real
-        // one, so a re-entrancy bug would show up here as duplicates.
+        // a route with no family models is left alone. Attempts are counted
+        // before the fake's duplicate check and the fake broadcasts on every
+        // registration like the real registry, so a re-entrancy bug shows up
+        // here as extra ATTEMPTS even when duplicate errors keep the success
+        // list clean.
         expect([...registered].sort()).toEqual(['deepseek-modlens', 'modlens-opencode-go']);
+        expect([...attempts].sort()).toEqual(['deepseek-modlens', 'modlens-opencode-go']);
     });
 
     it('honors the discover whitelist', async () => {
