@@ -22,10 +22,16 @@ const TOKEN_SHAPES: RegExp[] = [
     // Labeled keys need an explicit = or : separator; prose like
     // "token limit_exceeded" is diagnostics, not a credential.
     /\b(?:token|api[-_]?key)\b\s*[=:]\s*"?[A-Za-z0-9._~+/-]{12,}"?/gi,
-    // URL userinfo (http://alice:s3cr3t@proxy): the whole pair is the
-    // credential, and proxy URLs get quoted into connection errors.
-    /\/\/[^\s/@]{1,128}@/g,
 ];
+
+/**
+ * URL userinfo, anchored on a scheme so bare `//foo@bar` prose (a path, a
+ * mention, generated-source noise) is never torn. Greedy up to the LAST `@`
+ * before the host: WHATWG URLs accept unescaped extra `@`s in userinfo and
+ * fold the earlier ones into the password, so stopping at the first `@`
+ * leaked the password's tail (alice:p@ss -> "ss@host" survived).
+ */
+const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/]*@/gi;
 
 /**
  * Strip likely credentials from text about to travel into an error message,
@@ -39,7 +45,7 @@ const TOKEN_SHAPES: RegExp[] = [
  * issue; redactSecrets is the blunter net for error text.
  */
 export function maskUrlCredentials(url: string): string {
-    return url.replace(/(\/\/)[^/@]+@/, '$1***@');
+    return url.replace(/(\/\/)[^\s/]*@/, '$1***@');
 }
 
 export function redactSecrets(
@@ -56,5 +62,8 @@ export function redactSecrets(
     for (const shape of TOKEN_SHAPES) {
         out = out.replace(shape, '[redacted]');
     }
+    // Userinfo keeps its URL recognizable: the scheme and host survive, only
+    // the credential pair goes.
+    out = out.replace(URL_USERINFO, '$1[redacted]@');
     return out;
 }
