@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.12.0 - 2026-08-14
 
 - **The API providers work behind a proxy ([#20](https://github.com/liustack/modlens/issues/20)).** Node's fetch ignores `HTTP_PROXY`/`HTTPS_PROXY` entirely, so machines that reach the internet through a proxy could not use `gemini-api` at all, and the failure surfaced as a bare `fetch failed`. The three inline API providers now honor the standard environment variables (`NO_PROXY` included, via undici's `EnvHttpProxyAgent`), with an explicit setting as the escape hatch: `modlens config set proxy <url>` for all API providers, `<provider>.proxy` to scope it to one. A connect-level failure now names the unreachable host and points at both knobs instead of saying `fetch failed`. Scope is deliberate and documented: the proxy applies to API requests only, while the remote-image download path keeps its direct, IP-pinned connection, because its SSRF guards validate the exact address being contacted and a proxy would blind them. Thanks to @soloyu for a report that arrived with the diagnosis, the fix direction, and the security boundary already thought through.
 
