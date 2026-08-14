@@ -61,10 +61,18 @@ interface CmdToken {
  * verbatim, so a mixed argument still carries its quotes and is refused as
  * unprovable downstream. The optional `@` is batch's echo-off prefix.
  */
-function tokenizeCmdLine(line: string): CmdToken[] {
+function tokenizeCmdLine(line: string): CmdToken[] | null {
     // Each match is one argument: quoted runs and bare characters glued
     // together until whitespace outside quotes ends it.
-    const args = line.match(/(?:"[^"]*"|[^\s"])+/g) ?? [];
+    const pattern = /(?:"[^"]*"|[^\s"])+/g;
+    const args = line.match(pattern) ?? [];
+    // An unpaired quote makes the pattern skip past it, and everything after
+    // it would be read as separate arguments while cmd keeps them in one
+    // quoted run. Anything the matches did not consume means the line was not
+    // understood, so it is not a line to reproduce.
+    if (line.replace(pattern, '').trim() !== '') {
+        return null;
+    }
     return args.map((raw, index) => {
         const text = index === 0 ? raw.replace(/^@/, '') : raw;
         const whole = /^"([^"]*)"$/.exec(text);
@@ -94,12 +102,13 @@ const CMD_SYNTAX = /"|%~?\d/;
 
 /**
  * The same, for a token cmd did NOT see inside quotes: a caret escapes the
- * next character, and `&`, `|`, `<`, `>` end the command and start a
- * conjunction, a pipe, or a redirection, so their text never reaches the
+ * next character, `&`, `|`, `<`, `>` end the command and start a
+ * conjunction, a pipe, or a redirection, and parentheses open and close the
+ * blocks these templates are built from, so none of their text reaches the
  * program as an argument. Inside quotes all of these are ordinary
  * characters, which is how a real generator writes a path holding one.
  */
-const CMD_CONTROL = /[\^&|<>]/;
+const CMD_CONTROL = /[\^&|<>()]/;
 
 /**
  * Turn one shim token into the literal string cmd would pass, or null when
@@ -188,6 +197,30 @@ function progIsNode(content: string, shimDir: string): { ok: boolean; absolute?:
  * caller falls back instead of running the program differently than the shim
  * would have.
  */
+/**
+ * Lines the known generators write that do not run the program: the batch
+ * plumbing, the interpreter lookup, and the bookkeeping assignments. A line
+ * outside this list and outside the execution shape means the file is doing
+ * something this does not model, and modelling batch line by line is what
+ * kept producing edge cases, so the answer there is to stop.
+ */
+const STRUCTURAL_LINE = [
+    /^\s*$/,
+    /^\s*@?ECHO\s+off\s*$/i,
+    /^\s*@?SETLOCAL\s*$/i,
+    /^\s*@?ENDLOCAL\s*$/i,
+    /^\s*GOTO\s+\S+\s*$/i,
+    /^\s*:\S+\s*$/,
+    /^\s*EXIT\s+\/b\s*$/i,
+    /^\s*CALL\s+:\S+\s*$/i,
+    /^\s*@?SET\s+dp0=%~dp0\s*$/i,
+    /^\s*@?SET\s+"?_prog=[^"\r\n]*"?\s*$/i,
+    /^\s*@?SET\s+PATHEXT=%PATHEXT:[^%]*%\s*$/i,
+    /^\s*@?IF\s+EXIST\s+"[^"]*"\s*\(\s*$/i,
+    /^\s*\)\s*ELSE\s*\(\s*$/i,
+    /^\s*\)\s*$/,
+];
+
 export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTarget | null {
     // Always win32 path semantics: these shims exist only on Windows, and the
     // tests parse Windows paths on POSIX runners.
@@ -195,11 +228,23 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
     if (carriesForeignEnv(content)) {
         return null;
     }
-    // Every line that forwards the caller's arguments is a line the shim can
-    // take at run time (npm writes one, pnpm writes an IF and an ELSE), so
-    // all of them have to be provable and agree. Proving one and ignoring
-    // another would leave the branch the machine actually takes unchecked.
-    const executionLines = content.split(/\r?\n/).filter((line) => line.includes('%*'));
+    // Every line has to be accounted for. A line that runs the program must
+    // match the execution shape, and every other line must be one of the
+    // generators' known structural lines: an unrecognized line could run
+    // anything (a branch that does not forward the caller's arguments, a
+    // second command), and reading only the lines that look familiar is how
+    // a shim gets approved for something it does not do.
+    const lines = content.split(/\r?\n/);
+    const executionLines: string[] = [];
+    for (const line of lines) {
+        if (STRUCTURAL_LINE.some((pattern) => pattern.test(line))) {
+            continue;
+        }
+        if (!line.includes('%*')) {
+            return null;
+        }
+        executionLines.push(line);
+    }
     if (executionLines.length === 0) {
         return null;
     }
@@ -230,6 +275,9 @@ function sameTarget(a: CmdShimTarget, b: CmdShimTarget): boolean {
 function parseExecutionLine(line: string, content: string, shimDir: string): CmdShimTarget | null {
     {
         const tokens = tokenizeCmdLine(line);
+        if (!tokens) {
+            return null;
+        }
         const forwardIndex = tokens.findIndex((token) => !token.quoted && token.value === '%*');
         // The forwarder has to be the last thing on the line and the only one:
         // a token after it would be passed AFTER the caller's arguments, and a

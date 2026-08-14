@@ -246,6 +246,42 @@ describe('parseCmdShimTarget', () => {
         }
     });
 
+    it('declines a line it could not read end to end', () => {
+        // An unpaired quote makes the argument pattern skip past it, and the
+        // text after would be read as separate arguments while cmd keeps them
+        // in one quoted run. Leftover characters mean the line was not
+        // understood.
+        const withFixed = (fixed: string) =>
+            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('"two words'))).toBeNull();
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('"'))).toBeNull();
+    });
+
+    it('declines unquoted parentheses, which open and close the template blocks', () => {
+        const withFixed = (fixed: string) =>
+            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('fixed)value'))).toBeNull();
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('fixed(value'))).toBeNull();
+    });
+
+    it('declines a branch that runs the program without forwarding at all', () => {
+        // Reading only the lines that forward arguments would approve this
+        // shim for something the other branch does not do.
+        const branches = [
+            '@IF EXIST "%~dp0\\node.exe" (',
+            '  "%~dp0\\node.exe" "%~dp0\\..\\cli.js" %*',
+            ') ELSE (',
+            '  node "%~dp0\\..\\cli.js" fixed-only',
+            ')',
+        ].join('\r\n');
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', branches)).toBeNull();
+    });
+
+    it('declines a file carrying a line it does not recognize at all', () => {
+        const extra = `${PNPM_NODE}\r\n@del /q "%~dp0\\..\\cli.js"`;
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', extra)).toBeNull();
+    });
+
     it('declines when one execution branch is unprovable, even if another is fine', () => {
         // The machine picks the branch, not the parser: proving the ELSE while
         // the IF forwards twice would leave the taken path unchecked.
