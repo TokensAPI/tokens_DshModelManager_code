@@ -188,7 +188,10 @@ export function withoutEmptyOptionals(value: unknown, schema: JsonSchemaNode): u
         for (const [key, entry] of Object.entries(record)) {
             const childSchema = schema.properties?.[key];
             const isRequired = schema.required?.includes(key) ?? false;
-            if (entry === null && !isRequired && childSchema !== undefined) {
+            // A key a gateway added on its own is dropped when it is null
+            // too: it is the same empty answer, and leaving it in would mean
+            // a caller reading the passthrough still has to guard for null.
+            if (entry === null && !isRequired) {
                 continue;
             }
             cleaned[key] = childSchema ? withoutEmptyOptionals(entry, childSchema) : entry;

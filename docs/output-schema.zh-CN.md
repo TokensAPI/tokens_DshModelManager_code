@@ -71,6 +71,8 @@ CLI 向 stdout 打印一个 JSON 对象：
 
 必填字段：`summary`、`ocr`、`layout`、`semantics`、`visual`、`uncertainty`，也就是每一个顶层字段，`visual` 也不例外。（早期文档把 `visual` 写成可选，但强制执行的 schema 一直要求它，请以 schema 为准。）
 
+可选字段：`ocr.lines[].language`、`semantics.intent`、`semantics.entities[].evidence`、`semantics.relations`、`visual.dominant_colors`、`visual.style`、`visual.notes`。每一个要么不存在，要么就是它声明的类型，绝不会是 `null`：模型在这些位置没话可说时经常写 `null`，modlens 会在结果交到你手上之前把这个键删掉，所以读可选字段只需判断它在不在，不用判断是不是 null。
+
 `layout.regions[].type` 是自由字符串，不是封闭列表。区域类型本质是开放集合：固定枚举会让任何网页截图里的 `link`、门户页里的 `search` 直接落选，而一次落选就为了一个描述性标签废掉整次识别。常用词表写在该字段的 schema `description` 里作为指引，凡是在服务端强制执行这份 schema 的 provider 都会收到，没列到的类型不会有任何代价。
 
 相对 v1 的变化：删掉了像素级 `bbox` 坐标和数值型 `confidence` 分数。视觉模型会凭空编造这两样，v2 不再假装提供。

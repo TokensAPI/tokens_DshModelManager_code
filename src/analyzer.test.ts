@@ -233,6 +233,44 @@ describe.skipIf(onWindows)('provider subprocess handling', () => {
         );
     }, 30_000);
 
+    it('drops empty optionals before returning, on a non-openai route (#37)', async () => {
+        // The normalization lives at the shared boundary, so a CLI provider
+        // gets it too: a model with nothing to note writes null there, and
+        // what reaches the caller must never be a null where the contract
+        // promises a string or an array.
+        const nulls = JSON.stringify({
+            status: 'SUCCESS',
+            structured_output: {
+                summary: 'ok',
+                ocr: { full_text: '', lines: [{ text: 'a', language: null }] },
+                layout: { regions: [] },
+                semantics: { scene: '', intent: null, entities: [], relations: null },
+                visual: { dominant_colors: null, style: null, notes: null },
+                uncertainty: [],
+                vendor_extra: null,
+            },
+        });
+        const { bin, image } = fakeProvider(`#!/bin/sh\necho '${nulls}'\nexit 0\n`);
+
+        const analyzed = await analyzeImage({
+            input: image,
+            providerBin: bin,
+            timeoutMs: 20_000,
+            config: {},
+        });
+
+        expect(JSON.stringify(analyzed.result)).not.toContain('null');
+        const result = analyzed.result as {
+            visual: Record<string, unknown>;
+            semantics: Record<string, unknown>;
+            ocr: { lines: Array<Record<string, unknown>> };
+        };
+        expect('notes' in result.visual).toBe(false);
+        expect('relations' in result.semantics).toBe(false);
+        expect('language' in result.ocr.lines[0]).toBe(false);
+        expect(result.ocr.lines[0].text).toBe('a');
+    }, 30_000);
+
     it('runs a subprocess provider in an isolated workdir holding only the image', async () => {
         // An injection in the image should not be able to read siblings of the
         // original file, so the agent runs in a throwaway dir of one image.

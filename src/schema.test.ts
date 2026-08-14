@@ -22,6 +22,25 @@ const VALID = {
     uncertainty: ['small text unreadable'],
 };
 
+/** Every path the schema declares but does not require, in document order. */
+function optionalPaths(node: JsonSchemaNode, prefix: string): string[] {
+    if (node.type === 'array' && node.items) {
+        return optionalPaths(node.items, `${prefix}[]`);
+    }
+    if (node.type !== 'object') {
+        return [];
+    }
+    const found: string[] = [];
+    for (const [key, child] of Object.entries(node.properties ?? {})) {
+        const childPath = prefix ? `${prefix}.${key}` : key;
+        if (!(node.required?.includes(key) ?? false)) {
+            found.push(childPath);
+        }
+        found.push(...optionalPaths(child, childPath));
+    }
+    return found;
+}
+
 describe('missingSchemaFields', () => {
     it('accepts a fully valid result', () => {
         expect(missingSchemaFields(VALID)).toEqual([]);
@@ -211,5 +230,23 @@ describe('docs contract', () => {
         }
         // And nothing is called optional that the schema requires.
         expect(line).not.toMatch(/`visual` is optional/);
+    });
+
+    it('output-schema lists every optional field the schema leaves out of required', () => {
+        // The doc promises these are absent-or-typed and never null, which is
+        // only true while the list matches the schema (issue #37).
+        const fs = require('fs');
+        const path = require('path');
+        const doc = fs.readFileSync(
+            path.join(__dirname, '..', 'docs', 'output-schema.md'),
+            'utf-8',
+        ) as string;
+        const line = doc.split('\n').find((l: string) => l.startsWith('Optional fields:'));
+        expect(line).toBeDefined();
+        for (const field of optionalPaths(VISION_RESULT_SCHEMA as JsonSchemaNode, '')) {
+            expect(line, `${field} is optional in the schema but not listed`).toContain(
+                `\`${field}\``,
+            );
+        }
     });
 });
