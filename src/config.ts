@@ -5,6 +5,7 @@ import type { GuardsConfig } from './guard/rules.ts';
 import { providerAliases } from './providers/index.ts';
 import { parseExtraBody } from './util/extraBody.ts';
 import { parseJsonOrExplain } from './util/json.ts';
+import { maskUrlCredentials } from './util/redact.ts';
 
 // Layered configuration: CLI flags > environment variables > ~/.modlens/config.json > built-ins.
 
@@ -297,7 +298,14 @@ export function renderEffectiveConfig(
             const value = envValue ?? fileSettings[field];
             const source = envValue ? 'env' : fileSettings[field] !== undefined ? 'file' : null;
             if (value !== undefined && source) {
-                const shown = field === 'apiKey' ? maskKey(value) : value;
+                // config show exists to be pasted into issues: keys are
+                // masked, and a proxy URL's userinfo is a credential too.
+                const shown =
+                    field === 'apiKey'
+                        ? maskKey(value)
+                        : field === 'proxy'
+                          ? maskUrlCredentials(value)
+                          : value;
                 fields[field] = `${shown} (${source})`;
             }
         }
@@ -324,9 +332,13 @@ export function renderEffectiveConfig(
         effective.provider = config.provider.trim();
     }
     if (config.proxy?.trim()) {
-        effective.proxy = `${config.proxy.trim()} (file)`;
+        effective.proxy = `${maskUrlCredentials(config.proxy.trim())} (file)`;
     } else if (env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy) {
-        effective.proxy = `${(env.HTTPS_PROXY || env.https_proxy || env.HTTP_PROXY || env.http_proxy) as string} (env)`;
+        const raw = (env.HTTPS_PROXY ||
+            env.https_proxy ||
+            env.HTTP_PROXY ||
+            env.http_proxy) as string;
+        effective.proxy = `${maskUrlCredentials(raw)} (env)`;
     }
     if (config.guards) {
         const guards: Record<string, string> = {};

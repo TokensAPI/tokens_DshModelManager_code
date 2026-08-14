@@ -22,6 +22,9 @@ const TOKEN_SHAPES: RegExp[] = [
     // Labeled keys need an explicit = or : separator; prose like
     // "token limit_exceeded" is diagnostics, not a credential.
     /\b(?:token|api[-_]?key)\b\s*[=:]\s*"?[A-Za-z0-9._~+/-]{12,}"?/gi,
+    // URL userinfo (http://alice:s3cr3t@proxy): the whole pair is the
+    // credential, and proxy URLs get quoted into connection errors.
+    /\/\/[^\s/@]{1,128}@/g,
 ];
 
 /**
@@ -29,6 +32,16 @@ const TOKEN_SHAPES: RegExp[] = [
  * a cache file, or a model context. Known secrets are replaced exactly first,
  * then the shape patterns run as the second net.
  */
+/**
+ * Mask userinfo in a URL while keeping it recognizable:
+ * http://alice:s3cr3t@proxy:8080 -> http://***@proxy:8080. For display
+ * surfaces (config show) whose whole point is being safe to paste into an
+ * issue; redactSecrets is the blunter net for error text.
+ */
+export function maskUrlCredentials(url: string): string {
+    return url.replace(/(\/\/)[^/@]+@/, '$1***@');
+}
+
 export function redactSecrets(
     text: string,
     knownSecrets: ReadonlyArray<string | undefined | null> = [],

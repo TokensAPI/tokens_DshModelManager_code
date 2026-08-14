@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { redactSecrets } from './redact.ts';
+import { maskUrlCredentials, redactSecrets } from './redact.ts';
 
 describe('redactSecrets', () => {
     it('replaces known secrets exactly, wherever they appear', () => {
@@ -35,5 +35,27 @@ describe('redactSecrets', () => {
         expect(redactSecrets('code ab12 failed', ['ab12', undefined, null, ''])).toBe(
             'code ab12 failed',
         );
+    });
+
+    it('strips URL userinfo, the shape proxy URLs leak credentials in', () => {
+        const out = redactSecrets(
+            'connect ECONNREFUSED via http://alice:s3cr3t@proxy.example:8080',
+        );
+        expect(out).not.toContain('alice');
+        expect(out).not.toContain('s3cr3t');
+        expect(out).toContain('proxy.example:8080');
+    });
+});
+
+describe('maskUrlCredentials', () => {
+    it('masks userinfo while keeping the URL recognizable', () => {
+        expect(maskUrlCredentials('http://alice:s3cr3t@proxy.example:8080')).toBe(
+            'http://***@proxy.example:8080',
+        );
+        expect(maskUrlCredentials('socks5://bob@10.0.0.1:1080')).toBe('socks5://***@10.0.0.1:1080');
+    });
+
+    it('leaves credential-free URLs untouched', () => {
+        expect(maskUrlCredentials('http://proxy.example:8080')).toBe('http://proxy.example:8080');
     });
 });
