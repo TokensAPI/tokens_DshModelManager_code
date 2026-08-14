@@ -58,6 +58,24 @@ jobs:
           fi
       - run: pnpm test
       - run: pnpm build
+      # Everything that can refuse the release must run before the one
+      # irreversible step. A hand-pushed tag with no CHANGELOG section used to
+      # publish to npm first and only then fail on the notes; now the notes are
+      # extracted and validated while backing out is still free.
+      - name: Extract release notes from CHANGELOG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # Pull this version's section out of CHANGELOG.md: from its "## <version>"
+          # heading up to the next "## " heading.
+          awk -v ver="$version" '
+            $0 == "## " ver || index($0, "## " ver " ") == 1 { grab=1; next }
+            grab && /^## / { exit }
+            grab { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG section for $version" >&2
+            exit 1
+          fi
       # Idempotent: a manual publish (e.g. during a registry or Actions
       # incident) must not turn this run red when the tag arrives later.
       - name: Publish to npm (skipped when the version is already live)
@@ -73,18 +91,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          # Pull this version's section out of CHANGELOG.md: from its "## <version>"
-          # heading up to the next "## " heading.
-          awk -v ver="$version" '
-            $0 == "## " ver || index($0, "## " ver " ") == 1 { grab=1; next }
-            grab && /^## / { exit }
-            grab { print }
-          ' CHANGELOG.md > release-notes.md
-          if [ ! -s release-notes.md ]; then
-            echo "No CHANGELOG section for $version" >&2
-            exit 1
-          fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME already exists; skipping."
           else
