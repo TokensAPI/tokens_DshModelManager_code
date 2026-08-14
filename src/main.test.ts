@@ -116,19 +116,17 @@ describe('top-level wiring', () => {
             shim,
             "Object.defineProperty(process.versions, 'electron', { value: '30.0.0', configurable: true });\n",
         );
-        const version = spawnSync(process.execPath, ['--require', shim, cli, '--version'], {
+        // `config show` is the discriminating command: --version and --help
+        // exit before commander reports stray positionals, so they stay green
+        // even on the broken argv slicing. Mis-sliced argv sends `config
+        // show` into the default analyze command, which then exits 1 over the
+        // missing --input.
+        const show = spawnSync(process.execPath, ['--require', shim, cli, 'config', 'show'], {
             encoding: 'utf-8',
             env: baseEnv(),
         });
-        expect(version.status).toBe(0);
-        expect(version.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
-        const sub = spawnSync(
-            process.execPath,
-            ['--require', shim, cli, 'recover-paste', '--help'],
-            { encoding: 'utf-8', env: baseEnv() },
-        );
-        expect(sub.status).toBe(0);
-        expect(sub.stdout).toContain('recover-paste');
+        expect(show.status).toBe(0);
+        expect(show.stderr).not.toMatch(/--input/);
         fs.rmSync(dir, { recursive: true, force: true });
     });
 });
