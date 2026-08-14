@@ -207,7 +207,12 @@ export async function fetchRemoteImageBase64(
                 continue;
             }
 
+            // The early-exit throws cancel the body first: an error response
+            // can stream (or stall) indefinitely, and an active body keeps
+            // the agent's socket — and with it this process — alive after the
+            // error was already reported.
             if (!response.ok) {
+                await response.body?.cancel().catch(() => {});
                 throw new Error(
                     `Failed to download image (${response.status}): ${safeUrl(current.toString())}`,
                 );
@@ -218,6 +223,7 @@ export async function fetchRemoteImageBase64(
             // streaming, because content-length can be absent or a lie.
             const declaredLength = Number(response.headers.get('content-length'));
             if (Number.isFinite(declaredLength) && declaredLength > MAX_REMOTE_IMAGE_BYTES) {
+                await response.body?.cancel().catch(() => {});
                 throw new Error(
                     `Remote image is ${declaredLength} bytes, over the ${MAX_REMOTE_IMAGE_BYTES}-byte limit: ${safeUrl(current.toString())}`,
                 );
@@ -233,9 +239,10 @@ export async function fetchRemoteImageBase64(
         }
         throw new Error(`Too many redirects (max ${MAX_REDIRECTS}): ${safeUrl(url)}`);
     } finally {
-        for (const dispatcher of dispatchers) {
-            void dispatcher.close();
-        }
+        // Awaited, not fire-and-forget: close() resolves when the pool has
+        // actually let go of its sockets, which is what lets a standalone CLI
+        // exit instead of idling on a kept-alive connection.
+        await Promise.allSettled(dispatchers.map((dispatcher) => dispatcher.close()));
     }
 }
 
