@@ -57,3 +57,21 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 ```
 
 This registers a `read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin keeps its touch small (raw tool registration, the llm adapter surface for the vision variants, the attachment reader, and one agent pre-step hook) and degrades loudly if any of them moves.
+
+### Paste-to-path (web profile)
+
+Pasting an image into the dsh Web UI under a **text-only model** used to die at
+image admission. The plugin now ships a browser half (loaded automatically by
+dsh's client plugin system) that takes over the paste in exactly that case:
+the image bytes go to the plugin's `/modlens/paste` route on the dsh web
+server (loopback, magic-byte checked, 25 MB cap), land as a private temp file,
+and the composer receives the file path as plain text — the same shape Pi,
+OpenCode, and Claude Code hand their models, and the modlens skill's and
+`read_image` tool's primary trigger. Admission never fires because the message
+carries no image attachment.
+
+The takeover is conditional: when the selected model is a `(modlens vision)`
+variant or a known vision model, the native paste flow is left alone (variants
+convert at request time with the thumbnail preserved; vision models read
+images themselves). `pasteToPath: false` in the plugin row turns the whole
+feature off.

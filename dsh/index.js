@@ -43,6 +43,24 @@ export function apply(ctx, config = {}) {
   if (config.visionProvider !== false) {
     registerVisionProvider(ctx, config)
   }
+  // Paste-to-path: the browser half (dsh/client.js) intercepts image pastes
+  // and POSTs the bytes here; the file lands in a private temp dir and the
+  // path text goes into the composer instead of an image attachment. A
+  // text-only model then never trips image admission, and the path is the
+  // same trigger shape Pi, OpenCode, and Claude Code hand their models.
+  // webServer exists only under the web profile, and this cordis has no
+  // optional-inject form, so the route rides a scoped ctx.inject: the closure
+  // runs when the service appears and never runs where it does not (headless
+  // stays untouched, and the plugin itself never waits on it).
+  if (config.pasteToPath !== false && typeof ctx.inject === 'function') {
+    ctx.inject(['webServer'], (scope) => {
+      try {
+        registerPasteRoute(scope)
+      } catch (error) {
+        console.error(`[modlens] paste-to-path route skipped: ${error}`)
+      }
+    })
+  }
   // Registered as a raw JSON-Schema tool definition (no dsh package imports:
   // the developer-preview registry accepts these and out-of-tree resolution
   // of @deepseek-ai/dsh-tools is not yet reliable), so this plugin owns its
@@ -132,6 +150,68 @@ export function apply(ctx, config = {}) {
       console.error(`[modlens] read_image registration skipped: ${error}`)
     }
   }
+}
+
+// Image magic bytes for the paste route: refuse anything that is not a real
+// image before a byte touches disk. Mirrors the CLI's sniffing table.
+const PASTE_SNIFFS = [
+  { ext: '.png', test: (b) => b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  { ext: '.jpg', test: (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { ext: '.gif', test: (b) => b.length >= 6 && b.toString('ascii', 0, 3) === 'GIF' },
+  { ext: '.webp', test: (b) => b.length >= 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' },
+  { ext: '.heic', test: (b) => b.length >= 12 && b.toString('ascii', 4, 8) === 'ftyp' },
+]
+const PASTE_MAX_BYTES = 25 * 1024 * 1024
+
+/**
+ * POST /modlens/paste: image bytes in, `{ path }` out. Bound to the dsh web
+ * server, which listens on loopback by default; the file is private (0600)
+ * in a fresh unpredictable temp dir, magic-byte checked and size-capped.
+ */
+function registerPasteRoute(ctx) {
+  ctx.webServer.register({
+    name: 'modlens-paste',
+    kind: 'exact',
+    path: '/modlens/paste',
+    handler: async (req, res) => {
+      if (req.method !== 'POST') {
+        res.writeHead(405).end()
+        return
+      }
+      try {
+        const chunks = []
+        let total = 0
+        for await (const chunk of req) {
+          total += chunk.length
+          if (total > PASTE_MAX_BYTES) {
+            res.writeHead(413, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: `image over the ${PASTE_MAX_BYTES}-byte limit` }))
+            req.destroy()
+            return
+          }
+          chunks.push(chunk)
+        }
+        const buffer = Buffer.concat(chunks)
+        const sniff = PASTE_SNIFFS.find((s) => s.test(buffer))
+        if (!sniff) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: 'not a recognized image (png/jpeg/gif/webp/heic)' }))
+          return
+        }
+        const { mkdtemp, writeFile } = await import('node:fs/promises')
+        const { tmpdir } = await import('node:os')
+        const { join } = await import('node:path')
+        const dir = await mkdtemp(join(tmpdir(), 'modlens-dsh-paste-'))
+        const file = join(dir, `paste${sniff.ext}`)
+        await writeFile(file, buffer, { mode: 0o600 })
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ path: file }))
+      } catch (error) {
+        res.writeHead(500, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: String(error && error.message ? error.message : error) }))
+      }
+    },
+  })
 }
 
 /**
