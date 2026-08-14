@@ -38,6 +38,7 @@ Issues are welcome any time: [open one](https://github.com/liustack/modlens/issu
 
 **Paste an image and it reads it.** No saving to a file and passing a path first.
 
+- **The lightest touch on the market.** No hooks, no wrappers, no local proxy daemon, not a single line changed in any harness config: on the skill harnesses it is exactly one skill folder, on dsh exactly one plugin. Uninstalling is deleting a folder, and your agents are back to stock.
 - **Zero-config start.** Reuses what Claude Code, Codex, OpenCode, or Pi already have set up: the multimodal models on your machine go straight to work. Nothing at all? Antigravity CLI is a free no-key channel, and a free Gemini key brings a read down to 5-10 seconds.
 - **Evidence, not imagination.** Full transcription, reading-order layout regions, entity and relation lists. The model quotes specifics.
 - **Install once, use everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
