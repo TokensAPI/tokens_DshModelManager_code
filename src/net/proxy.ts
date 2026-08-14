@@ -7,7 +7,7 @@
 // exact address being connected to, and routing it through a proxy would
 // bypass that boundary.
 import type { Dispatcher } from 'undici';
-import { EnvHttpProxyAgent, ProxyAgent } from 'undici';
+import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from 'undici';
 
 /**
  * The dispatcher an API provider request should use. An explicit setting
@@ -78,14 +78,31 @@ export async function apiFetch(
 ): Promise<Response> {
     const dispatcher = apiProxyDispatcher(proxy, env);
     try {
-        return await fetch(
-            url,
-            // `dispatcher` is a Node/undici extension to fetch's options.
-            dispatcher
-                ? ({ ...init, dispatcher } as RequestInit & { dispatcher: Dispatcher })
-                : init,
-        );
+        // Dispatcher and fetch must come from the SAME undici: handing our
+        // undici's ProxyAgent to the host's built-in fetch (a different
+        // undici major) fails with UND_ERR_INVALID_ARG (issue #23). Without
+        // a proxy, the host fetch stays in charge.
+        if (dispatcher) {
+            const response = (await undiciFetch(url, {
+                ...(init as Parameters<typeof undiciFetch>[1]),
+                dispatcher,
+            })) as unknown as Response;
+            // Buffer the body before closing: close() waits for in-flight
+            // requests, and a kept-alive pool would otherwise pin the event
+            // loop so the CLI never exits (exitCode relies on loop drain).
+            const buffered = Buffer.from(await response.arrayBuffer());
+            await dispatcher.close();
+            return new Response(buffered, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+            });
+        }
+        return await fetch(url, init);
     } catch (error) {
+        if (dispatcher) {
+            await dispatcher.close().catch(() => {});
+        }
         const hint = connectFailureHint(error, url);
         throw hint ? new Error(hint, { cause: error }) : error;
     }

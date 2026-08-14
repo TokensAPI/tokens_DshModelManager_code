@@ -53,7 +53,7 @@
   },
   "homepage": "https://github.com/liustack/modlens#readme",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.19"
   },
   "dependencies": {
     "commander": "^13.1.0",

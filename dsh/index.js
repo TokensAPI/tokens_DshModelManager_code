@@ -297,21 +297,47 @@ function abortableWait(promise, signal) {
   })
 }
 
+/**
+ * Image blocks hide at two depths: top-level message content (pastes), and
+ * inside tool-result content (dsh's own read_image tool nests one there).
+ * The upstream adapter's rejection check recurses (issue #24), so the
+ * conversion must recurse the same way or a nested image wedges the session
+ * permanently — the durable log keeps the real block, and every later turn
+ * re-fails on it.
+ */
+function contentHasImage(blocks) {
+  return (
+    Array.isArray(blocks) &&
+    blocks.some(
+      (b) => b?.type === 'image' || (b?.type === 'tool-result' && contentHasImage(b.content)),
+    )
+  )
+}
+
+async function convertBlocks(blocks, convertOne) {
+  const out = []
+  for (const block of blocks) {
+    if (block?.type === 'image') {
+      out.push(await convertOne(block))
+    } else if (block?.type === 'tool-result' && contentHasImage(block.content)) {
+      out.push({ ...block, content: await convertBlocks(block.content, convertOne) })
+    } else {
+      out.push(block)
+    }
+  }
+  return out
+}
+
 async function convertImagesToEvidence(ctx, messages, signal, adapter) {
   const out = []
   for (const message of messages) {
-    if (!Array.isArray(message.content) || !message.content.some((b) => b?.type === 'image')) {
+    if (!contentHasImage(message.content)) {
       out.push(message)
       continue
     }
-    const content = []
-    for (const block of message.content) {
-      if (block?.type !== 'image') {
-        content.push(block)
-        continue
-      }
-      content.push(await abortableWait(cachedEvidence(ctx, adapter, block), signal))
-    }
+    const content = await convertBlocks(message.content, (block) =>
+      abortableWait(cachedEvidence(ctx, adapter, block), signal),
+    )
     out.push({ ...message, content })
   }
   return out
@@ -331,28 +357,19 @@ function registerAutoRead(ctx) {
     if (decision.kind !== 'enter') {
       return decision
     }
-    const hasImage = decision.messages.some(
-      (message) =>
-        Array.isArray(message.content) &&
-        message.content.some((block) => block?.type === 'image'),
-    )
-    if (!hasImage) {
+    if (!decision.messages.some((message) => contentHasImage(message.content))) {
       return decision
     }
     const messages = []
     for (const message of decision.messages) {
-      if (!Array.isArray(message.content)) {
+      if (!contentHasImage(message.content)) {
         messages.push(message)
         continue
       }
-      const content = []
-      for (const block of message.content) {
-        if (block?.type !== 'image') {
-          content.push(block)
-          continue
-        }
-        content.push((await readImageBlock(ctx, block, payload.signal)).block)
-      }
+      const content = await convertBlocks(
+        message.content,
+        async (block) => (await readImageBlock(ctx, block, payload.signal)).block,
+      )
       messages.push({ ...message, content })
     }
     return { kind: 'enter', messages }

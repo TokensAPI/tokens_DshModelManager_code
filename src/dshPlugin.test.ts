@@ -176,6 +176,46 @@ describe('dsh plugin auto-read (phase 2)', () => {
         }
     });
 
+    it('auto-read also converts images nested in tool-result content (#24)', async () => {
+        const handlers = await load();
+        const cli = fakeCli(
+            `console.log(JSON.stringify({ result: { summary: 'S', ocr: { full_text: 'DEEP-NESTED' }, uncertainty: [] } }))`,
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        try {
+            // Two levels down: tool-result inside tool-result, image at the bottom.
+            const messages = [
+                {
+                    role: 'tool',
+                    content: [
+                        {
+                            type: 'tool-result',
+                            toolCallId: 'outer',
+                            content: [
+                                {
+                                    type: 'tool-result',
+                                    toolCallId: 'inner',
+                                    content: [{ type: 'image', attachment: { id: 'deep' } }],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ];
+            const decision = await handlers['agent/pre-step'](
+                { messages, signal: undefined },
+                async () => ({ kind: 'enter', messages }),
+            );
+            const outer = decision.messages?.[0].content[0] as unknown as {
+                content: Array<{ content: Array<{ type: string; text?: string }> }>;
+            };
+            expect(outer.content[0].content[0].type).toBe('text');
+            expect(outer.content[0].content[0].text).toContain('DEEP-NESTED');
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
     it('degrades a failed read to an explanatory block instead of rejecting the step', async () => {
         const handlers = await load();
         const cli = fakeCli(`console.error('engine down'); process.exit(1)`);
@@ -391,6 +431,98 @@ describe('dsh plugin request-time image conversion (v2)', () => {
                 // drain
             }
             expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
+    it('converts images nested inside tool-result content on the wire (#24)', async () => {
+        // dsh's native read_image nests its image block inside tool-result
+        // content; the upstream adapter's rejection check recurses, so the
+        // conversion must too or the session wedges on its own history.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-nested-'));
+        const cli = path.join(cliDir, 'cli.js');
+        fs.writeFileSync(
+            cli,
+            `console.log(JSON.stringify({result:{summary:'S',ocr:{full_text:'NESTED-EVIDENCE'},uncertainty:[]}}))`,
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        try {
+            const registered: Array<{ adapter: Record<string, CallableFunction> }> = [];
+            const streamed: Array<{
+                messages: Array<{
+                    content: Array<{
+                        type: string;
+                        text?: string;
+                        content?: Array<{ type: string; text?: string }>;
+                    }>;
+                }>;
+            }> = [];
+            plugin.apply(
+                {
+                    tools: { register: () => {} },
+                    attachments: {
+                        readImage: async () => ({
+                            data: new Uint8Array([1]),
+                            ref: { mediaType: 'image/png' },
+                        }),
+                    },
+                    on: () => {},
+                    llm: {
+                        registerAdapter: (
+                            _p: string[],
+                            adapter: Record<string, CallableFunction>,
+                        ) => {
+                            registered.push({ adapter });
+                        },
+                        listModels: async () => [],
+                        resolveModelInfo: async () => ({}),
+                        stream: (options: never) => {
+                            streamed.push(options);
+                            return (async function* () {})();
+                        },
+                    },
+                } as never,
+                {},
+            );
+            const request = {
+                provider: 'deepseek-modlens',
+                model: 'm',
+                messages: [
+                    {
+                        role: 'tool',
+                        content: [
+                            {
+                                type: 'tool-result',
+                                toolCallId: 'call_1',
+                                content: [
+                                    { type: 'text', text: '<path>shot.png</path>' },
+                                    { type: 'image', attachment: { id: 'att-nested' } },
+                                ],
+                            },
+                        ],
+                    },
+                ],
+            };
+            for await (const _c of registered[0].adapter.stream(
+                request,
+            ) as AsyncIterable<unknown>) {
+                // drain
+            }
+            const wire = streamed[0].messages[0].content[0];
+            expect(wire.type).toBe('tool-result');
+            expect(wire.content?.[0]).toEqual({ type: 'text', text: '<path>shot.png</path>' });
+            expect(wire.content?.[1].type).toBe('text');
+            expect(wire.content?.[1].text).toContain('NESTED-EVIDENCE');
+            // The caller's request keeps the nested image: the log stays native.
+            const original = request.messages[0].content[0] as {
+                content: Array<{ type: string }>;
+            };
+            expect(original.content[1].type).toBe('image');
         } finally {
             delete process.env.MODLENS_DSH_CLI;
         }

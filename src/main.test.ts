@@ -256,3 +256,121 @@ describe('config show', () => {
         fs.rmSync(home, { recursive: true, force: true });
     });
 });
+
+describe.skipIf(process.platform === 'win32')(
+    'proxy integration against the built CLI (#23)',
+    () => {
+        it('reaches an API provider through an HTTP proxy with the real dispatcher', async () => {
+            const http = await import('http');
+            // A fake Gemini endpoint answering a schema-complete vision result.
+            const visionResult = {
+                summary: 'PROXIED-OK',
+                ocr: { full_text: 'PROXIED-OK', lines: [] },
+                layout: { regions: [] },
+                semantics: { scene: 's', entities: [], relations: [] },
+                visual: { dominant_colors: [], style: 's', notes: [] },
+                uncertainty: [],
+            };
+            const gemini = http.createServer((_req, res) => {
+                res.writeHead(200, { 'content-type': 'application/json' });
+                res.end(
+                    JSON.stringify({
+                        candidates: [
+                            { content: { parts: [{ text: JSON.stringify(visionResult) }] } },
+                        ],
+                    }),
+                );
+            });
+            await new Promise<void>((r) => gemini.listen(0, '127.0.0.1', r));
+            const geminiPort = (gemini.address() as { port: number }).port;
+
+            // A minimal proxy speaking both forms undici's ProxyAgent uses:
+            // absolute-URL forwarding for http targets, CONNECT for https.
+            const net = await import('net');
+            let proxied = 0;
+            const proxy = http.createServer((req, res) => {
+                proxied += 1;
+                const target = new URL(req.url as string);
+                const upstream = http.request(
+                    {
+                        host: target.hostname,
+                        port: target.port,
+                        path: target.pathname + target.search,
+                        method: req.method,
+                        headers: req.headers,
+                    },
+                    (upstreamRes) => {
+                        res.writeHead(upstreamRes.statusCode as number, upstreamRes.headers);
+                        upstreamRes.pipe(res);
+                    },
+                );
+                req.pipe(upstream);
+            });
+            proxy.on('connect', (req, clientSocket, head) => {
+                proxied += 1;
+                const [host, port] = (req.url as string).split(':');
+                const upstream = net.connect(Number(port), host, () => {
+                    clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+                    upstream.write(head);
+                    upstream.pipe(clientSocket);
+                    clientSocket.pipe(upstream);
+                });
+                upstream.on('error', () => clientSocket.destroy());
+                clientSocket.on('error', () => upstream.destroy());
+            });
+            await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', r));
+            const proxyPort = (proxy.address() as { port: number }).port;
+
+            // A private HOME so the real ~/.modlens/config.json stays untouched.
+            const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-proxy-'));
+            fs.mkdirSync(path.join(home, '.modlens'));
+            fs.writeFileSync(
+                path.join(home, '.modlens', 'config.json'),
+                JSON.stringify({
+                    provider: 'gemini-api',
+                    proxy: `http://127.0.0.1:${proxyPort}`,
+                    providers: {
+                        'gemini-api': {
+                            apiKey: 'test-key',
+                            baseUrl: `http://127.0.0.1:${geminiPort}`,
+                        },
+                    },
+                }),
+            );
+            const image = path.join(home, 'x.png');
+            fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+            try {
+                // Async spawn, never the sync runner: spawnSync blocks this
+                // process's event loop, freezing the fake servers the CLI must
+                // reach, and every request then dies by timeout.
+                const { spawn } = await import('child_process');
+                const child = spawn(process.execPath, [cli, '-i', image, '-p', 'gemini-api'], {
+                    env: baseEnv({ HOME: home, USERPROFILE: home }),
+                });
+                let stdout = '';
+                let stderr = '';
+                child.stdout.on('data', (d) => {
+                    stdout += d;
+                });
+                child.stderr.on('data', (d) => {
+                    stderr += d;
+                });
+                const timer = setTimeout(() => child.kill('SIGKILL'), 30_000);
+                const code = await new Promise((resolve) => child.on('close', resolve));
+                clearTimeout(timer);
+                // The 3.12.1 bundled dispatcher threw before any request was made
+                // (UND_ERR_INVALID_ARG); a same-sourced external undici must both
+                // succeed and actually route through the proxy.
+                expect(stderr).not.toContain('UND_ERR_INVALID_ARG');
+                expect(code).toBe(0);
+                expect(JSON.parse(stdout).result.summary).toBe('PROXIED-OK');
+                expect(proxied).toBeGreaterThan(0);
+            } finally {
+                gemini.close();
+                proxy.close();
+                fs.rmSync(home, { recursive: true, force: true });
+            }
+        });
+    },
+);

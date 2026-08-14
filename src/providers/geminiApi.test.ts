@@ -98,27 +98,22 @@ describe('executeGeminiApi', () => {
         ).rejects.toThrow('Gemini API error 429');
     });
 
-    it('routes through a configured proxy dispatcher (#20)', async () => {
-        const inits: Array<{ dispatcher?: unknown }> = [];
-        vi.stubGlobal('fetch', async (_url: string, init: { dispatcher?: unknown }) => {
-            inits.push(init);
+    it('keeps the host fetch in charge when no proxy is configured (#23)', async () => {
+        // The proxy path uses undici's own fetch (same-sourced dispatcher),
+        // so the global stub below being hit proves the direct path; the
+        // proxied path is covered end-to-end in main.test.ts.
+        let hits = 0;
+        vi.stubGlobal('fetch', async () => {
+            hits += 1;
             return new Response('{}', { status: 500 });
         });
         await executeGeminiApi({
             imageSource: tmpImage,
             imageKind: 'local',
             timeoutMs: 5000,
-            settings: { apiKey: 'AIzaTest', proxy: 'http://127.0.0.1:7890' },
-        }).catch(() => {});
-        expect(inits[0].dispatcher).toBeDefined();
-        // And without a proxy, fetch keeps its default direct path.
-        await executeGeminiApi({
-            imageSource: tmpImage,
-            imageKind: 'local',
-            timeoutMs: 5000,
             settings: { apiKey: 'AIzaTest' },
         }).catch(() => {});
-        expect(inits[1].dispatcher).toBeUndefined();
+        expect(hits).toBe(1);
     });
 
     it('turns a connect failure into the proxy hint instead of bare fetch failed (#20)', async () => {

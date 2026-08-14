@@ -18,6 +18,14 @@ export default defineConfig({
             // so adding a new built-in import can never silently bundle to undefined.
             external: [
                 'commander',
+                // Never bundle undici (issue #23): its internals condition-
+                // require node:http2 and friends, which bundling breaks (the
+                // embedded ProxyAgent threw "http2.connect is not a function"),
+                // and a bundled Dispatcher handed to the host's own fetch is a
+                // cross-version interface mismatch (UND_ERR_INVALID_ARG).
+                // Resolving it from node_modules keeps dispatcher and fetch
+                // same-sourced and intact.
+                'undici',
                 ...builtinModules,
                 ...builtinModules.map((name) => `node:${name}`),
             ],

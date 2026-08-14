@@ -39,10 +39,10 @@ function providerNamed(report: ReturnType<typeof buildDoctorReport>, name: strin
 }
 
 describe('buildDoctorReport: Node and node:sqlite', () => {
-    it('reports the running Node version against the 22.13 floor', () => {
+    it('reports the running Node version against the 22.19 floor', () => {
         const report = buildDoctorReport({ config: {}, env: {} });
         expect(report.node.version).toBe(process.version);
-        expect(report.node.minimum).toBe('22.13');
+        expect(report.node.minimum).toBe('22.19');
         // The suite runs on a supported runtime (CI matrix is 22 and 24).
         expect(report.node.meetsMinimum).toBe(true);
         expect(typeof report.nodeSqlite.available).toBe('boolean');
