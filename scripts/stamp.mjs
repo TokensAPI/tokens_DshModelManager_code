@@ -167,30 +167,46 @@ export function readStampedVersions(root = repoRoot) {
 }
 
 /**
- * Every install command in `text` that would not install the version this
- * repo ships. pnpm 11 holds back releases published in the last 24 hours and
- * resolves a tag against what survives, so only an exact x.y.z installs the
- * current one, and only a command that lifts the gate itself may ask for a
- * tag. Exported so the rules are testable directly: reviewing this check by
- * hand is how five ways of writing an unpinned install got past it.
+ * Every install command in `text` that cannot be proven to install the version
+ * this repo ships. pnpm 11 holds back releases published in the last 24 hours
+ * and resolves a tag against what survives, so only an exact x.y.z installs
+ * the current one, and only a command that lifts the gate itself may ask for
+ * a tag.
+ *
+ * Proven, not searched for: a regex slice between two package mentions is not
+ * a shell command, so a gate-lifting flag in a comment, in a piped command, or
+ * after a `&&` could clear an install that never carried it. Text is split
+ * into segments at the separators that actually end a command, comments are
+ * removed first, and anything left holding the package without a provable
+ * exact pin is reported rather than assumed fine. Exported so the rules are
+ * testable directly: reviewing this check by hand is how eight ways of
+ * writing an unpinned install got past earlier versions of it.
  */
-export function unpinnedInstalls(text) {
-    // A command split with a trailing backslash carries its spec and its
-    // flags on different lines.
-    const joined = text.replace(/\\\n\s*/g, ' ');
-    const pattern = /add\s+['"`]?@liustack\/modlens(@[^\s`'")]*)?/g;
+export function unpinnedInstalls(text, pkgName = '@liustack/modlens') {
+    const escaped = pkgName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // A spec runs to the first character that cannot be part of one. The
+    // exactness test is anchored so `3.16.4+local` and `3` both fail it.
+    const spec = new RegExp(`${escaped}@([^\\s\`'";|&#)]*)`, 'g');
+    const bare = new RegExp(`\\b(add|install)\\b[^\\n]*?${escaped}(?![\\w./@-])`);
     const found = [];
+    // CRLF first, so a continuation ending in \r\n joins like any other.
+    const joined = text.replace(/\r\n/g, '\n').replace(/\\\n\s*/g, ' ');
     for (const line of joined.split('\n')) {
-        const matches = [...line.matchAll(pattern)];
-        for (const [index, match] of matches.entries()) {
-            const spec = (match[1] ?? '').slice(1);
-            if (/^\d+\.\d+\.\d+$/.test(spec)) continue;
-            // The gate-lifting flag counts only for the command it belongs
-            // to: a table row can hold two commands, and the flag on one of
-            // them says nothing about the other.
-            const end = index + 1 < matches.length ? matches[index + 1].index : line.length;
-            if (line.slice(match.index, end).includes('--config.minimumReleaseAge=0')) continue;
-            found.push(line.slice(match.index, end).trim());
+        // A comment cannot lift anything, and it cannot be an install either.
+        const code = line.replace(/(^|\s)#.*$/, '');
+        for (const segment of code.split(/&&|\|\||[|;]/)) {
+            if (!segment.includes(pkgName)) continue;
+            if (segment.includes('--config.minimumReleaseAge=0')) continue;
+            const specs = [...segment.matchAll(spec)]
+                .map((match) => match[1])
+                // `@<pinned>` is a placeholder in prose describing the shape
+                // of a command, not a command: nobody can run it, so it
+                // cannot install a stale version either.
+                .filter((value) => !/^<[^>]*>$/.test(value));
+            const unpinned = specs.filter((value) => !/^\d+\.\d+\.\d+$/.test(value));
+            if (unpinned.length > 0 || (specs.length === 0 && bare.test(segment))) {
+                found.push(segment.trim());
+            }
         }
     }
     return found;
