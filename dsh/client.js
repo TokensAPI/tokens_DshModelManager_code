@@ -91,18 +91,21 @@ window.__ModuleLoader__.load({
     // swallowing pastes into a dead endpoint.
     var routeAvailable = true
     var verdicts = {}
-    var VERDICT_TTL_MS = 15000
     // A verdict older than this is UNKNOWN again, even while a refresh is in
     // flight: the route's model metadata can change mid-session (discovery
     // sweeps, provider mounts), and acting on a long-stale `true` is exactly
-    // the vision-model hijack this design exists to prevent.
+    // the vision-model hijack this design exists to prevent. The bound is a
+    // backstop, since every focus and paste re-asks anyway.
     var VERDICT_MAX_AGE_MS = 60000
 
     function refreshVerdict(label) {
       if (!routeAvailable) return
       var cached = verdicts[label]
-      var now = Date.now()
-      if (cached && (cached.pending || now - cached.at < VERDICT_TTL_MS)) return
+      // Dedupe only on an in-flight request, never on freshness: the host's
+      // model inventory can change under an unchanged label (a same-named
+      // route mounting mid-session), so every focus and paste re-asks and a
+      // stale answer survives at most one local round-trip.
+      if (cached?.pending) return
       var entry = { pending: true, takeover: cached ? cached.takeover : false, at: cached ? cached.at : 0 }
       verdicts[label] = entry
       fetch(`/modlens/paste?model=${encodeURIComponent(label)}`)
