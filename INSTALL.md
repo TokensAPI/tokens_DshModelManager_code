@@ -1,11 +1,35 @@
 # Installing ModLens (for an AI agent)
 
-You are an AI agent and your user told you to install the `modlens` skill. This
-document is the procedure. Follow it in order. Every step is safe to run again,
-and every step names what to do when it fails. Commands are POSIX shell
-(macOS or Linux). A Windows note follows each block that needs one.
+You are an AI agent and your user told you to install `modlens`. This document
+is the procedure. Follow it in order. Every step is safe to run again, and
+every step names what to do when it fails. Commands are POSIX shell (macOS or
+Linux). A Windows note follows each block that needs one.
 
-The whole install is four steps:
+## Step 0: are you inside DeepSeek Harness (dsh)?
+
+If you are, stop and read this section instead of the rest of the file. On dsh
+modlens is not a skill: it is a native plugin, and installing the skill folder
+alone leaves the user without the `read_image` tool and without the
+`(modlens vision)` model entries they are looking for (issue
+[#32](https://github.com/liustack/modlens/issues/32)).
+
+You are on dsh if `~/.dsh/` exists, or the conversation runs in the DeepSeek
+Harness web or desktop app. One command installs the plugin:
+
+```sh
+npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
+```
+
+Then tell the user to restart dsh and look at the model selector: entries
+suffixed `(modlens vision)` mean the plugin is live. Pasting also works on the
+plain text-only entries, where the image becomes a file path. Engines are
+configured exactly as below (`~/.modlens/config.json` is shared), so continue
+at step 3 for the engine, then verify with `doctor`. Skip steps 1 and 2: there
+is no skill folder to copy. If `dsh` warns `declares no dsh.bundle`, the
+release-age gate installed an old version, and the `@latest` above is what
+avoids it.
+
+For every other harness, the whole install is four steps:
 
 1. Find the skill directory for your harness.
 2. Put the `skills/modlens` folder into it.

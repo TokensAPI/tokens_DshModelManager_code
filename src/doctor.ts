@@ -12,6 +12,7 @@ import {
     type ReuseHarness,
     resolveProviderSettings,
 } from './config.ts';
+
 import { detectActiveModel } from './guard/index.ts';
 import { allowPatterns, denyPatterns, evaluateGuard, type ModelSource } from './guard/rules.ts';
 import {
@@ -21,6 +22,7 @@ import {
 } from './providers/availability.ts';
 import { resolveProvider } from './providers/index.ts';
 import { detectHarnessDetailed, type HarnessSource } from './recoverPaste/detect.ts';
+import { findSkillInstalls, type SkillInstall } from './skillPin.ts';
 
 /** The lowest Node this release supports (see package.json engines). */
 export const MIN_NODE = '22.19';
@@ -68,6 +70,8 @@ export interface DoctorReport {
     /** The failover order actually available on this machine, per input kind. */
     chains: { local: string[]; remote: string[] };
     harness: { detected: string | null; source: HarnessSource };
+    /** Installed skill copies and the version each one pins (issue #33). */
+    skillInstalls: SkillInstall[];
     /** The invocation guard's rules and a live evaluation (see guards config). */
     guard: {
         rules: number;
@@ -102,6 +106,10 @@ export interface DoctorInput {
     configPath?: string;
     /** Discovery overrides (home, cachePath, runCli), mainly for tests. */
     auto?: DiscoverOptions;
+    /** This CLI's version, compared against each installed skill copy's pin. */
+    version?: string;
+    /** Home override for the skill-copy scan, mainly for tests. */
+    home?: string;
 }
 
 /** Parse "v24.13.0" or "22.13" into [major, minor]. */
@@ -296,6 +304,7 @@ export function buildDoctorReport(input: DoctorInput): DoctorReport {
             remote: composeChain('remote', input.config, reuseOptions).map(chainEntryName),
         },
         harness: { detected: harnessDetection.harness, source: harnessDetection.source },
+        skillInstalls: input.version ? findSkillInstalls(input.version, input.home) : [],
         guard: {
             rules: denyPatterns(input.config.guards).length,
             allowRules: allowPatterns(input.config.guards).length,
@@ -377,6 +386,19 @@ export function renderDoctorReport(report: DoctorReport): string {
             : `  none detected (${report.harness.source})`,
     );
     lines.push('');
+
+    if (report.skillInstalls.length > 0) {
+        lines.push('Installed skill copies (a copy keeps its install-time version)');
+        for (const install of report.skillInstalls) {
+            const state = install.pinned === null ? 'no pin found' : `pins ${install.pinned}`;
+            lines.push(`  ${install.harness}: ${state}${install.outdated ? '  [outdated]' : ''}`);
+        }
+        if (report.skillInstalls.some((install) => install.outdated)) {
+            lines.push('  Refresh an outdated copy by re-running the install: it overwrites in');
+            lines.push('  place. See https://github.com/liustack/modlens/blob/main/INSTALL.md');
+        }
+        lines.push('');
+    }
 
     lines.push('Guard (should the vision engine run for the active model?)');
     lines.push(
