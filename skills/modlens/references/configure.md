@@ -1,5 +1,7 @@
 # Configuring ModLens
 
+English | [中文](configure.zh-CN.md)
+
 Read this when the user asks how to set up, configure, or switch ModLens providers. Prefer running the commands for the user over explaining them.
 
 ## Where config lives

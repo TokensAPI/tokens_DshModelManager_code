@@ -7,6 +7,8 @@ read_when:
 
 # ModLens Output Schema (v2)
 
+English | [中文](output-schema.zh-CN.md)
+
 The CLI prints one JSON object to stdout:
 
 ```json
