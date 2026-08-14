@@ -200,6 +200,34 @@ describe('parseCmdShimTarget', () => {
         }
     });
 
+    it('declines unquoted cmd control characters, keeps them literal inside quotes', () => {
+        // Unquoted, `&` ends the command: the text after it never reaches the
+        // program as an argument. Inside quotes it is an ordinary character,
+        // which is how any generator writes a path holding one.
+        const withFixed = (fixed: string) =>
+            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
+        for (const fixed of [
+            'fixed&value',
+            'fixed&&value',
+            'fixed|value',
+            'fixed>capture.txt',
+            'fixed<input.txt',
+        ]) {
+            expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed(fixed)), fixed).toBeNull();
+        }
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('"R&D value"'))?.args).toEqual([
+            'C:\\pnpm\\cli.js',
+            'R&D value',
+        ]);
+    });
+
+    it('declines a line that forwards the caller arguments more than once', () => {
+        // `node <entry> %* %*` passes each caller argument twice; appending
+        // them once is a different argv, so the shim is not reproducible.
+        const twice = PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', '"%~dp0\\..\\cli.js" %* %*');
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', twice)).toBeNull();
+    });
+
     it('declines a token carrying an environment variable it cannot expand', () => {
         const withEnvVar = PNPM_NODE.replaceAll(
             '"%~dp0\\..\\cli.js" %*',

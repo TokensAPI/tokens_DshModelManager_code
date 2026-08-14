@@ -42,23 +42,37 @@ export interface CmdShimTarget {
     nodeExec?: string;
 }
 
+interface CmdToken {
+    /** The token's text, outer quotes removed. */
+    value: string;
+    /** Whether cmd saw it inside double quotes, where control characters are literal. */
+    quoted: boolean;
+}
+
 /**
- * Split one cmd line into quoted and bare tokens, quotes stripped. The
+ * Split one cmd line into quoted and bare tokens, outer quotes stripped but
+ * remembered: inside quotes cmd treats `&`, `|`, `<`, `>` and `^` as ordinary
+ * characters, and a real generator quotes any path that contains one. The
  * optional `@` is batch's echo-off prefix, which pnpm puts directly against
  * the opening quote of a pinned interpreter path.
  */
-function tokenizeCmdLine(line: string): string[] {
-    const tokens: string[] = [];
+function tokenizeCmdLine(line: string): CmdToken[] {
+    const tokens: CmdToken[] = [];
     const re = /@?"([^"]*)"|(\S+)/g;
     let match: RegExpExecArray | null;
     // biome-ignore lint/suspicious/noAssignInExpressions: standard exec loop
     while ((match = re.exec(line)) !== null) {
-        tokens.push(match[1] ?? match[2]);
+        tokens.push(
+            match[1] !== undefined
+                ? { value: match[1], quoted: true }
+                : { value: match[2], quoted: false },
+        );
     }
     // The echo-off prefix also appears against an unquoted command
     // (`@node "..." %*`), where it is part of the first token's text.
-    if (tokens.length > 0 && tokens[0].startsWith('@')) {
-        tokens[0] = tokens[0].slice(1);
+    const first = tokens[0];
+    if (first && !first.quoted && first.value.startsWith('@')) {
+        first.value = first.value.slice(1);
     }
     return tokens;
 }
@@ -76,13 +90,21 @@ function expandShimPath(token: string, shimDir: string): string | null {
 }
 
 /**
- * cmd syntax whose effect a plain argv element cannot carry: a caret escape,
- * a quote inside the token (cmd's own grouping, which the OS argv would not
- * contain), and batch's positional parameters. Reproducing cmd's parser is
- * not on the table, so a token wearing any of it is a token this cannot
- * prove the meaning of.
+ * cmd syntax whose effect a plain argv element cannot carry, wherever it
+ * appears: a quote inside the token (cmd's own grouping, which the OS argv
+ * would not contain) and batch's positional parameters, which cmd would
+ * substitute from the caller's own arguments.
  */
-const CMD_SYNTAX = /[\^"]|%~?\d/;
+const CMD_SYNTAX = /"|%~?\d/;
+
+/**
+ * The same, for a token cmd did NOT see inside quotes: a caret escapes the
+ * next character, and `&`, `|`, `<`, `>` end the command and start a
+ * conjunction, a pipe, or a redirection, so their text never reaches the
+ * program as an argument. Inside quotes all of these are ordinary
+ * characters, which is how a real generator writes a path holding one.
+ */
+const CMD_CONTROL = /[\^&|<>]/;
 
 /**
  * Turn one shim token into the literal string cmd would pass, or null when
@@ -92,17 +114,18 @@ const CMD_SYNTAX = /[\^"]|%~?\d/;
  * whole (and then declined below). A surviving `%VAR%` is one cmd would
  * expand from the environment, which a direct spawn cannot.
  */
-function literalToken(token: string, shimDir: string): string | null {
-    if (CMD_SYNTAX.test(token)) {
+function literalToken(token: CmdToken, shimDir: string): string | null {
+    const text = token.value;
+    if (CMD_SYNTAX.test(text) || (!token.quoted && CMD_CONTROL.test(text))) {
         return null;
     }
-    const substituted = token.replace(/%dp0%|%~dp0/gi, `${shimDir}\\`);
+    const substituted = text.replace(/%dp0%|%~dp0/gi, `${shimDir}\\`);
     if (substituted.includes('%')) {
         return null;
     }
     // A token that IS a path gets normalized for legibility; `..` inside an
     // embedded one resolves at the filesystem either way.
-    return /^(%dp0%|%~dp0)/i.test(token) ? path.win32.normalize(substituted) : substituted;
+    return /^(%dp0%|%~dp0)/i.test(text) ? path.win32.normalize(substituted) : substituted;
 }
 
 /** Whether a resolved interpreter token is Node. */
@@ -182,16 +205,27 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
             continue;
         }
         const tokens = tokenizeCmdLine(line);
-        const forwardIndex = tokens.indexOf('%*');
+        const forwarders = tokens.filter((token) => !token.quoted && token.value === '%*');
+        // One forwarding point, or none of this is reproducible: a line that
+        // forwards the caller's arguments twice passes each of them twice,
+        // which appending them once does not do.
+        if (forwarders.length !== 1) {
+            continue;
+        }
+        const forwardIndex = tokens.findIndex((token) => !token.quoted && token.value === '%*');
         if (forwardIndex < 2) {
             continue;
         }
         // Everything the shim runs, minus the `%*` it forwards our args into.
         // The npm template prefixes its execution line with batch plumbing
         // (`endLocal & goto ... & "%_prog%" ...`), so the interpreter is the
-        // token right after the last `&`, not the first token on the line.
+        // token right after the last unquoted `&`, not the first token on the
+        // line.
         const runTokens = tokens.slice(0, forwardIndex);
-        const lastAmp = runTokens.lastIndexOf('&');
+        const lastAmp = runTokens.reduce(
+            (found, token, index) => (!token.quoted && token.value === '&' ? index : found),
+            -1,
+        );
         let words = lastAmp >= 0 ? runTokens.slice(lastAmp + 1) : runTokens;
         if (words.length < 2) {
             continue;
@@ -199,10 +233,10 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
         let nodeExec: string | undefined;
         // `env -S node --flags` renders as an `-S` interpreter followed by the
         // real one; step past it.
-        if (/^-S(\.exe)?$/i.test(path.win32.basename(words[0]))) {
+        if (/^-S(\.exe)?$/i.test(path.win32.basename(words[0].value))) {
             words = words.slice(1);
         }
-        const interpreter = words[0];
+        const interpreter = words[0].value;
         if (interpreter === '%_prog%') {
             const prog = progIsNode(content, shimDir);
             if (!prog.ok) {
