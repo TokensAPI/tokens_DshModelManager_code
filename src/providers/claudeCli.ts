@@ -4,7 +4,7 @@
 import * as path from 'path';
 import { buildVisionPrompt } from '../prompt.ts';
 import { visionResultSchemaJson } from '../schema.ts';
-import { parseJsonLoose, truncate } from '../util/json.ts';
+import { extractJson, parseJsonLoose, truncate } from '../util/json.ts';
 import type {
     BuildProviderInvocationOptions,
     ProviderInvocation,
@@ -19,6 +19,8 @@ interface ClaudePrintEnvelope {
     subtype?: string;
     is_error?: boolean;
     result?: string;
+    /** Newer claude CLI: the schema-parsed object beside the result string. */
+    structured_output?: unknown;
     session_id?: string;
     duration_ms?: number;
     usage?: unknown;
@@ -69,15 +71,23 @@ export function parseClaudeCliOutput(stdout: string): ProviderParsedOutput {
         );
     }
 
-    if (typeof envelope.result !== 'string' || !envelope.result.trim()) {
+    if (
+        envelope.structured_output === undefined &&
+        (typeof envelope.result !== 'string' || !envelope.result.trim())
+    ) {
         throw new Error('Claude CLI output contains no result. Check login state (run: claude).');
     }
 
-    let result: unknown;
-    try {
-        result = JSON.parse(envelope.result);
-    } catch {
-        throw new Error(`Claude CLI returned non-JSON result: ${truncate(envelope.result)}`);
+    // structured_output is the schema-parsed object newer CLIs ship beside
+    // the result string; when present it is authoritative (issue #22: the
+    // string can carry unescaped newlines that fail strict parsing while the
+    // good object sits right there). Without it, salvage a fenced or
+    // prose-wrapped string before giving up, like the antigravity provider.
+    const result: unknown =
+        envelope.structured_output ??
+        (typeof envelope.result === 'string' ? extractJson(envelope.result) : null);
+    if (result === null || result === undefined) {
+        throw new Error(`Claude CLI returned non-JSON result: ${truncate(envelope.result ?? '')}`);
     }
 
     return {
