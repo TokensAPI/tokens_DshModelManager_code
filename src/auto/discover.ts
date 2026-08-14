@@ -11,6 +11,7 @@ import * as path from 'path';
 import { globMatch } from '../guard/rules.ts';
 import { findOnPath } from '../providers/availability.ts';
 import { redactSecrets } from '../util/redact.ts';
+import { resolveSpawnPlan } from '../util/winExec.ts';
 
 /**
  * Mainstream vision-capable model names, as glob patterns against the bare
@@ -93,7 +94,16 @@ const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
 const CLI_TIMEOUT_MS = 10_000;
 
 function defaultRunCli(bin: string, args: string[], timeoutMs: number): string {
-    return execFileSync(bin, args, { encoding: 'utf-8', timeout: timeoutMs, stdio: 'pipe' });
+    // The same Windows shim routing the provider spawn uses (issue #31): a
+    // .cmd cannot be exec'd without a shell, and the probes talk to the same
+    // npm-installed CLIs.
+    const plan = resolveSpawnPlan(bin, args);
+    return execFileSync(plan.command, plan.args, {
+        encoding: 'utf-8',
+        timeout: timeoutMs,
+        stdio: 'pipe',
+        ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+    });
 }
 
 function timed<T extends Omit<HarnessProbe, 'elapsedMs'>>(run: () => T): HarnessProbe {

@@ -16,6 +16,7 @@ import {
 } from './providers/index.ts';
 import { missingSchemaFields } from './schema.ts';
 import { redactSecrets } from './util/redact.ts';
+import { resolveSpawnPlan } from './util/winExec.ts';
 
 export interface AnalyzeOptions {
     input: string;
@@ -468,9 +469,13 @@ export function runCommand(
 ): Promise<CommandResult> {
     const runStartedAt = Date.now();
     return new Promise((resolve, reject) => {
-        const child = spawn(invocation.command, invocation.args, {
+        // On Windows the bare CLI name resolves to the real executable and a
+        // .cmd shim routes through cmd.exe (issue #31); POSIX passes through.
+        const plan = resolveSpawnPlan(invocation.command, invocation.args);
+        const child = spawn(plan.command, plan.args, {
             cwd: invocation.cwd,
             stdio: ['ignore', 'pipe', 'pipe'],
+            ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         });
 
         // Decoders keep state across chunks: a multi-byte character split down the
@@ -577,7 +582,8 @@ export function runCommand(
             clearTimeout(timer);
             clearTimeout(drainTimer);
             clearTimeout(killTimer);
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === 'ENOENT') {
                 // spawn reports ENOENT for a missing cwd too, and naming the
                 // wrong cause sent people installing software they already had.
                 const missingCwd = !fs.existsSync(invocation.cwd);
@@ -585,12 +591,20 @@ export function runCommand(
                     new Error(
                         missingCwd
                             ? `Working directory does not exist: ${invocation.cwd}`
-                            : `Provider CLI not found: ${invocation.command}. Install it and sign in first.`,
+                            : `Provider CLI not found: ${invocation.command} (spawn ENOENT). Install it and sign in first.`,
                     ),
                 );
                 return;
             }
-            reject(error);
+            // A spawn-level failure that is not "missing": name the provider
+            // and the command, keep the real code (EINVAL, EACCES, ...) — a
+            // bare "spawn EINVAL" cost a Windows user a debugging session
+            // (issue #31).
+            reject(
+                new Error(
+                    `${providerName} provider could not start \`${invocation.command}\`: ${error.message}`,
+                ),
+            );
         });
 
         child.on('exit', (code) => {
