@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
 import {
     assertSafeRemoteTarget,
     normalizeRemoteImageUrl,
@@ -177,14 +177,18 @@ export async function fetchRemoteImageBase64(
             const dispatcher = pinnedDispatcher(pinned);
             dispatchers.push(dispatcher);
 
-            const response = await fetch(current, {
+            // undici's own fetch, never the host's: the pinned dispatcher is
+            // an undici-8 Agent, and handing it to the built-in fetch of a
+            // different undici major fails with UND_ERR_INVALID_ARG — the
+            // same cross-version boundary issue #23 hit on the proxy path.
+            const response = (await undiciFetch(current, {
                 method: 'GET',
                 redirect: 'manual',
-                signal,
-                // `dispatcher` is a Node/undici extension to fetch's options,
-                // not in the DOM RequestInit type, so it goes through a cast.
+                signal: signal as Parameters<typeof undiciFetch>[1] extends { signal?: infer S }
+                    ? S
+                    : never,
                 dispatcher,
-            } as unknown as RequestInit & { dispatcher: Agent });
+            })) as unknown as Response;
 
             if (response.status >= 300 && response.status < 400) {
                 const location = response.headers.get('location');

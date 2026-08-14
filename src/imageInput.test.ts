@@ -10,6 +10,17 @@ import {
     resolveImageMime,
 } from './imageInput.ts';
 
+// The production download path uses undici's own fetch (same-sourced with its
+// pinned dispatcher); tests bridge it back to the global fetch so the existing
+// vi.stubGlobal('fetch') doubles keep working.
+vi.mock('undici', async (importOriginal) => {
+    const real = await importOriginal<typeof import('undici')>();
+    return {
+        ...real,
+        fetch: (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args),
+    };
+});
+
 // The download path resolves every hostname before fetching (see net/network),
 // so the fake hosts these tests use must resolve to a public address, and one
 // test host resolves to a private one to prove the rejection.

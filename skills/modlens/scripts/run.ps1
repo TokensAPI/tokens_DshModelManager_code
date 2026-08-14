@@ -72,7 +72,7 @@ function Test-Compatible {
 # The npx path runs the CLI on this machine's node, so npx is only usable when
 # node itself meets the CLI's floor. An old node with a working npx used to be
 # selected anyway, a path known to fail at run time.
-$NodeFloor = '22.13.0'
+$NodeFloor = '22.19.0'
 function Test-NodeMeetsFloor {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return $false }
     try { $nv = ((& node --version 2>$null) -replace '^v', '') } catch { return $false }
@@ -165,7 +165,7 @@ function Build-DiagnosisJson {
     $steps = @()
     if ($script:Selected -eq 'none') {
         $major = $Pinned.Split('.')[0]
-        $first = "Install Node 22.13+ from https://nodejs.org so npx can run $Package@$Pinned, then re-run this launcher."
+        $first = "Install Node 22.19+ from https://nodejs.org so npx can run $Package@$Pinned, then re-run this launcher."
         if ($script:NpxPresent -and (-not $script:NodeFloorOk)) {
             $first = "npx is present but node $(if ($script:NodeVer) { $script:NodeVer } else { 'missing' }) is below the $NodeFloor floor this CLI needs. Upgrade Node at https://nodejs.org, then re-run this launcher."
         }
@@ -215,7 +215,7 @@ function Write-DiagnosisText {
         Write-Output ''
         Write-Output ("No runtime can launch {0} here. {1}" -f $Bin, $NativeNote)
         Write-Output 'Next steps:'
-        Write-Output '  - Install Node 22.13+ from https://nodejs.org, then re-run this launcher.'
+        Write-Output '  - Install Node 22.19+ from https://nodejs.org, then re-run this launcher.'
         Write-Output ("  - Or install Bun from https://bun.sh, or put a compatible {0} on PATH." -f $Bin)
     }
 }

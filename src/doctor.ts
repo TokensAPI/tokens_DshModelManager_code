@@ -23,7 +23,7 @@ import { resolveProvider } from './providers/index.ts';
 import { detectHarnessDetailed, type HarnessSource } from './recoverPaste/detect.ts';
 
 /** The lowest Node this release supports (see package.json engines). */
-export const MIN_NODE = '22.13';
+export const MIN_NODE = '22.19';
 
 type SettingSource = 'env' | 'file' | 'missing';
 
@@ -142,7 +142,7 @@ function checkNodeSqlite(): { available: boolean; detail: string } {
     } catch {
         return {
             available: false,
-            detail: 'node:sqlite unavailable. Upgrade Node to 22.13+ for OpenCode paste recovery',
+            detail: 'node:sqlite unavailable. Upgrade Node to 22.19+ for OpenCode paste recovery',
         };
     } finally {
         process.emitWarning = realEmit;

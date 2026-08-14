@@ -70,7 +70,7 @@ cli_version() {
 # The npx path runs the CLI on this machine's node, so npx is only usable when
 # node itself meets the CLI's floor. An old node with a working npx used to be
 # selected anyway, a path known to fail at run time.
-NODE_FLOOR="22.13.0"
+NODE_FLOOR="22.19.0"
 node_meets_floor() {
   command -v node >/dev/null 2>&1 || return 1
   _nv="$(node --version 2>/dev/null | sed 's/^v//')"
@@ -189,7 +189,7 @@ compute_next_steps() {
     if [ "$G_NPX_PRESENT" = 1 ] && [ "$G_NODE_FLOOR_OK" = 0 ]; then
       _s1="npx is present but node ${G_NODE_VER:-missing} is below the $NODE_FLOOR floor this CLI needs. Upgrade Node at https://nodejs.org, then re-run this launcher."
     else
-      _s1="Install Node 22.13+ from https://nodejs.org so npx can run $PKG@$PINNED, then re-run this launcher."
+      _s1="Install Node 22.19+ from https://nodejs.org so npx can run $PKG@$PINNED, then re-run this launcher."
     fi
     _s2="No JavaScript runtime? Install Bun from https://bun.sh to use bunx, or put a compatible $BIN (major ${PINNED%%.*}, at or above $PINNED) on PATH."
     G_NEXTSTEPS="$(printf '"%s", "%s"' "$(json_escape "$_s1")" "$(json_escape "$_s2")")"
@@ -255,7 +255,7 @@ emit_text() {
   if [ "$G_SEL" = "none" ]; then
     printf '\nNo runtime can launch %s here. %s\n' "$BIN" "$NATIVE_NOTE"
     printf 'Next steps:\n'
-    printf '  - Install Node 22.13+ from https://nodejs.org, then re-run this launcher.\n'
+    printf '  - Install Node 22.19+ from https://nodejs.org, then re-run this launcher.\n'
     printf '  - Or install Bun from https://bun.sh, or put a compatible %s on PATH.\n' "$BIN"
   fi
 }

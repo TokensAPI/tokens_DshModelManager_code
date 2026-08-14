@@ -25,7 +25,7 @@ If your harness forbids running scripts, reason through the same order by hand a
 1. A `modlens` on `PATH` whose major version is 3 and is at least 3.12.1: `modlens <args>`.
 2. Otherwise, if `npx` exists: `npx --yes --package @liustack/modlens@3.12.1 modlens <args>`.
 3. Otherwise, if `bunx` exists: `bunx --bun @liustack/modlens@3.12.1 <args>`.
-4. Otherwise tell the user no JavaScript runtime was found and that installing Node 22.13+ (https://nodejs.org) or Bun (https://bun.sh) is the next step. Do not claim modlens itself failed.
+4. Otherwise tell the user no JavaScript runtime was found and that installing Node 22.19+ (https://nodejs.org) or Bun (https://bun.sh) is the next step. Do not claim modlens itself failed.
 
 `references/runtime.md` documents the pin and the diagnostic fields.
 
