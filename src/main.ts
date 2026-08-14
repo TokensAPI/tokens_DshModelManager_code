@@ -257,4 +257,10 @@ config
         }
     });
 
-await program.parseAsync();
+// Explicit argv and 'node' semantics: commander auto-detects Electron via
+// process.versions.electron and then slices argv as if launched by a packaged
+// app, which turns our script path into a stray positional ("too many
+// arguments for 'analyze'", issue #25). This CLI is always spawned
+// script-first (node dist/main.js, or an Electron binary running as node),
+// so the node layout is the truth regardless of what binary hosts us.
+await program.parseAsync(process.argv, { from: 'node' });
