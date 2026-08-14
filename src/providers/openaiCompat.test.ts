@@ -228,6 +228,32 @@ describe('structured output (#37)', () => {
     });
 });
 
+describe('empty optionals on the openai route (#37)', () => {
+    it('drops them at its own parse boundary', async () => {
+        const quiet = {
+            ...structured,
+            semantics: { scene: '', intent: null, entities: [], relations: null },
+            visual: { dominant_colors: null, style: null, notes: null },
+        };
+        vi.stubGlobal(
+            'fetch',
+            async () =>
+                new Response(
+                    JSON.stringify({ choices: [{ message: { content: JSON.stringify(quiet) } }] }),
+                    { status: 200 },
+                ),
+        );
+        const outcome = await executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings,
+        });
+        expect(JSON.stringify(outcome.result)).not.toContain('null');
+        expect('notes' in (outcome.result as { visual: object }).visual).toBe(false);
+    });
+});
+
 describe('schema shape enforcement', () => {
     it('rejects a partial result that used to pass the token check', async () => {
         // {"summary":"x","ocr":null} satisfied the old check and reached the model
