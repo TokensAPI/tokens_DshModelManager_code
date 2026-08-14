@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.15.0 - 2026-08-14
 
 - **dsh: the vision wrap discovers every eligible provider route ([#29](https://github.com/liustack/modlens/issues/29)).** The wrapper used to bind one hardcoded upstream, so a machine with several subscription packages (opencode-go, zai, ...) had to hand-pick a single route and lose the rest. With `upstream` unset the plugin now sweeps the llm registry and registers a `modlens-<provider>` wrapper for every route carrying wrappable text-only DeepSeek/GLM models, re-sweeping on the registry's own `llm/adapters-updated` notification so late-registering routes (llm-pi-ai mounts after settings load) are picked up without polling. A `discover` array narrows the set, `families` filters as before, setting `upstream` keeps exact legacy single-route behavior, wrappers never wrap themselves, and the deepseek-official wrap keeps its historical `deepseek-modlens` id so an upgraded machine's model selection survives. Design and behavior spec contributed by @zlycode01, who also published a reference implementation in a public fork; this is an independent upstream implementation of that spec, with the polling schedule replaced by the registry notification.
 
