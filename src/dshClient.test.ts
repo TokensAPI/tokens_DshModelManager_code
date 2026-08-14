@@ -282,6 +282,26 @@ describe('dsh paste-to-path browser half', () => {
         }
     });
 
+    it('a host verdict flip reaches the client within one round-trip', async () => {
+        // Every focus and paste re-asks the host, so when the model behind an
+        // unchanged label turns image-capable (a same-named route mounting),
+        // at most the one paste racing the refresh is taken; the next goes
+        // native.
+        let takeover = true;
+        const harness = loadClient({ policy: () => ({ status: 200, takeover }) });
+        harness.setModelLabel('Shared Model');
+        harness.focusComposer();
+        await harness.settle();
+        expect(harness.dispatchPaste(IMAGE).prevented).toBe(true);
+        await harness.settle();
+        takeover = false;
+        // This paste still rides the cached true (the documented round-trip
+        // window) and triggers the refresh that flips it.
+        harness.dispatchPaste(IMAGE);
+        await harness.settle();
+        expect(harness.dispatchPaste(IMAGE).prevented).toBe(false);
+    });
+
     it('ignores pastes with no image files', async () => {
         const harness = loadClient({ policy: () => ({ status: 200, takeover: true }) });
         harness.setModelLabel('DeepSeek-V4-Flash');

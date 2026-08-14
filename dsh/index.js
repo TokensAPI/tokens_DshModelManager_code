@@ -271,6 +271,16 @@ const PASTE_VERDICT_CAP = 32
  */
 function registerPasteRoute(ctx, host) {
   const verdicts = new Map()
+  // The cache key is only the selector label, which cannot tell two
+  // same-named models on different routes apart. A route mounting mid-TTL
+  // (llm-pi-ai lands after settings load) could therefore serve a stale
+  // verdict computed before its vision twin existed, so every topology
+  // change empties the cache at exactly the boundary that invalidates it.
+  if (typeof host.on === 'function') {
+    host.on('llm/adapters-updated', () => {
+      verdicts.clear()
+    })
+  }
   ctx.webServer.register({
     name: 'modlens-paste',
     kind: 'exact',

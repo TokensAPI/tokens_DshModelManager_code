@@ -770,7 +770,11 @@ describe('dsh paste-to-path host route', () => {
         },
     ) => Promise<void>;
 
-    async function routeOf(config: Record<string, unknown> = {}, llm?: unknown) {
+    async function routeOf(
+        config: Record<string, unknown> = {},
+        llm?: unknown,
+        events?: Record<string, () => void>,
+    ) {
         // @ts-expect-error untyped on purpose
         const plugin = (await import('../dsh/index.js')) as {
             apply: (ctx: unknown, config?: Record<string, unknown>) => void;
@@ -789,7 +793,9 @@ describe('dsh paste-to-path host route', () => {
                 // registration path feature-detects registerAdapter and backs
                 // off, so this reaches exactly the paste policy code.
                 ...(llm ? { llm } : {}),
-                on: () => {},
+                on: (event: string, fn: () => void) => {
+                    if (events) events[event] = fn;
+                },
                 inject: (deps: string[], fn: (scope: unknown) => void) => {
                     // The scoped closure runs only where webServer exists.
                     if (deps.includes('webServer')) fn(scoped);
@@ -1039,6 +1045,42 @@ describe('dsh paste-to-path host route', () => {
             res as never,
         );
         expect((JSON.parse(out.body) as { takeover: boolean }).takeover).toBe(false);
+    });
+
+    it('a topology change empties the verdict cache, so late twins are seen', async () => {
+        // The cache key is only the label. A same-named vision route mounting
+        // inside the TTL used to keep serving the pre-mount true; the cache
+        // now empties on llm/adapters-updated, the exact boundary that
+        // invalidates it.
+        const providers = [{ id: 'text' }];
+        const models: Record<string, unknown[]> = {
+            text: [{ id: 'shared-text', name: 'Shared Model', inputModalities: ['text'] }],
+            vision: [
+                { id: 'shared-vision', name: 'Shared Model', inputModalities: ['text', 'image'] },
+            ],
+        };
+        const llm = {
+            listProviders: () => providers,
+            listModels: async (id: string) => models[id],
+        };
+        const events: Record<string, () => void> = {};
+        const routes = await routeOf({}, llm, events);
+        const ask = async () => {
+            const { out, res } = fakeRes();
+            await routes[0].handler(
+                fakeReq(
+                    'GET',
+                    Buffer.alloc(0),
+                    `/modlens/paste?model=${encodeURIComponent('current Shared Model')}`,
+                ) as never,
+                res as never,
+            );
+            return (JSON.parse(out.body) as { takeover: boolean }).takeover;
+        };
+        expect(await ask()).toBe(true);
+        providers.push({ id: 'vision' });
+        events['llm/adapters-updated']?.();
+        expect(await ask()).toBe(false);
     });
 
     it('missing inputModalities means UNKNOWN, never confirmed text-only', async () => {
