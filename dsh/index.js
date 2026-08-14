@@ -40,8 +40,15 @@ export function apply(ctx, config = {}) {
   if (config.autoRead === true) {
     registerAutoRead(ctx)
   }
+  // The provider ids this plugin registered itself. The takeover verdict has
+  // to skip them: our wrapper models are synthetic twins of upstream ones,
+  // carrying the upstream id and declaring image input, so a plain text-only
+  // label matches the twin and the twin's declaration vetoes the takeover
+  // that label deserved (issue #36). Filled by registerVisionProvider as
+  // wrappers land, including the later sweeps, and read by the verdict.
+  const ownProviders = new Set()
   if (config.visionProvider !== false) {
-    registerVisionProvider(ctx, config)
+    registerVisionProvider(ctx, config, ownProviders)
   }
   // Paste-to-path: the browser half (dsh/client.js) intercepts image pastes
   // and POSTs the bytes here; the file lands in a private temp dir and the
@@ -57,7 +64,7 @@ export function apply(ctx, config = {}) {
       try {
         // scope carries webServer; the plugin's own ctx carries llm for the
         // takeover verdicts.
-        registerPasteRoute(scope, ctx)
+        registerPasteRoute(scope, ctx, ownProviders)
       } catch (error) {
         console.error(`[modlens] paste-to-path route skipped: ${error}`)
       }
@@ -215,7 +222,7 @@ const PASTE_MAX_BYTES = 25 * 1024 * 1024
  * unresolvable answers false: the native path is the safe default, and a
  * text-only model merely keeps its old error message.
  */
-async function pasteTakeoverVerdict(host, label) {
+async function pasteTakeoverVerdict(host, label, ownProviders) {
   if (typeof label !== 'string' || label.trim() === '') return false
   // Our own wrappers convert pastes at request time with the thumbnail
   // preserved; taking their paste over would defeat the better path.
@@ -229,6 +236,14 @@ async function pasteTakeoverVerdict(host, label) {
   for (const info of llm.listProviders()) {
     const providerId = info?.id
     if (!providerId) continue
+    // Our own wrapper: every model in it is a synthetic twin of an upstream
+    // one, carrying that upstream id and declaring image input because that
+    // is how the wrapper unlocks admission. Scanning it means a plain
+    // text-only label matches the twin by id and the twin vetoes the
+    // takeover the real model deserved (issue #36). Only ids this plugin
+    // registered itself are skipped, so a real vision provider, including
+    // one that happens to be named like ours, still votes.
+    if (ownProviders?.has(providerId)) continue
     let models = []
     try {
       models = await llm.listModels(providerId)
@@ -272,7 +287,7 @@ const PASTE_VERDICT_CAP = 32
  * stands down instead of swallowing pastes into a 404. Bound to the dsh web
  * server, which listens on loopback by default.
  */
-function registerPasteRoute(ctx, host) {
+function registerPasteRoute(ctx, host, ownProviders) {
   const verdicts = new Map()
   // The cache key is only the selector label, which cannot tell two
   // same-named models on different routes apart. A route mounting mid-TTL
@@ -310,7 +325,7 @@ function registerPasteRoute(ctx, host) {
             let attempts = 0
             for (;;) {
               const startedEpoch = topologyEpoch
-              takeover = await pasteTakeoverVerdict(host, label)
+              takeover = await pasteTakeoverVerdict(host, label, ownProviders)
               if (topologyEpoch === startedEpoch) {
                 verdicts.delete(label)
                 verdicts.set(label, { takeover, at: Date.now() })
@@ -398,7 +413,7 @@ function registerPasteRoute(ctx, host) {
  *   deepseek-official wrap keeps its historical `deepseek-modlens` id, so a
  *   selector remembering that provider survives the upgrade.
  */
-function registerVisionProvider(ctx, config) {
+function registerVisionProvider(ctx, config, ownProviders) {
   // Wrap only the text-only members of these families. Their own vision
   // models (present or future: deepseek-vl/ocr/janus, glm-4.5v, glm-5v-...)
   // need no bridge and are excluded by name and by declared modality.
@@ -464,6 +479,11 @@ function registerVisionProvider(ctx, config) {
         },
         evidenceCache: new Map(),
       })
+      // Trusted as ours only on a registration this call actually made. A
+      // duplicate below means someone else holds that id, and skipping a
+      // provider we do not own would let a real vision model's paste be
+      // taken over, which is the bug the verdict exists to prevent.
+      ownProviders?.add(providerId)
       return true
     } catch (error) {
       // A duplicate means a concurrent or earlier registration already won:
