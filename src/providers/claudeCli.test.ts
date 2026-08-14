@@ -52,6 +52,39 @@ describe('parseClaudeCliOutput', () => {
         expect(parsed.meta.durationSeconds).toBeCloseTo(11.148);
     });
 
+    it('prefers structured_output when the result string is not strict JSON (#22)', () => {
+        // Newer claude CLI envelopes carry the schema-parsed object alongside
+        // the result string; unescaped newlines in the string used to fail the
+        // whole read while the good object sat unread.
+        const parsed = parseClaudeCliOutput(
+            JSON.stringify({
+                type: 'result',
+                subtype: 'success',
+                is_error: false,
+                result: '{"ocr": {"full_text": "line one\nline two"}}'.replace('\\n', '\n'),
+                structured_output: structured,
+                session_id: 'sid-2',
+                duration_ms: 900,
+            }),
+        );
+        expect(parsed.result).toEqual(structured);
+        expect(parsed.meta.conversationId).toBe('sid-2');
+    });
+
+    it('falls back to loose parsing of the result string without structured_output (#22)', () => {
+        // A fenced or prose-wrapped result should still be salvaged before
+        // giving up, matching the antigravity provider's behavior.
+        const parsed = parseClaudeCliOutput(
+            JSON.stringify({
+                subtype: 'success',
+                is_error: false,
+                result: '```json\n{"summary": "ok", "uncertainty": []}\n```',
+                session_id: 'sid-3',
+            }),
+        );
+        expect(parsed.result).toEqual(structured);
+    });
+
     it('throws on error envelopes and empty results', () => {
         expect(() =>
             parseClaudeCliOutput(
