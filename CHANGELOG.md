@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.12.1 - 2026-08-14
 
 - **claude-cli reads the envelope's `structured_output` first ([#22](https://github.com/liustack/modlens/issues/22)).** Newer claude CLI builds ship the schema-parsed object beside the `result` string, and the parser only hard-parsed the string, so an unescaped newline in the OCR text failed the whole read while the good object sat unread — intermittently, since it depended on what the model emitted. The parse order is now `structured_output`, then fence-tolerant extraction of the result string, then the error, matching the antigravity provider. Thanks to @lin-nanxing for the precise diagnosis, down to the code lines.
 - **A `read_image` name collision no longer kills the whole dsh plugin ([#21](https://github.com/liustack/modlens/issues/21)).** Hosts with a durable attachment store mount dsh's own native `read_image` (from `dsh-tool-fs`), the duplicate registration threw, and the whole plugin fiber failed — vision wrapper included. The registration now falls back to `modlens_read_image` on a name collision (valuable exactly there: the native tool is gated on the model declaring image input and vanishes for text-only models, so the renamed bridge is the only image path left), the name is configurable via the plugin row's `toolName`, and any other registration error degrades loudly instead of taking the plugin down. Thanks to @abyss-stars for the root-cause analysis and the interim patch.
