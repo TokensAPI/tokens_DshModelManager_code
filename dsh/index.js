@@ -197,11 +197,18 @@ const PASTE_MAX_BYTES = 25 * 1024 * 1024
  * Should the browser take a paste over for the model behind this selector
  * label? Decided here, not in the browser, because only the host holds the
  * structured model metadata: a name regex in the client called every vision
- * model it did not recognize text-only and hijacked its native paste. The
- * label is matched against provider inventory (longest model name or id it
- * contains wins) and the verdict is that model's declared inputModalities.
- * Anything unresolvable answers false: the native paste path is the safe
- * default, and a text-only model merely keeps its old error message.
+ * model it did not recognize text-only and hijacked its native paste.
+ *
+ * The label is matched against provider inventory (longest model name or id
+ * it contains wins), and the answer is true only when EVERY model matching at
+ * that length is positively confirmed text-only. Both conservative rules are
+ * load-bearing: the selector label carries no provider id, so two providers
+ * exposing the same display name with different modalities are
+ * indistinguishable here (one image-capable match at the winning length
+ * vetoes the takeover), and a model with no declared inputModalities is
+ * UNKNOWN, not text-only (absent metadata must never cost a vision model its
+ * native paste). Anything unresolvable answers false: the native path is the
+ * safe default, and a text-only model merely keeps its old error message.
  */
 async function pasteTakeoverVerdict(host, label) {
   if (typeof label !== 'string' || label.trim() === '') return false
@@ -213,7 +220,8 @@ async function pasteTakeoverVerdict(host, label) {
     return false
   }
   const lowered = label.toLowerCase()
-  let best = null
+  let matched = 0
+  let allConfirmedTextOnly = false
   for (const info of llm.listProviders()) {
     const providerId = info?.id
     if (!providerId) continue
@@ -227,16 +235,18 @@ async function pasteTakeoverVerdict(host, label) {
       for (const candidate of [model?.name, model?.id]) {
         if (typeof candidate !== 'string' || candidate.length < 3) continue
         if (!lowered.includes(candidate.toLowerCase())) continue
-        if (!best || candidate.length > best.matched) {
-          best = {
-            matched: candidate.length,
-            image: Array.isArray(model?.inputModalities) && model.inputModalities.includes('image'),
-          }
+        const modalities = model?.inputModalities
+        const confirmedTextOnly = Array.isArray(modalities) && !modalities.includes('image')
+        if (candidate.length > matched) {
+          matched = candidate.length
+          allConfirmedTextOnly = confirmedTextOnly
+        } else if (candidate.length === matched) {
+          allConfirmedTextOnly = allConfirmedTextOnly && confirmedTextOnly
         }
       }
     }
   }
-  return best ? !best.image : false
+  return matched > 0 && allConfirmedTextOnly
 }
 
 // Verdicts are stable for the lifetime of a model route but the inventory can

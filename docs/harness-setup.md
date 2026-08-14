@@ -79,6 +79,12 @@ and the host answers from the provider registry's declared model metadata
 or any model that declares image input keeps its native paste flow (variants
 convert at request time with the thumbnail preserved; vision models read
 images themselves), and so does any model the host cannot resolve — pastes
-stay native until the host has confirmed a takeover is right. `pasteToPath:
-false` in the plugin row turns the whole feature off: without the route, the
-browser half stands down entirely.
+stay native until the host has confirmed a takeover is right. A model whose
+metadata declares no input modalities counts as unresolved: absent metadata is
+never read as "confirmed text-only". Verdicts also age out (60s), so a route
+whose models changed mid-session is re-asked, not trusted forever.
+`pasteToPath: false` in the plugin row turns the whole feature off: the
+browser half stands down when the policy endpoint 404s, and if the route
+vanishes in the moment between a confirmed verdict and the paste itself, at
+most that one in-flight paste is lost — the client then forgets its verdicts
+and every later paste goes native.

@@ -60,7 +60,9 @@ window.__ModuleLoader__.load({
               .json()
               .catch(() => ({}))
               .then((body) => {
-                throw new Error(body.error || `paste upload failed (${res.status})`)
+                var error = new Error(body.error || `paste upload failed (${res.status})`)
+                error.status = res.status
+                throw error
               })
           }
           return res.json()
@@ -90,6 +92,11 @@ window.__ModuleLoader__.load({
     var routeAvailable = true
     var verdicts = {}
     var VERDICT_TTL_MS = 15000
+    // A verdict older than this is UNKNOWN again, even while a refresh is in
+    // flight: the route's model metadata can change mid-session (discovery
+    // sweeps, provider mounts), and acting on a long-stale `true` is exactly
+    // the vision-model hijack this design exists to prevent.
+    var VERDICT_MAX_AGE_MS = 60000
 
     function refreshVerdict(label) {
       if (!routeAvailable) return
@@ -133,9 +140,9 @@ window.__ModuleLoader__.load({
       var label = currentModelLabel()
       var cached = verdicts[label]
       refreshVerdict(label)
-      // No confirmed host verdict yet: leave the paste native. Wrong only
+      // No fresh confirmed host verdict: leave the paste native. Wrong only
       // for a text-only model's very first paste, and self-correcting.
-      if (!cached || cached.at === 0 || cached.takeover !== true) return
+      if (!cached || cached.at === 0 || cached.takeover !== true || Date.now() - cached.at > VERDICT_MAX_AGE_MS) return
       // Take the paste before the composer's intake starts an attachment (and
       // with it the host-side image admission a text-only model fails).
       event.preventDefault()
@@ -150,6 +157,14 @@ window.__ModuleLoader__.load({
           if (text) insertText(target, `${text} `)
         })
         .catch((error) => {
+          // A 404 here means the route vanished AFTER a verdict confirmed it
+          // (plugin disposed mid-session): that race can cost this one paste
+          // — preventDefault already ran — but never another. Stand down and
+          // forget every verdict, so the next paste goes native immediately.
+          if (error && error.status === 404) {
+            routeAvailable = false
+            verdicts = {}
+          }
           console.error(`[modlens] paste-to-path failed: ${error?.message ? error.message : error}`)
         })
     }
