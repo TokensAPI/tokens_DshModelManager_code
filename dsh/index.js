@@ -306,9 +306,15 @@ function registerVisionProvider(ctx, config) {
       })
       return true
     } catch (error) {
-      // DUPLICATE_ADAPTER or a preview-era surface change: degrade to the
-      // read_image-only plugin, but say so in the harness log instead of
-      // vanishing (a swallowed TypeError here once hid a missing base method).
+      // A duplicate means a concurrent or earlier registration already won:
+      // that is success for the claim, not a reason to retry forever.
+      if (/already|duplicate/i.test(String(error))) {
+        console.error(`[modlens] vision provider ${providerId} already registered, keeping the existing one`)
+        return true
+      }
+      // A preview-era surface change: degrade to the read_image-only plugin,
+      // but say so in the harness log instead of vanishing (a swallowed
+      // TypeError here once hid a missing base method).
       console.error(`[modlens] vision provider registration skipped (${providerId}): ${error}`)
       return false
     }
@@ -323,11 +329,16 @@ function registerVisionProvider(ctx, config) {
     return
   }
 
-  // Auto-discovery. `wrapped` guards both duplicates across sweeps and the
-  // self-nesting case (our own wrappers appear in listProviders too).
+  // Auto-discovery. `wrapped` guards duplicates across sweeps and the
+  // self-nesting case (our own wrappers appear in listProviders too). Two
+  // re-entrancy rules matter because registerAdapter itself broadcasts
+  // llm/adapters-updated, so every successful wrap re-triggers a sweep:
+  // an id is claimed in `wrapped` BEFORE any await (a concurrent sweep must
+  // skip it while this one is still probing), and sweeps are serialized on
+  // one promise chain so two can never interleave their probes at all.
   const discover = Array.isArray(config.discover) ? new Set(config.discover) : null
   const wrapped = new Set(['deepseek-modlens'])
-  const sweep = async () => {
+  const sweepOnce = async () => {
     if (typeof ctx.llm.listProviders !== 'function') {
       // Older registry surface: fall back to the single legacy wrap once.
       if (!wrapped.has('__legacy_fallback__')) {
@@ -340,14 +351,23 @@ function registerVisionProvider(ctx, config) {
       const id = info?.id
       if (!id || wrapped.has(id) || String(id).startsWith('modlens-')) continue
       if (discover && !discover.has(id)) continue
+      // Claim before the await: the probe may suspend, and the sweep a
+      // registration triggers must not probe the same id concurrently.
+      wrapped.add(id)
       let models = []
       try {
         models = await ctx.llm.listModels(id)
       } catch {
+        // Unreachable route today; release the claim so a later topology
+        // change retries it.
+        wrapped.delete(id)
         continue
       }
-      if (!models.some(shouldWrap)) continue
-      wrapped.add(id)
+      if (!models.some(shouldWrap)) {
+        // No eligible models yet: release, the route may gain some later.
+        wrapped.delete(id)
+        continue
+      }
       const providerId = id === 'deepseek-official' ? 'deepseek-modlens' : `modlens-${id}`
       const base = info.name ?? id
       if (!registerWrapper(id, providerId, `${base} (modlens vision)`)) {
@@ -355,7 +375,14 @@ function registerVisionProvider(ctx, config) {
       }
     }
   }
-  void sweep()
+  // Serialize: a sweep triggered mid-sweep runs after, never interleaved.
+  // The first sweep is invoked directly so its synchronous prefix (the
+  // legacy fallback, the pre-await claims) completes during apply().
+  let sweeping = sweepOnce()
+  const sweep = () => {
+    sweeping = sweeping.then(sweepOnce, sweepOnce)
+    return sweeping
+  }
   if (typeof ctx.on === 'function') {
     ctx.on('llm/adapters-updated', () => {
       void sweep()
