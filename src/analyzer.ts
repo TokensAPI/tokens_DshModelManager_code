@@ -469,13 +469,13 @@ export function runCommand(
 ): Promise<CommandResult> {
     const runStartedAt = Date.now();
     return new Promise((resolve, reject) => {
-        // On Windows the bare CLI name resolves to the real executable and a
-        // .cmd shim routes through cmd.exe (issue #31); POSIX passes through.
+        // On Windows the bare CLI name resolves to the real file and a .cmd
+        // shim is rewritten to a direct `node <entry>` spawn (issue #31);
+        // POSIX passes through.
         const plan = resolveSpawnPlan(invocation.command, invocation.args);
         const child = spawn(plan.command, plan.args, {
             cwd: invocation.cwd,
             stdio: ['ignore', 'pipe', 'pipe'],
-            ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         });
 
         // Decoders keep state across chunks: a multi-byte character split down the

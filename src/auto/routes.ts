@@ -472,8 +472,8 @@ export function piRoutes(
 
 function fetchPiKey(piPath: string, modelId: string, provider: string, timeoutMs: number): string {
     try {
-        // Windows shim routing (issue #31): findOnPath hands this a .cmd
-        // there, which cannot be exec'd without cmd.exe.
+        // Windows shim rewriting (issue #31): findOnPath hands this a .cmd
+        // there, which is rewritten to a direct node spawn.
         const plan = resolveSpawnPlan(piPath, [
             'auth',
             'print-api-key',
@@ -486,7 +486,6 @@ function fetchPiKey(piPath: string, modelId: string, provider: string, timeoutMs
             encoding: 'utf-8',
             stdio: ['ignore', 'pipe', 'pipe'],
             timeout: timeoutMs,
-            ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         }).trim();
         if (!key) {
             throw new Error('empty');
