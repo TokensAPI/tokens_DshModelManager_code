@@ -76,19 +76,33 @@ function expandShimPath(token: string, shimDir: string): string | null {
 }
 
 /**
- * Apply cmd's own substitution: `%dp0%` and `%~dp0` both stand for the shim's
- * directory with a trailing separator, anywhere in a token. Returns null when
- * a different `%VAR%` survives, since cmd would expand that from the
- * environment and a direct spawn cannot.
+ * cmd syntax whose effect a plain argv element cannot carry: a caret escape,
+ * a quote inside the token (cmd's own grouping, which the OS argv would not
+ * contain), and batch's positional parameters. Reproducing cmd's parser is
+ * not on the table, so a token wearing any of it is a token this cannot
+ * prove the meaning of.
  */
-function expandShimVars(token: string, shimDir: string): string | null {
-    const substituted = token.replace(/%~?dp0%?/gi, `${shimDir}\\`);
-    if (/%[^%\s]+%/.test(substituted)) {
+const CMD_SYNTAX = /[\^"]|%~?\d/;
+
+/**
+ * Turn one shim token into the literal string cmd would pass, or null when
+ * that cannot be proven. The only substitution performed is cmd's own
+ * shim-directory variable, in both spellings, matched with its closing
+ * delimiter so a different variable that merely starts with `dp0` is left
+ * whole (and then declined below). A surviving `%VAR%` is one cmd would
+ * expand from the environment, which a direct spawn cannot.
+ */
+function literalToken(token: string, shimDir: string): string | null {
+    if (CMD_SYNTAX.test(token)) {
+        return null;
+    }
+    const substituted = token.replace(/%dp0%|%~dp0/gi, `${shimDir}\\`);
+    if (substituted.includes('%')) {
         return null;
     }
     // A token that IS a path gets normalized for legibility; `..` inside an
     // embedded one resolves at the filesystem either way.
-    return /^%~?dp0/i.test(token) ? path.win32.normalize(substituted) : substituted;
+    return /^(%dp0%|%~dp0)/i.test(token) ? path.win32.normalize(substituted) : substituted;
 }
 
 /** Whether a resolved interpreter token is Node. */
@@ -205,15 +219,16 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
             }
         }
         // Everything after the interpreter, in order, exactly as the shim
-        // would pass it. The only transformation is the one cmd itself
-        // performs: expanding its shim-directory variable wherever it
-        // appears. A token still carrying a variable afterwards is one cmd
-        // would expand from the environment and this spawn cannot, so the
-        // whole shim is declined rather than run with a literal `%VAR%`.
+        // would pass it, with cmd's shim-directory variable substituted the
+        // way cmd would. Every token has to be provably literal: this does
+        // not reimplement cmd's parser, so a token carrying quoting, a caret
+        // escape, a positional parameter, or an environment variable makes
+        // the whole shim undecidable, and an undecidable shim is declined
+        // rather than run with an argv that might differ from the real one.
         const args: string[] = [];
         let expandable = true;
         for (const word of words.slice(1)) {
-            const expanded = expandShimVars(word, shimDir);
+            const expanded = literalToken(word, shimDir);
             if (expanded === null) {
                 expandable = false;
                 break;

@@ -180,6 +180,26 @@ describe('parseCmdShimTarget', () => {
         ]);
     });
 
+    it('declines tokens wearing cmd syntax whose meaning it cannot prove', () => {
+        // Reproducing cmd's parser is not on the table, so quoting inside a
+        // token, a caret escape, and batch's positional parameters each make
+        // the shim undecidable. Declining sends the caller to a nameable
+        // spawn error instead of an argv that might differ from the real one.
+        const withFixed = (fixed: string) =>
+            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
+        for (const fixed of [
+            '--label="two words"',
+            '--json="{\\"k\\":1}"',
+            '--config="%~dp0\\..\\c.json"',
+            'fixed^&value',
+            '%1',
+            '%~1',
+            '--home %dp0x%\\x',
+        ]) {
+            expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed(fixed)), fixed).toBeNull();
+        }
+    });
+
     it('declines a token carrying an environment variable it cannot expand', () => {
         const withEnvVar = PNPM_NODE.replaceAll(
             '"%~dp0\\..\\cli.js" %*',
