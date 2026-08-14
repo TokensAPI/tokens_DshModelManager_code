@@ -73,14 +73,16 @@ export const PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
 export function findOnPath(bin: string, env: NodeJS.ProcessEnv): string | null {
     const dirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
     // Windows CLIs live as agy.exe / agy.cmd / agy.bat, so the bare name is
-    // only the first candidate there: without the PATHEXT pass every real
-    // install reads as "not on PATH" while the shell runs it fine. cmd.exe
-    // matches names case-insensitively, and statSync follows suit on the
-    // case-insensitive filesystems Windows uses, so candidates need no
-    // case fanout.
+    // only a candidate of last resort there: npm installs a POSIX sh shim
+    // under the bare name right next to the .cmd/.ps1 ones (issue #30), and
+    // resolving that first hands spawnSync a file Windows cannot execute
+    // (ENOENT). Without the PATHEXT pass every real install reads as "not on
+    // PATH" while the shell runs it fine. cmd.exe matches names
+    // case-insensitively, and statSync follows suit on the case-insensitive
+    // filesystems Windows uses, so candidates need no case fanout.
     const suffixes =
         process.platform === 'win32'
-            ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)]
+            ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean), '']
             : [''];
     for (const dir of dirs) {
         for (const suffix of suffixes) {

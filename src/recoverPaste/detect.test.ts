@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { harnessFromPsTable } from './detect.ts';
+import { harnessFromEnv, harnessFromPsTable } from './detect.ts';
 
 describe('harness detection (process ancestry)', () => {
     function psTable(rows: Array<[number, number, string]>): string {
@@ -42,6 +42,22 @@ describe('harness detection (process ancestry)', () => {
             [300, 100, 'node dist/main.js recover-paste'],
         ]);
         expect(harnessFromPsTable(ps, 300)).toBeNull();
+    });
+
+    it('reads opencode server markers from the environment (#30)', () => {
+        // OpenChamber (the OpenCode desktop UI) injects OPENCODE=1 and
+        // friends; on Windows the env fallback is the only detection path.
+        expect(harnessFromEnv({ OPENCODE: '1' })).toBe('opencode');
+        expect(harnessFromEnv({ OPENCODE_PID: '4242' })).toBe('opencode');
+        expect(harnessFromEnv({ OPENCODE_BINARY: 'C:/x/opencode.exe' })).toBe('opencode');
+    });
+
+    it('env nesting: opencode inside Claude Code resolves to opencode', () => {
+        expect(harnessFromEnv({ OPENCODE: '1', CLAUDECODE: '1' })).toBe('opencode');
+        // The session-scoped fingerprints stay nearer than the static ones.
+        expect(harnessFromEnv({ OPENCODE: '1', PI_CODING_AGENT: '1' })).toBe('pi');
+        expect(harnessFromEnv({})).toBeNull();
+        expect(harnessFromEnv({ CLAUDECODE: '1' })).toBe('claude-code');
     });
 
     it('only reads the executable name from process ancestry', () => {
