@@ -691,12 +691,12 @@ describe('dsh plugin tool name (#21, #34)', () => {
             },
         }) as never;
 
-    it('registers under a name of its own, which nothing can shadow', async () => {
+    it('registers under a name of its own, clear of the host read_image', async () => {
         // dsh's registry is layered and a scoped tool shadows a global one, so
         // a host read_image in the agent-preset scope and ours registered
         // globally are not a duplicate: nothing throws, and the model still
-        // resolves the host's (issue #34). Taking a name of our own is what
-        // makes that unreachable.
+        // resolves the host's (issue #34). A name no shipped tool holds keeps
+        // us out of that.
         const registered: string[] = [];
         const adapters: string[] = [];
         (await load()).apply(ctxWith(registered, adapters), {});
