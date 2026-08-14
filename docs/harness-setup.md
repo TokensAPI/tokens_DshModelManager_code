@@ -78,7 +78,7 @@ and the host answers from the provider registry's declared model metadata
 (`inputModalities`), not from a name heuristic. A `(modlens vision)` variant
 or any model that declares image input keeps its native paste flow (variants
 convert at request time with the thumbnail preserved; vision models read
-images themselves), and so does any model the host cannot resolve — pastes
+images themselves), and so does any model the host cannot resolve. Pastes
 stay native until the host has confirmed a takeover is right. A model whose
 metadata declares no input modalities counts as unresolved: absent metadata is
 never read as "confirmed text-only". Verdicts also age out (60s), so a route
@@ -87,5 +87,5 @@ whose models changed mid-session is re-asked, not trusted forever.
 browser half stands down when the policy endpoint 404s. If the route vanishes
 mid-session after a verdict already confirmed it, the pastes made in the
 brief window before the failed upload comes back (one local round-trip) are
-lost; the client then forgets its verdicts and every later paste goes
+lost. The client then forgets its verdicts and every later paste goes
 native.

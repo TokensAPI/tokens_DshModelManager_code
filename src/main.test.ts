@@ -106,10 +106,13 @@ describe('top-level wiring', () => {
     });
 
     it('parses argv with node semantics when an Electron runtime is present (#25)', () => {
-        // In a packaged Electron host, process.versions.electron makes
-        // commander slice argv as an app (script path becomes a stray
-        // positional) unless parseAsync pins { from: 'node' }. The shim
-        // recreates that runtime shape around the real built CLI.
+        // In a packaged Electron host, process.versions.electron makes a
+        // bare parseAsync() slice argv as an app: the script path lands as a
+        // stray positional. That bare form is the #25 regression this pins.
+        // Commander 13.1 already applies node slicing to any explicitly
+        // passed argv, so { from: 'node' } in main.ts is explicit protection
+        // on top, not the only working spelling. The shim recreates the
+        // Electron runtime shape around the real built CLI.
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-electron-'));
         const shim = path.join(dir, 'electron-shim.cjs');
         fs.writeFileSync(
