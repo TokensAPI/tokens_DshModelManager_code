@@ -187,7 +187,12 @@ export function unpinnedInstalls(text, pkgName = '@liustack/modlens') {
     // A spec runs to the first character that cannot be part of one. The
     // exactness test is anchored so `3.16.4+local` and `3` both fail it.
     const spec = new RegExp(`${escaped}@([^\\s\`'";|&#)]*)`, 'g');
-    const bare = new RegExp(`\\b(add|install)\\b[^\\n]*?${escaped}(?![\\w./@-])`);
+    // `add` and `install` anywhere (dsh forwards its own `add` to pnpm), plus
+    // the one-letter form, which only counts right after a package manager:
+    // a bare \bi\b would match the `i` in "i.e." and report ordinary prose.
+    const bare = new RegExp(
+        `(\\b(add|install)\\b|\\b(pnpm|npm|yarn|bun)\\s+i\\b)[^\\n]*?${escaped}(?![\\w./@-])`,
+    );
     const found = [];
     // CRLF first, so a continuation ending in \r\n joins like any other.
     const joined = text.replace(/\r\n/g, '\n').replace(/\\\n\s*/g, ' ');
