@@ -84,7 +84,8 @@ metadata declares no input modalities counts as unresolved: absent metadata is
 never read as "confirmed text-only". Verdicts also age out (60s), so a route
 whose models changed mid-session is re-asked, not trusted forever.
 `pasteToPath: false` in the plugin row turns the whole feature off: the
-browser half stands down when the policy endpoint 404s, and if the route
-vanishes in the moment between a confirmed verdict and the paste itself, at
-most that one in-flight paste is lost — the client then forgets its verdicts
-and every later paste goes native.
+browser half stands down when the policy endpoint 404s. If the route vanishes
+mid-session after a verdict already confirmed it, the pastes made in the
+brief window before the failed upload comes back (one local round-trip) are
+lost; the client then forgets its verdicts and every later paste goes
+native.

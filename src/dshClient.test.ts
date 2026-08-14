@@ -219,6 +219,28 @@ describe('dsh paste-to-path browser half', () => {
         expect(harness.insertedText()).toBe('');
     });
 
+    it('pastes inside the failure round-trip window are the bounded loss', async () => {
+        // Two pastes fired before the 404 settles are both taken (the
+        // documented window: one local round-trip); once the failure lands,
+        // the client stands down and later pastes go native with no requests.
+        const harness = loadClient({
+            policy: () => ({ status: 200, takeover: true }),
+            postStatus: 404,
+        });
+        harness.setModelLabel('DeepSeek-V4-Flash');
+        harness.focusComposer();
+        await harness.settle();
+        const first = harness.dispatchPaste(IMAGE);
+        const second = harness.dispatchPaste(IMAGE);
+        expect(first.prevented).toBe(true);
+        expect(second.prevented).toBe(true);
+        await harness.settle();
+        const before = harness.fetchCalls.length;
+        expect(harness.dispatchPaste(IMAGE).prevented).toBe(false);
+        await harness.settle();
+        expect(harness.fetchCalls.length).toBe(before);
+    });
+
     it('a POST 404 after a confirmed verdict stands the client down for good', async () => {
         // The route can vanish between the policy GET and the paste (plugin
         // disposed mid-session). That race costs at most the one in-flight
