@@ -30,12 +30,14 @@ export interface SpawnPlan {
 }
 
 export interface CmdShimTarget {
-    /** Absolute path to the entry the shim runs. */
-    script: string;
-    /** Everything the shim passes to Node before the entry (from its shebang). */
-    nodeFlags: string[];
-    /** Fixed arguments the shim passes to the program, before the user's. */
-    progArgs: string[];
+    /**
+     * Everything the shim hands Node ahead of the forwarded user arguments,
+     * in order, with cmd's own variables expanded. No token is classified as
+     * flag, entry, or program argument: reproducing the sequence is what
+     * makes the spawn faithful, and every attempt to assign roles had a
+     * counterexample a real generator could produce.
+     */
+    args: string[];
     /** An explicit Node binary the shim pins, when it names an absolute one. */
     nodeExec?: string;
 }
@@ -53,6 +55,11 @@ function tokenizeCmdLine(line: string): string[] {
     while ((match = re.exec(line)) !== null) {
         tokens.push(match[1] ?? match[2]);
     }
+    // The echo-off prefix also appears against an unquoted command
+    // (`@node "..." %*`), where it is part of the first token's text.
+    if (tokens.length > 0 && tokens[0].startsWith('@')) {
+        tokens[0] = tokens[0].slice(1);
+    }
     return tokens;
 }
 
@@ -66,6 +73,22 @@ function expandShimPath(token: string, shimDir: string): string | null {
         return token;
     }
     return null;
+}
+
+/**
+ * Apply cmd's own substitution: `%dp0%` and `%~dp0` both stand for the shim's
+ * directory with a trailing separator, anywhere in a token. Returns null when
+ * a different `%VAR%` survives, since cmd would expand that from the
+ * environment and a direct spawn cannot.
+ */
+function expandShimVars(token: string, shimDir: string): string | null {
+    const substituted = token.replace(/%~?dp0%?/gi, `${shimDir}\\`);
+    if (/%[^%\s]+%/.test(substituted)) {
+        return null;
+    }
+    // A token that IS a path gets normalized for legibility; `..` inside an
+    // embedded one resolves at the filesystem either way.
+    return /^%~?dp0/i.test(token) ? path.win32.normalize(substituted) : substituted;
 }
 
 /** Whether a resolved interpreter token is Node. */
@@ -181,28 +204,26 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
                 nodeExec = interpreter;
             }
         }
-        // The entry is the one token the shim resolves against its own
-        // directory: every generator writes it as `%dp0%\...` because the
-        // shim has to find it relative to itself, while shebang flag values
-        // and fixed program arguments are copied through verbatim. Splitting
-        // there keeps each group in its own role — a flag's separate value
-        // (`--require ./preload.cjs`) stays with the flags instead of being
-        // dropped, and arguments after the entry (cmd-shim's progArgs) stay
-        // ahead of the user's instead of being mistaken for the entry.
-        const entryIndex = words.findIndex((word, index) => index > 0 && /^%~?dp0%?\\/i.test(word));
-        if (entryIndex < 1) {
+        // Everything after the interpreter, in order, exactly as the shim
+        // would pass it. The only transformation is the one cmd itself
+        // performs: expanding its shim-directory variable wherever it
+        // appears. A token still carrying a variable afterwards is one cmd
+        // would expand from the environment and this spawn cannot, so the
+        // whole shim is declined rather than run with a literal `%VAR%`.
+        const args: string[] = [];
+        let expandable = true;
+        for (const word of words.slice(1)) {
+            const expanded = expandShimVars(word, shimDir);
+            if (expanded === null) {
+                expandable = false;
+                break;
+            }
+            args.push(expanded);
+        }
+        if (!expandable || args.length === 0) {
             continue;
         }
-        const script = expandShimPath(words[entryIndex], shimDir);
-        if (!script) {
-            continue;
-        }
-        return {
-            script,
-            nodeFlags: words.slice(1, entryIndex),
-            progArgs: words.slice(entryIndex + 1),
-            ...(nodeExec ? { nodeExec } : {}),
-        };
+        return { args, ...(nodeExec ? { nodeExec } : {}) };
     }
     return null;
 }
@@ -258,6 +279,6 @@ export function resolveSpawnPlan(
     }
     return {
         command: target.nodeExec ?? deps.execPath,
-        args: [...target.nodeFlags, target.script, ...target.progArgs, ...args],
+        args: [...target.args, ...args],
     };
 }

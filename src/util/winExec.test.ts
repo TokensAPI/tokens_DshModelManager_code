@@ -69,6 +69,21 @@ const PNPM_NODEPATH = `@SETLOCAL
 const PNPM_NODEEXEC = `@SETLOCAL
 @"C:\\runtimes\\node20\\node.exe"  "%~dp0\\..\\cli.js" %*`;
 
+/** npm, a shebang whose flag value is itself a shim-relative path. */
+const NPM_DP0_FLAG = NPM_NODE.replace(
+    '"%_prog%"  "%dp0%\\..\\cli.js" %*',
+    '"%_prog%" --require "%dp0%\\..\\preload.cjs" "%dp0%\\..\\cli.js" %*',
+);
+
+/** pnpm progArgs holding a shim-relative path, which cmd would expand. */
+const PNPM_DP0_PROGARG = PNPM_NODE.replaceAll(
+    '"%~dp0\\..\\cli.js" %*',
+    '"%~dp0\\..\\cli.js" --config "%~dp0\\..\\config.json" %*',
+);
+
+/** pnpm across drives: path.relative gives an absolute entry, no %dp0% at all. */
+const PNPM_CROSS_DRIVE = '@SETLOCAL\r\n@node  "D:\\provider\\cli.js" %*\r\n';
+
 /** npm, `#!/usr/bin/env node --require ./preload.cjs`: a flag with a separate value. */
 const NPM_SPACED_FLAG = NPM_NODE.replace(
     '"%_prog%"  "%dp0%\\..\\cli.js" %*',
@@ -84,15 +99,17 @@ const PNPM_PROGARGS = PNPM_NODE.replaceAll(
 describe('parseCmdShimTarget', () => {
     it('reads npm Node shims, resolving the entry against the shim directory', () => {
         const target = parseCmdShimTarget('C:\\npm\\bin\\claude.cmd', NPM_NODE);
-        expect(target?.script).toBe('C:\\npm\\cli.js');
-        expect(target?.nodeFlags).toEqual([]);
+        expect(target?.args).toEqual(['C:\\npm\\cli.js']);
         expect(target?.nodeExec).toBeUndefined();
     });
 
     it('keeps the interpreter flags a shebang injected, in order', () => {
         const target = parseCmdShimTarget('C:\\npm\\bin\\x.cmd', NPM_NODE_FLAGS);
-        expect(target?.nodeFlags).toEqual(['--max-old-space-size=4096', '--no-warnings']);
-        expect(target?.script).toBe('C:\\npm\\cli-flags.js');
+        expect(target?.args).toEqual([
+            '--max-old-space-size=4096',
+            '--no-warnings',
+            'C:\\npm\\cli-flags.js',
+        ]);
     });
 
     it('declines a python shim whose entry is named .js', () => {
@@ -103,7 +120,7 @@ describe('parseCmdShimTarget', () => {
 
     it('accepts a Node bin with no file extension', () => {
         const target = parseCmdShimTarget('C:\\npm\\bin\\tool.cmd', NPM_NODE_NOEXT);
-        expect(target?.script).toBe('C:\\npm\\entry-noext');
+        expect(target?.args).toEqual(['C:\\npm\\entry-noext']);
     });
 
     it('declines a shim carrying an environment assignment', () => {
@@ -113,35 +130,62 @@ describe('parseCmdShimTarget', () => {
     });
 
     it('reads pnpm shims, and declines the NODE_PATH variant', () => {
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODE)?.script).toBe(
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODE)?.args).toEqual([
             'C:\\pnpm\\cli.js',
-        );
+        ]);
         expect(parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODEPATH)).toBeNull();
     });
 
     it('honours a pinned Node binary instead of the running one', () => {
         const target = parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODEEXEC);
-        expect(target?.script).toBe('C:\\pnpm\\cli.js');
+        expect(target?.args).toEqual(['C:\\pnpm\\cli.js']);
         expect(target?.nodeExec).toBe('C:\\runtimes\\node20\\node.exe');
     });
 
     it('keeps a flag value that sits in its own token', () => {
-        // `--require ./preload.cjs` is two tokens; keeping only the ones
-        // starting with a dash dropped the value and shifted the entry into
-        // its place.
+        // `--require ./preload.cjs` is two tokens: dropping the value and
+        // sliding the entry into its place ran the wrong file.
         const target = parseCmdShimTarget('C:\\npm\\bin\\x.cmd', NPM_SPACED_FLAG);
-        expect(target?.nodeFlags).toEqual(['--require', './preload.cjs']);
-        expect(target?.script).toBe('C:\\npm\\spaced.js');
-        expect(target?.progArgs).toEqual([]);
+        expect(target?.args).toEqual(['--require', './preload.cjs', 'C:\\npm\\spaced.js']);
     });
 
     it('keeps fixed program arguments that sit after the entry', () => {
-        // cmd-shim's progArgs land behind the entry; reading the last token
-        // as the entry mistook them for it and declined the whole shim.
+        // cmd-shim's progArgs land behind the entry, and they belong ahead of
+        // whatever the caller passes.
         const target = parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_PROGARGS);
-        expect(target?.script).toBe('C:\\pnpm\\cli.js');
-        expect(target?.progArgs).toEqual(['--fixed-one', 'fixed-value']);
-        expect(target?.nodeFlags).toEqual([]);
+        expect(target?.args).toEqual(['C:\\pnpm\\cli.js', '--fixed-one', 'fixed-value']);
+    });
+
+    it('expands the shim-directory variable wherever it appears, not just on the entry', () => {
+        // cmd substitutes %dp0% in every token it passes. A flag value and a
+        // fixed argument can both be shim-relative paths, and handing Node a
+        // literal %dp0% would point it at nothing.
+        expect(parseCmdShimTarget('C:\\npm\\bin\\x.cmd', NPM_DP0_FLAG)?.args).toEqual([
+            '--require',
+            'C:\\npm\\preload.cjs',
+            'C:\\npm\\cli.js',
+        ]);
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', PNPM_DP0_PROGARG)?.args).toEqual([
+            'C:\\pnpm\\cli.js',
+            '--config',
+            'C:\\pnpm\\config.json',
+        ]);
+    });
+
+    it('handles an absolute entry with no shim-directory reference at all', () => {
+        // pnpm writes one when the shim and the package sit on different
+        // drives, since path.relative cannot bridge them.
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', PNPM_CROSS_DRIVE)?.args).toEqual([
+            'D:\\provider\\cli.js',
+        ]);
+    });
+
+    it('declines a token carrying an environment variable it cannot expand', () => {
+        const withEnvVar = PNPM_NODE.replaceAll(
+            '"%~dp0\\..\\cli.js" %*',
+            '"%~dp0\\..\\cli.js" --home "%USERPROFILE%\\x" %*',
+        );
+        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withEnvVar)).toBeNull();
     });
 
     it('declines content with no forwarded arguments', () => {
