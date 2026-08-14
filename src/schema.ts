@@ -31,22 +31,14 @@ export const VISION_RESULT_SCHEMA = {
                     items: {
                         type: 'object',
                         properties: {
-                            type: {
-                                type: 'string',
-                                enum: [
-                                    'title',
-                                    'subtitle',
-                                    'paragraph',
-                                    'list',
-                                    'table',
-                                    'chart',
-                                    'form',
-                                    'code',
-                                    'image',
-                                    'icon',
-                                    'other',
-                                ],
-                            },
+                            // Deliberately not an enum. Region kinds are an
+                            // open set: a closed list rejected `link` on any
+                            // web screenshot and `search` on a portal, and a
+                            // rejected result fails the whole read over a
+                            // descriptive label (issue #34). The common
+                            // vocabulary lives in the prompt as guidance
+                            // instead, where an unlisted kind costs nothing.
+                            type: { type: 'string' },
                             reading_order: { type: 'number' },
                             text: { type: 'string' },
                         },
@@ -123,7 +115,7 @@ export function missingSchemaFields(result: unknown): string[] {
     return schemaViolations(VISION_RESULT_SCHEMA as JsonSchemaNode, result, '');
 }
 
-interface JsonSchemaNode {
+export interface JsonSchemaNode {
     type?: string;
     properties?: Record<string, JsonSchemaNode>;
     required?: readonly string[];
@@ -131,7 +123,12 @@ interface JsonSchemaNode {
     enum?: readonly string[];
 }
 
-function schemaViolations(schema: JsonSchemaNode, value: unknown, path: string): string[] {
+/**
+ * Exported for tests: the vision schema itself declares no enum (region kinds
+ * are an open set, see above), so enum enforcement has no live caller and
+ * would rot untested if it could only be reached through that one schema.
+ */
+export function schemaViolations(schema: JsonSchemaNode, value: unknown, path: string): string[] {
     const label = path || '(root)';
 
     if (schema.type === 'object') {
