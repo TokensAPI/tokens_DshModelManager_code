@@ -1083,6 +1083,58 @@ describe('dsh paste-to-path host route', () => {
         expect(await ask()).toBe(false);
     });
 
+    it('a verdict computed under the old topology is never cached or served', async () => {
+        // The race the plain clear cannot reach: a GET starts against the
+        // pre-mount registry, the vision twin mounts and fires the event
+        // while the GET awaits listModels, and the stale true then used to be
+        // written into the just-emptied cache and served for a full TTL.
+        const textModel = { id: 'shared-text', name: 'Shared Model', inputModalities: ['text'] };
+        const visionModel = {
+            id: 'shared-vision',
+            name: 'Shared Model',
+            inputModalities: ['text', 'image'],
+        };
+        const providers = [{ id: 'text' }];
+        let releaseText: (() => void) | undefined;
+        let deferOnce = true;
+        const llm = {
+            listProviders: () => providers.map((provider) => ({ ...provider })),
+            listModels: async (id: string) => {
+                if (id === 'text' && deferOnce) {
+                    deferOnce = false;
+                    await new Promise<void>((resolve) => {
+                        releaseText = resolve;
+                    });
+                }
+                return id === 'vision' ? [visionModel] : [textModel];
+            },
+        };
+        const events: Record<string, () => void> = {};
+        const routes = await routeOf({}, llm, events);
+        const ask = async () => {
+            const { out, res } = fakeRes();
+            await routes[0].handler(
+                fakeReq(
+                    'GET',
+                    Buffer.alloc(0),
+                    `/modlens/paste?model=${encodeURIComponent('current Shared Model')}`,
+                ) as never,
+                res as never,
+            );
+            return (JSON.parse(out.body) as { takeover: boolean }).takeover;
+        };
+        const racing = ask();
+        await new Promise((resolve) => setImmediate(resolve));
+        expect(releaseText).toBeTypeOf('function');
+        providers.push({ id: 'vision' });
+        events['llm/adapters-updated']?.();
+        releaseText?.();
+        // The racing GET recomputes against the new registry and answers
+        // false, and later asks stay false: the stale true never lands.
+        expect(await racing).toBe(false);
+        expect(await ask()).toBe(false);
+    });
+
     it('missing inputModalities means UNKNOWN, never confirmed text-only', async () => {
         const llm = {
             listProviders: () => [{ id: 'p1' }],
