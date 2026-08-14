@@ -276,8 +276,14 @@ function registerPasteRoute(ctx, host) {
   // (llm-pi-ai lands after settings load) could therefore serve a stale
   // verdict computed before its vision twin existed, so every topology
   // change empties the cache at exactly the boundary that invalidates it.
+  // The epoch guards the async gap the clear cannot reach: a verdict whose
+  // computation STARTED before the event describes a registry that no longer
+  // exists, and without the counter it was written back into the just-
+  // emptied cache and served for a full TTL.
+  let topologyEpoch = 0
   if (typeof host.on === 'function') {
     host.on('llm/adapters-updated', () => {
+      topologyEpoch += 1
       verdicts.clear()
     })
   }
@@ -294,11 +300,27 @@ function registerPasteRoute(ctx, host) {
           if (cached && Date.now() - cached.at < PASTE_VERDICT_TTL_MS) {
             takeover = cached.takeover
           } else {
-            takeover = await pasteTakeoverVerdict(host, label)
-            verdicts.delete(label)
-            verdicts.set(label, { takeover, at: Date.now() })
-            if (verdicts.size > PASTE_VERDICT_CAP) {
-              verdicts.delete(verdicts.keys().next().value)
+            // Recompute while the topology moves under the computation: an
+            // answer read from a pre-event registry snapshot must be neither
+            // cached nor served. Bounded, and the give-up answer is the
+            // conservative one.
+            let attempts = 0
+            for (;;) {
+              const startedEpoch = topologyEpoch
+              takeover = await pasteTakeoverVerdict(host, label)
+              if (topologyEpoch === startedEpoch) {
+                verdicts.delete(label)
+                verdicts.set(label, { takeover, at: Date.now() })
+                if (verdicts.size > PASTE_VERDICT_CAP) {
+                  verdicts.delete(verdicts.keys().next().value)
+                }
+                break
+              }
+              attempts += 1
+              if (attempts >= 3) {
+                takeover = false
+                break
+              }
             }
           }
           res.writeHead(200, { 'content-type': 'application/json' })
