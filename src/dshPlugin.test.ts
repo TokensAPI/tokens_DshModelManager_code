@@ -832,7 +832,11 @@ describe('dsh paste-to-path host route', () => {
         const { path: written } = JSON.parse(out.body) as { path: string };
         expect(written.endsWith('paste.png')).toBe(true);
         expect(fs.readFileSync(written)).toEqual(png);
-        expect(fs.statSync(written).mode & 0o777).toBe(0o600);
+        // POSIX permission bits are meaningless on Windows (mode reads 0o666
+        // regardless), the same boundary recover-paste's checks respect.
+        if (process.platform !== 'win32') {
+            expect(fs.statSync(written).mode & 0o777).toBe(0o600);
+        }
         fs.rmSync(path.dirname(written), { recursive: true, force: true });
     });
 
