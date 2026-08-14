@@ -232,21 +232,29 @@ describe('docs contract', () => {
         expect(line).not.toMatch(/`visual` is optional/);
     });
 
-    it('output-schema lists every optional field the schema leaves out of required', () => {
-        // The doc promises these are absent-or-typed and never null, which is
-        // only true while the list matches the schema (issue #37).
+    it('both output-schema languages list exactly the optional fields, no more', () => {
+        // The docs promise these are absent-or-typed and never null, which is
+        // only true while each list matches the schema exactly (issue #37).
+        // Equality, not containment: a path listed but no longer optional is
+        // as wrong as one missing.
         const fs = require('fs');
         const path = require('path');
-        const doc = fs.readFileSync(
-            path.join(__dirname, '..', 'docs', 'output-schema.md'),
-            'utf-8',
-        ) as string;
-        const line = doc.split('\n').find((l: string) => l.startsWith('Optional fields:'));
-        expect(line).toBeDefined();
-        for (const field of optionalPaths(VISION_RESULT_SCHEMA as JsonSchemaNode, '')) {
-            expect(line, `${field} is optional in the schema but not listed`).toContain(
-                `\`${field}\``,
-            );
+        const expected = new Set(optionalPaths(VISION_RESULT_SCHEMA as JsonSchemaNode, ''));
+        for (const [file, prefix] of [
+            ['output-schema.md', 'Optional fields:'],
+            ['output-schema.zh-CN.md', '可选字段：'],
+        ]) {
+            const doc = fs.readFileSync(
+                path.join(__dirname, '..', 'docs', file),
+                'utf-8',
+            ) as string;
+            const line = doc.split('\n').find((l: string) => l.startsWith(prefix));
+            expect(line, `${file} has no optional-fields line`).toBeDefined();
+            // Only the list itself: the sentence after it mentions `null`,
+            // which is a promise about those fields rather than one of them.
+            const list = (line ?? '').split(/\.\s|。/)[0];
+            const listed = new Set([...list.matchAll(/`([^`]+)`/g)].map((match) => match[1]));
+            expect(listed, `${file} does not match the schema`).toEqual(expected);
         }
     });
 });

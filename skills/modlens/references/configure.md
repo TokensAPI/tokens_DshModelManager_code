@@ -12,7 +12,7 @@ Read this when the user asks how to set up, configure, or switch ModLens provide
 modlens config init                     # write a starter config (refuses to overwrite; --force to redo)
 modlens config show                     # effective file, API keys masked
 modlens config set provider <name>      # change the default provider
-modlens config set <provider>.<field> <value>   # fields: apiKey, baseUrl, model, extraBody
+modlens config set <provider>.<field> <value>   # fields: apiKey, baseUrl, model, proxy, extraBody, structuredOutput
 ```
 
 `config set` writes the file with 0600 permissions.
@@ -42,7 +42,8 @@ Everything lives under four top-level keys, all optional. This example shows eve
       "apiKey": "sk-...",
       "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "model": "qwen3.6-27b",
-      "extraBody": { "thinking": { "type": "disabled" } }
+      "extraBody": { "thinking": { "type": "disabled" } },
+      "structuredOutput": true
     },
     "anthropic": {
       "apiKey": "sk-ant-...",
@@ -57,8 +58,9 @@ Everything lives under four top-level keys, all optional. This example shows eve
 Field semantics:
 
 - `provider`: which provider runs when `-p` is not given. Canonical names or aliases both work (`agy`/`antigravity` for `antigravity-cli`, `gemini` for `gemini-api`, `openai-compat` for `openai`, `claude` for `anthropic`, `claude-code` for `claude-cli`). Empty or absent pins nothing: the failover chain decides, trying configured API providers before the agent CLIs.
-- `providers.<name>.<field>`: four fields exist, `apiKey`, `baseUrl`, `model`, and `extraBody`. Every provider entry is optional, and every field inside it is optional. Alias keys are read too (settings saved under `gemini` are found when `gemini-api` resolves), with the canonical key winning on conflict.
+- `providers.<name>.<field>`: six fields exist, `apiKey`, `baseUrl`, `model`, `proxy`, `extraBody`, and `structuredOutput`. Every provider entry is optional, and every field inside it is optional. Alias keys are read too (settings saved under `gemini` are found when `gemini-api` resolves), with the canonical key winning on conflict.
 - `providers.<name>.extraBody`: a JSON object merged into the request body of the API providers (`gemini-api`, `openai`, `anthropic`), for whatever knobs that vendor has and modlens has no flag for. Turning thinking off is the usual reason, see the section below. Nested objects merge key by key, so adding one knob leaves the rest of that block alone. The fields carrying the image, the prompt, and the schema enforcement are refused with an error naming the field. The two CLI providers take no request body, so a run on `antigravity-cli` or `claude-cli` ignores it and says so in `meta.warnings`.
+- `providers.openai.structuredOutput`: `true` asks an OpenAI-compatible gateway to enforce the vision contract itself, as `response_format: json_schema` in the strict form those endpoints require. Off by default, since a gateway without structured-output support answers 400 for the field. A `response_format` you set in `extraBody` wins over it.
 - `guards`: the invocation guard, for people who run both text-only and vision-capable models through the same client. Both lists hold glob patterns (`*` and `?`, case-insensitive, matched against the model name and `provider/model`), set with `modlens config set guards.denyModels '["gemini-3*"]'` or `guards.allowModels` (a JSON array or a comma-separated list, empty clears). Two ways to express the same intent, pick the shorter list:
   - `denyModels` alone: everything runs the engine except the listed vision models. Right when text-only models are the majority of what you plug in.
   - `allowModels` non-empty (allowlist mode): only the listed models run the engine, every other identified model is denied. Right for the actual 2026 landscape, where text-only models are the short list. A deny pattern still wins over an allow match, so a broad allow can have its vision variants carved out, as in the example above: `glm-5.*` allows the text line while `glm-*v*` catches `glm-5v-turbo`. Anchor allow patterns tightly (`deepseek-v4-*`, not `deepseek*`) so a vendor's next multimodal generation falls off the list and steps aside until you have checked it.
