@@ -203,7 +203,9 @@ export function unpinnedInstalls(text, pkgName = '@liustack/modlens') {
             const args = segment
                 .replace(/[<>]+\s*\S+/g, ' ')
                 .replace(/(^|\s)[A-Za-z_][A-Za-z0-9_]*=\S+/g, ' ');
-            if (args.includes('--config.minimumReleaseAge=0')) continue;
+            // The exact argument, standing alone: `=0oops` is a different
+            // value, and the flag quoted inside prose is not an argument.
+            if (/(^|\s)--config\.minimumReleaseAge=0(\s|$)/.test(args)) continue;
             const specs = [...segment.matchAll(spec)]
                 .map((match) => match[1])
                 // `@<pinned>` and `@<version>` are placeholders in prose
