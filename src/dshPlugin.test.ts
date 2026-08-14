@@ -1017,6 +1017,30 @@ describe('dsh paste-to-path host route', () => {
         expect((JSON.parse(out.body) as { takeover: boolean }).takeover).toBe(false);
     });
 
+    it('a two-character vision name still vetoes: no length floor on the veto', async () => {
+        // A vision model named "AI" appears in "current AI" as legitimately
+        // as any long name. A length filter on the veto side let the longer
+        // text-only "Current AI" confirm the takeover alone.
+        const llm = {
+            listProviders: () => [{ id: 'vision' }, { id: 'text' }],
+            listModels: async (id: string) =>
+                id === 'vision'
+                    ? [{ id: 'vision-ai', name: 'AI', inputModalities: ['text', 'image'] }]
+                    : [{ id: 'current-ai', name: 'Current AI', inputModalities: ['text'] }],
+        };
+        const routes = await routeOf({}, llm);
+        const { out, res } = fakeRes();
+        await routes[0].handler(
+            fakeReq(
+                'GET',
+                Buffer.alloc(0),
+                `/modlens/paste?model=${encodeURIComponent('Select model, current AI')}`,
+            ) as never,
+            res as never,
+        );
+        expect((JSON.parse(out.body) as { takeover: boolean }).takeover).toBe(false);
+    });
+
     it('missing inputModalities means UNKNOWN, never confirmed text-only', async () => {
         const llm = {
             listProviders: () => [{ id: 'p1' }],
