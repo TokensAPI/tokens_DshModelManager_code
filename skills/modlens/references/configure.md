@@ -42,6 +42,7 @@ Everything lives under four top-level keys, all optional. This example shows eve
       "apiKey": "sk-...",
       "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "model": "qwen3.6-27b",
+      "proxy": "http://127.0.0.1:7890",
       "extraBody": { "thinking": { "type": "disabled" } },
       "structuredOutput": true
     },
