@@ -29,9 +29,11 @@ const TOKEN_SHAPES: RegExp[] = [
  * mention, generated-source noise) is never torn. Greedy up to the LAST `@`
  * before the host: WHATWG URLs accept unescaped extra `@`s in userinfo and
  * fold the earlier ones into the password, so stopping at the first `@`
- * leaked the password's tail (alice:p@ss -> "ss@host" survived).
+ * leaked the password's tail (alice:p@ss -> "ss@host" survived). The class
+ * stops at `?` and `#` as well as `/`: the authority ends there, and an `@`
+ * inside a query (?contact=a@b) is content, not a credential.
  */
-const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/]*@/gi;
+const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
 
 /**
  * Strip likely credentials from text about to travel into an error message,
@@ -45,7 +47,7 @@ const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/]*@/gi;
  * issue; redactSecrets is the blunter net for error text.
  */
 export function maskUrlCredentials(url: string): string {
-    return url.replace(/(\/\/)[^\s/]*@/, '$1***@');
+    return url.replace(/(\/\/)[^\s/?#]*@/, '$1***@');
 }
 
 export function redactSecrets(

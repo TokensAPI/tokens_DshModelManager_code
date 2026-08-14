@@ -59,6 +59,18 @@ describe('redactSecrets', () => {
         const mention = 'diagnostic: see //owner@example.com for escalation';
         expect(redactSecrets(mention)).toBe(mention);
     });
+
+    it('stops at the authority: an @ inside a query or fragment is content', () => {
+        // Greedy-to-last-@ must not cross ? or #, or the real host and query
+        // get swallowed and query text impersonates the host.
+        expect(redactSecrets('http://alice:secret@proxy.example?contact=owner@example.net')).toBe(
+            'http://[redacted]@proxy.example?contact=owner@example.net',
+        );
+        const noCreds = 'fetch http://example.com?email=owner@example.net failed';
+        expect(redactSecrets(noCreds)).toBe(noCreds);
+        const fragment = 'see http://example.com#mail=owner@example.net';
+        expect(redactSecrets(fragment)).toBe(fragment);
+    });
 });
 
 describe('maskUrlCredentials', () => {
@@ -79,6 +91,9 @@ describe('maskUrlCredentials', () => {
         expect(maskUrlCredentials('http://proxy.example:8080')).toBe('http://proxy.example:8080');
         expect(maskUrlCredentials('http://proxy.example:8080/path@segment')).toBe(
             'http://proxy.example:8080/path@segment',
+        );
+        expect(maskUrlCredentials('http://proxy.example?contact=owner@example.net')).toBe(
+            'http://proxy.example?contact=owner@example.net',
         );
     });
 });
