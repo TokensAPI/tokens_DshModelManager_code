@@ -244,7 +244,12 @@ describe.skipIf(onWindows)('provider subprocess handling', () => {
                 summary: 'ok',
                 ocr: { full_text: '', lines: [{ text: 'a', language: null }] },
                 layout: { regions: [] },
-                semantics: { scene: '', intent: null, entities: [], relations: null },
+                semantics: {
+                    scene: '',
+                    intent: null,
+                    entities: [{ name: 'e', type: 't', evidence: null }],
+                    relations: null,
+                },
                 visual: { dominant_colors: null, style: null, notes: null },
                 uncertainty: [],
                 vendor_extra: null,
@@ -265,10 +270,18 @@ describe.skipIf(onWindows)('provider subprocess handling', () => {
             semantics: Record<string, unknown>;
             ocr: { lines: Array<Record<string, unknown>> };
         };
-        expect('notes' in result.visual).toBe(false);
-        expect('relations' in result.semantics).toBe(false);
+        // All seven optional positions the contract has, one by one.
         expect('language' in result.ocr.lines[0]).toBe(false);
+        expect('intent' in result.semantics).toBe(false);
+        expect('relations' in result.semantics).toBe(false);
+        const entity = (result.semantics.entities as Array<Record<string, unknown>>)[0];
+        expect('evidence' in entity).toBe(false);
+        expect('dominant_colors' in result.visual).toBe(false);
+        expect('style' in result.visual).toBe(false);
+        expect('notes' in result.visual).toBe(false);
+        // And the required neighbours are untouched.
         expect(result.ocr.lines[0].text).toBe('a');
+        expect(entity.name).toBe('e');
     }, 30_000);
 
     it('runs a subprocess provider in an isolated workdir holding only the image', async () => {

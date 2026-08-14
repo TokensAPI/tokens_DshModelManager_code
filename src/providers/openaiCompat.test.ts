@@ -232,7 +232,13 @@ describe('empty optionals on the openai route (#37)', () => {
     it('drops them at its own parse boundary', async () => {
         const quiet = {
             ...structured,
-            semantics: { scene: '', intent: null, entities: [], relations: null },
+            ocr: { full_text: '', lines: [{ text: 'a', language: null }] },
+            semantics: {
+                scene: '',
+                intent: null,
+                entities: [{ name: 'e', type: 't', evidence: null }],
+                relations: null,
+            },
             visual: { dominant_colors: null, style: null, notes: null },
         };
         vi.stubGlobal(
@@ -250,7 +256,25 @@ describe('empty optionals on the openai route (#37)', () => {
             settings,
         });
         expect(JSON.stringify(outcome.result)).not.toContain('null');
-        expect('notes' in (outcome.result as { visual: object }).visual).toBe(false);
+        const result = outcome.result as {
+            ocr: { lines: Array<Record<string, unknown>> };
+            semantics: Record<string, unknown>;
+            visual: Record<string, unknown>;
+        };
+        const entity = (result.semantics.entities as Array<Record<string, unknown>>)[0];
+        for (const [holder, field] of [
+            [result.ocr.lines[0], 'language'],
+            [result.semantics, 'intent'],
+            [result.semantics, 'relations'],
+            [entity, 'evidence'],
+            [result.visual, 'dominant_colors'],
+            [result.visual, 'style'],
+            [result.visual, 'notes'],
+        ] as Array<[Record<string, unknown>, string]>) {
+            expect(field in holder, `${field} survived`).toBe(false);
+        }
+        expect(result.ocr.lines[0].text).toBe('a');
+        expect(entity.name).toBe('e');
     });
 });
 
