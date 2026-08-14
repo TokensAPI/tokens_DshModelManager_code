@@ -69,6 +69,25 @@ if (run('git', ['tag', '--list', `v${next}`])) {
     fail(`tag v${next} already exists.`);
 }
 
+// The push at the end must be all-or-nothing, and it can only be that if the
+// branch update is a fast-forward. Git happily accepts a tag while rejecting a
+// stale main in the same push, and that half-success triggers the release
+// workflow on a tree origin/main does not contain. So: sync with the remote
+// now, refuse a stale or diverged main, refuse a tag the remote already has.
+run('git', ['fetch', 'origin', 'main']);
+try {
+    run('git', ['merge-base', '--is-ancestor', 'origin/main', 'HEAD']);
+} catch {
+    fail('local main is behind or diverged from origin/main. Pull first.');
+}
+try {
+    if (run('git', ['ls-remote', '--tags', 'origin', `refs/tags/v${next}`])) {
+        fail(`tag v${next} already exists on origin.`);
+    }
+} catch (error) {
+    fail(`cannot reach origin to verify tags: ${error.message ?? error}`);
+}
+
 // The check that would have caught a real mistake: a version published with
 // nothing written about it.
 const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf-8');
@@ -102,7 +121,10 @@ writeFileSync(pkgPath, pkgRaw.replace(`"version": "${pkg.version}"`, `"version":
 stampLaunchers(root);
 run('git', ['commit', '-am', `chore(release): v${next}`]);
 run('git', ['tag', '-a', `v${next}`, '-m', `v${next}`]);
-run('git', ['push', '--follow-tags']);
+// --atomic: the branch and the tag land together or not at all. The old
+// --follow-tags push could deliver the tag while main was rejected as
+// non-fast-forward, releasing a tree the remote branch never contained.
+run('git', ['push', '--atomic', 'origin', 'main', `refs/tags/v${next}`]);
 
 console.log(
     `\nTag v${next} pushed. CI will finish the release: npm publish and the GitHub Release.`,
