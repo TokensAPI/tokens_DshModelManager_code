@@ -26,8 +26,10 @@ plain text-only entries, where the image becomes a file path. Engines are
 configured exactly as below (`~/.modlens/config.json` is shared), so continue
 at step 3 for the engine, then verify with `doctor`. Skip steps 1 and 2: there
 is no skill folder to copy. If `dsh` warns `declares no dsh.bundle`, the
-release-age gate installed an old version, and the `@latest` above is what
-avoids it.
+release-age gate installed an old version. `@latest` does not avoid that: name
+the version instead (`npm view @liustack/modlens version` prints it), which
+pnpm treats as a deliberate request rather than a resolution. See
+[updating](docs/harness-setup.md#keeping-it-up-to-date).
 
 For every other harness, the whole install is four steps:
 

@@ -123,15 +123,15 @@ Invocation guard denied this read: active model "gemini-3.1-pro" matches guards.
 
 ## dsh 提示 `declares no dsh.bundle — installed as a plain dependency`
 
-dsh profile 装到的是旧版 modlens。`dsh.bundle` 声明从 3.9.0 起才存在，而 pnpm 11 会扣住最近 24 小时内发布的版本（`minimumReleaseAge`，自 11.1 起默认开启。`pnpm config get` 查不到它，因为那条命令只显示你自己设过的项）。当带声明的版本全都落在这个窗口内时，pnpm 会静默回退到更旧的版本，而旧版本没有 bundle 声明，dsh 于是正确地把它当作普通依赖，一个工具都不会出现。
+dsh profile 装到的是旧版 modlens。`dsh.bundle` 声明从 3.9.0 起才存在，而 pnpm 11 会扣住最近 24 小时内发布的版本（`minimumReleaseAge`，自 11.0 起默认开启。`pnpm config get` 不展示这一项的内置默认值，所以查它什么都不显示）。当带声明的版本全都落在这个窗口内时，pnpm 会静默回退到更旧的版本，而旧版本没有 bundle 声明，dsh 于是正确地把它当作普通依赖，一个工具都不会出现。
 
-`@latest` 绕不开这一层。dist-tag 会先被解析，然后和其他结果一样过冷静期。本页早先的说法是错的。改成写死精确版本号，那是一次明确的指定，而不是一次解析：
+`@latest` 绕不开这一层，本页早先的说法是错的。冷静期先把候选版本过滤掉，dist-tag 才在剩下的里面解析，于是它直接落到了更旧的那个上。改成写死精确版本号，pnpm 会把它当作一次明确的指定，而不是一次解析：
 
 ```sh
 npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.16.4
 ```
 
-`npm view @liustack/modlens version` 可以查到当前版本号。pnpm 11 会装上被点名的版本，并把它作为一条已批准的例外写进该 profile 的 `pnpm-workspace.yaml`，其余所有包和 modlens 以后的版本仍然留在窗口后面。
+`npm view @liustack/modlens version` 可以查到当前版本号。pnpm 11 会装上被点名的版本，11.1.3 起还会把它作为一条已批准的例外写进该 profile 的 `pnpm-workspace.yaml`，其余所有包和 modlens 以后的版本仍然留在窗口后面。
 
 如果你自己设过 `minimumReleaseAge`，pnpm 会把这条策略视为严格模式，转而拒绝安装并报出版本与截止时间（`ERR_PNPM_NO_MATURE_MATCHING_VERSION`）。在同一个文件里放行这一个版本：
 
