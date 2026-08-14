@@ -6,7 +6,7 @@ Read this when the user asks how to set up, configure, or switch ModLens provide
 
 ## Where config lives
 
-`~/.modlens/config.json`, managed by the CLI. Precedence: CLI flags > environment variables > config file > built-in defaults. The default provider with zero config is `antigravity-cli`.
+`~/.modlens/config.json`, managed by the CLI. Precedence: CLI flags > environment variables > config file > built-in defaults. With no `provider` set, runs walk the failover chain in order (an available `gemini-api` key is tried before the agent CLIs); a machine with nothing configured at all ends up on `antigravity-cli`.
 
 ```bash
 modlens config init                     # write a starter config (refuses to overwrite; --force to redo)
@@ -56,7 +56,7 @@ Everything lives under four top-level keys, all optional. This example shows eve
 
 Field semantics:
 
-- `provider`: which provider runs when `-p` is not given. Canonical names or aliases both work (`agy`/`antigravity` for `antigravity-cli`, `gemini` for `gemini-api`, `openai-compat` for `openai`, `claude` for `anthropic`, `claude-code` for `claude-cli`). Empty or absent means `antigravity-cli`.
+- `provider`: which provider runs when `-p` is not given. Canonical names or aliases both work (`agy`/`antigravity` for `antigravity-cli`, `gemini` for `gemini-api`, `openai-compat` for `openai`, `claude` for `anthropic`, `claude-code` for `claude-cli`). Empty or absent pins nothing: the failover chain decides, trying configured API providers before the agent CLIs.
 - `providers.<name>.<field>`: four fields exist, `apiKey`, `baseUrl`, `model`, and `extraBody`. Every provider entry is optional, and every field inside it is optional. Alias keys are read too (settings saved under `gemini` are found when `gemini-api` resolves), with the canonical key winning on conflict.
 - `providers.<name>.extraBody`: a JSON object merged into the request body of the API providers (`gemini-api`, `openai`, `anthropic`), for whatever knobs that vendor has and modlens has no flag for. Turning thinking off is the usual reason, see the section below. Nested objects merge key by key, so adding one knob leaves the rest of that block alone. The fields carrying the image, the prompt, and the schema enforcement are refused with an error naming the field. The two CLI providers take no request body, so a run on `antigravity-cli` or `claude-cli` ignores it and says so in `meta.warnings`.
 - `guards`: the invocation guard, for people who run both text-only and vision-capable models through the same client. Both lists hold glob patterns (`*` and `?`, case-insensitive, matched against the model name and `provider/model`), set with `modlens config set guards.denyModels '["gemini-3*"]'` or `guards.allowModels` (a JSON array or a comma-separated list, empty clears). Two ways to express the same intent, pick the shorter list:

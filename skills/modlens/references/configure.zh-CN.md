@@ -6,7 +6,7 @@
 
 ## 配置放在哪
 
-`~/.modlens/config.json`，由 CLI 管理。优先级：CLI 参数 > 环境变量 > 配置文件 > 内置默认值。零配置时的默认 provider 是 `antigravity-cli`。
+`~/.modlens/config.json`，由 CLI 管理。优先级：CLI 参数 > 环境变量 > 配置文件 > 内置默认值。不设 `provider` 时按失败切换链依次尝试（有 `gemini-api` key 会先于 agent CLI 被试到），机器上什么都没配才会落在 `antigravity-cli`。
 
 ```bash
 modlens config init                     # 写入一份起步配置（已存在则拒绝，--force 重写）
@@ -56,7 +56,7 @@ modlens config set <provider>.<field> <value>   # 字段：apiKey、baseUrl、mo
 
 字段含义：
 
-- `provider`：不传 `-p` 时由哪个 provider 执行。标准名和别名都行（`agy`/`antigravity` 对应 `antigravity-cli`，`gemini` 对应 `gemini-api`，`openai-compat` 对应 `openai`，`claude` 对应 `anthropic`，`claude-code` 对应 `claude-cli`）。留空或缺失表示 `antigravity-cli`。
+- `provider`：不传 `-p` 时由哪个 provider 执行。标准名和别名都行（`agy`/`antigravity` 对应 `antigravity-cli`，`gemini` 对应 `gemini-api`，`openai-compat` 对应 `openai`，`claude` 对应 `anthropic`，`claude-code` 对应 `claude-cli`）。留空或缺失表示不钉任何一个：由失败切换链决定，已配置的 API provider 先于 agent CLI 被尝试。
 - `providers.<name>.<field>`：共四个字段，`apiKey`、`baseUrl`、`model`、`extraBody`。每个 provider 条目都可选，条目里的每个字段也都可选。别名键同样会被读取（存在 `gemini` 下的设置在解析到 `gemini-api` 时也能找到），冲突时标准键胜出。
 - `providers.<name>.extraBody`：一个 JSON 对象，合并进 API provider（`gemini-api`、`openai`、`anthropic`）的请求体，用来传厂商有而 modlens 没有对应参数的开关。最常见的用途是关掉思考，见下文小节。嵌套对象逐键合并，所以加一个开关不会动到该块里的其他内容。承载图片、提示词和 schema 约束的字段会被拒绝，报错会点名该字段。两个 CLI provider 不发请求体，所以在 `antigravity-cli` 或 `claude-cli` 上运行时它会被忽略，并在 `meta.warnings` 里说明。
 - `guards`：调用 guard，给在同一个客户端里既跑纯文本模型又跑视觉模型的人用。两个列表都放 glob 模式（支持 `*` 和 `?`，不区分大小写，同时匹配模型名和 `provider/model`），用 `modlens config set guards.denyModels '["gemini-3*"]'` 或 `guards.allowModels` 设置（JSON 数组或逗号分隔的列表都行，传空则清除）。两种写法表达同一个意图，选列表更短的那种：
