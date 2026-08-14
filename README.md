@@ -159,10 +159,10 @@ ModLens does not accept pull requests. The project is maintained by a single aut
 This project runs on LIUSTACK Skills: `shaping` before you build, `coding` while you build, `dig` when it breaks, `snapshot` when you hand off. Lighter than Superpowers, and stronger.
 
 ```bash
-npx -y skills add liustack/liustack -g
+npx -y skills add liustack/vibemaster -g
 ```
 
-⭐ If it helps, star [ModLens](https://github.com/liustack/modlens) and [liustack](https://github.com/liustack/liustack). Stars are how the next developer finds them.
+⭐ If it helps, star [ModLens](https://github.com/liustack/modlens) and [VibeMaster](https://github.com/liustack/vibemaster). Stars are how the next developer finds them.
 
 ## Star History
 
