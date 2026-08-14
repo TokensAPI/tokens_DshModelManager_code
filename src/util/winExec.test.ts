@@ -69,6 +69,18 @@ const PNPM_NODEPATH = `@SETLOCAL
 const PNPM_NODEEXEC = `@SETLOCAL
 @"C:\\runtimes\\node20\\node.exe"  "%~dp0\\..\\cli.js" %*`;
 
+/** npm, `#!/usr/bin/env node --require ./preload.cjs`: a flag with a separate value. */
+const NPM_SPACED_FLAG = NPM_NODE.replace(
+    '"%_prog%"  "%dp0%\\..\\cli.js" %*',
+    '"%_prog%" --require ./preload.cjs "%dp0%\\..\\spaced.js" %*',
+);
+
+/** pnpm with progArgs: fixed program arguments, after the entry. */
+const PNPM_PROGARGS = PNPM_NODE.replaceAll(
+    '"%~dp0\\..\\cli.js" %*',
+    '"%~dp0\\..\\cli.js" --fixed-one fixed-value %*',
+);
+
 describe('parseCmdShimTarget', () => {
     it('reads npm Node shims, resolving the entry against the shim directory', () => {
         const target = parseCmdShimTarget('C:\\npm\\bin\\claude.cmd', NPM_NODE);
@@ -111,6 +123,25 @@ describe('parseCmdShimTarget', () => {
         const target = parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODEEXEC);
         expect(target?.script).toBe('C:\\pnpm\\cli.js');
         expect(target?.nodeExec).toBe('C:\\runtimes\\node20\\node.exe');
+    });
+
+    it('keeps a flag value that sits in its own token', () => {
+        // `--require ./preload.cjs` is two tokens; keeping only the ones
+        // starting with a dash dropped the value and shifted the entry into
+        // its place.
+        const target = parseCmdShimTarget('C:\\npm\\bin\\x.cmd', NPM_SPACED_FLAG);
+        expect(target?.nodeFlags).toEqual(['--require', './preload.cjs']);
+        expect(target?.script).toBe('C:\\npm\\spaced.js');
+        expect(target?.progArgs).toEqual([]);
+    });
+
+    it('keeps fixed program arguments that sit after the entry', () => {
+        // cmd-shim's progArgs land behind the entry; reading the last token
+        // as the entry mistook them for it and declined the whole shim.
+        const target = parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_PROGARGS);
+        expect(target?.script).toBe('C:\\pnpm\\cli.js');
+        expect(target?.progArgs).toEqual(['--fixed-one', 'fixed-value']);
+        expect(target?.nodeFlags).toEqual([]);
     });
 
     it('declines content with no forwarded arguments', () => {
@@ -163,6 +194,23 @@ describe('resolveSpawnPlan', () => {
         );
         expect(plan.command).toBe('C:\\Program Files\\nodejs\\node.exe');
         expect(plan.args[0]).toBe('C:\\cli.js');
+    });
+
+    it('orders the spawn as node flags, entry, shim args, then the user args', () => {
+        const shimPath = 'C:\\pnpm\\bin\\tool.cmd';
+        const plan = resolveSpawnPlan(
+            'tool',
+            ['-p', 'prompt'],
+            {},
+            winDeps({ [shimPath]: PNPM_PROGARGS }, { tool: shimPath }),
+        );
+        expect(plan.args).toEqual([
+            'C:\\pnpm\\cli.js',
+            '--fixed-one',
+            'fixed-value',
+            '-p',
+            'prompt',
+        ]);
     });
 
     it('spawns the pinned Node when the shim names one', () => {

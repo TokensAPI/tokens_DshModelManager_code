@@ -32,8 +32,10 @@ export interface SpawnPlan {
 export interface CmdShimTarget {
     /** Absolute path to the entry the shim runs. */
     script: string;
-    /** Interpreter flags the shim passes before the entry (from its shebang). */
+    /** Everything the shim passes to Node before the entry (from its shebang). */
     nodeFlags: string[];
+    /** Fixed arguments the shim passes to the program, before the user's. */
+    progArgs: string[];
     /** An explicit Node binary the shim pins, when it names an absolute one. */
     nodeExec?: string;
 }
@@ -179,13 +181,28 @@ export function parseCmdShimTarget(cmdPath: string, content: string): CmdShimTar
                 nodeExec = interpreter;
             }
         }
-        const entryToken = words[words.length - 1];
-        const script = expandShimPath(entryToken, shimDir);
-        if (!script || entryToken.startsWith('-')) {
+        // The entry is the one token the shim resolves against its own
+        // directory: every generator writes it as `%dp0%\...` because the
+        // shim has to find it relative to itself, while shebang flag values
+        // and fixed program arguments are copied through verbatim. Splitting
+        // there keeps each group in its own role — a flag's separate value
+        // (`--require ./preload.cjs`) stays with the flags instead of being
+        // dropped, and arguments after the entry (cmd-shim's progArgs) stay
+        // ahead of the user's instead of being mistaken for the entry.
+        const entryIndex = words.findIndex((word, index) => index > 0 && /^%~?dp0%?\\/i.test(word));
+        if (entryIndex < 1) {
             continue;
         }
-        const nodeFlags = words.slice(1, words.length - 1).filter((word) => word.startsWith('-'));
-        return { script, nodeFlags, ...(nodeExec ? { nodeExec } : {}) };
+        const script = expandShimPath(words[entryIndex], shimDir);
+        if (!script) {
+            continue;
+        }
+        return {
+            script,
+            nodeFlags: words.slice(1, entryIndex),
+            progArgs: words.slice(entryIndex + 1),
+            ...(nodeExec ? { nodeExec } : {}),
+        };
     }
     return null;
 }
@@ -241,6 +258,6 @@ export function resolveSpawnPlan(
     }
     return {
         command: target.nodeExec ?? deps.execPath,
-        args: [...target.nodeFlags, target.script, ...args],
+        args: [...target.nodeFlags, target.script, ...target.progArgs, ...args],
     };
 }
