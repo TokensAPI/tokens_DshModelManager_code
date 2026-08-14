@@ -1641,3 +1641,117 @@ describe('paste takeover verdict, second instance (#36)', () => {
         expect(JSON.parse(body).takeover).toBe(true);
     });
 });
+
+describe('paste takeover verdict, ownership proof (#36)', () => {
+    // The name marker is not proof of ownership on its own: a provider that
+    // is not ours can put that string in a model name, and skipping it would
+    // hand a real vision model's paste to the file-path route.
+    const scaffold = (extra: { id: string; name: string; models: unknown[] }[]) => {
+        const adapters = new Map<string, { listModels: (id: string) => Promise<unknown[]> }>();
+        const upstream = [
+            { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', inputModalities: ['text'] },
+        ];
+        const providers = [
+            { id: 'deepseek-official', name: 'DeepSeek' },
+            ...extra.map((route) => ({ id: route.id, name: route.name })),
+        ];
+        const captured: { handler: ((req: unknown, res: unknown) => Promise<void>) | null } = {
+            handler: null,
+        };
+        const llm = {
+            listProviders: () => providers,
+            async listModels(providerId: string) {
+                if (providerId === 'deepseek-official') return upstream;
+                const route = extra.find((candidate) => candidate.id === providerId);
+                if (route) return route.models;
+                const adapter = adapters.get(providerId);
+                return adapter ? await adapter.listModels(providerId) : [];
+            },
+            async resolveModelInfo(_p: string, model: string) {
+                return upstream.find((candidate) => candidate.id === model) ?? {};
+            },
+            stream: () => (async function* () {})(),
+            registerAdapter(
+                ids: string[],
+                adapter: {
+                    providerInfo: (id: string) => { name: string };
+                    listModels: (id: string) => Promise<unknown[]>;
+                },
+            ) {
+                for (const id of ids) {
+                    adapters.set(id, adapter);
+                    providers.push({ id, name: adapter.providerInfo(id).name });
+                }
+            },
+        };
+        return {
+            captured,
+            ctx: {
+                llm,
+                tools: { register: () => {} },
+                agents: {},
+                attachments: {},
+                on: () => {},
+                inject: (_deps: string[], run: (scope: unknown) => void) =>
+                    run({
+                        webServer: {
+                            register: (route: {
+                                handler: (req: unknown, res: unknown) => Promise<void>;
+                            }) => {
+                                captured.handler = route.handler;
+                            },
+                        },
+                    }),
+            } as never,
+        };
+    };
+
+    const ask = async (
+        handler: ((req: unknown, res: unknown) => Promise<void>) | null,
+        label: string,
+    ) => {
+        let body = '';
+        await handler?.(
+            { method: 'GET', url: `/modlens/paste?model=${encodeURIComponent(label)}` },
+            { writeHead: () => {}, end: (chunk: string) => (body = chunk) },
+        );
+        return JSON.parse(body).takeover as boolean;
+    };
+
+    it('does not let a foreign provider borrow the marker to dodge the veto', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const house = scaffold([
+            {
+                id: 'some-gateway',
+                name: 'Gateway',
+                models: [
+                    {
+                        id: 'v4-pro',
+                        name: 'DeepSeek-V4-Pro (modlens vision)',
+                        inputModalities: ['text', 'image'],
+                    },
+                ],
+            },
+        ]);
+        plugin.apply(house.ctx, {});
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        // It matches the label, it accepts images, and it is not ours: veto.
+        expect(await ask(house.captured.handler, 'DeepSeek-V4-Pro (modlens vision)')).toBe(false);
+    });
+
+    it('trusts a wrapper under a custom providerId through the registered set', async () => {
+        // A configured providerId is outside the naming convention, so only
+        // the record of what this instance registered can clear it.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const house = scaffold([]);
+        plugin.apply(house.ctx, { upstream: 'deepseek-official', providerId: 'house-vision' });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(await ask(house.captured.handler, 'DeepSeek-V4-Pro')).toBe(true);
+    });
+});

@@ -194,17 +194,28 @@ export function unpinnedInstalls(text, pkgName = '@liustack/modlens') {
     for (const line of joined.split('\n')) {
         // A comment cannot lift anything, and it cannot be an install either.
         const code = line.replace(/(^|\s)#.*$/, '');
-        for (const segment of code.split(/&&|\|\||[|;]/)) {
+        // `&` ends a command too, not only `&&`.
+        for (const segment of code.split(/&&|\|\||[|;&]/)) {
             if (!segment.includes(pkgName)) continue;
-            if (segment.includes('--config.minimumReleaseAge=0')) continue;
+            // The flag counts only as an argument of this command. A
+            // redirection target and a variable's value are neither, and both
+            // read as the flag to a plain substring search.
+            const args = segment
+                .replace(/[<>]+\s*\S+/g, ' ')
+                .replace(/(^|\s)[A-Za-z_][A-Za-z0-9_]*=\S+/g, ' ');
+            if (args.includes('--config.minimumReleaseAge=0')) continue;
             const specs = [...segment.matchAll(spec)]
                 .map((match) => match[1])
-                // `@<pinned>` is a placeholder in prose describing the shape
-                // of a command, not a command: nobody can run it, so it
-                // cannot install a stale version either.
-                .filter((value) => !/^<[^>]*>$/.test(value));
+                // `@<pinned>` and `@<version>` are placeholders in prose
+                // describing the shape of a command, not commands: nobody can
+                // run them, so they cannot install a stale version either.
+                // Only those two spellings, so the brackets are not a way out.
+                .filter((value) => !/^<(pinned|version)>$/.test(value));
             const unpinned = specs.filter((value) => !/^\d+\.\d+\.\d+$/.test(value));
-            if (unpinned.length > 0 || (specs.length === 0 && bare.test(segment))) {
+            // The bare-package test runs on its own: an exact spec elsewhere
+            // in the same command must not vouch for a second, spec-less
+            // mention of the package.
+            if (unpinned.length > 0 || bare.test(segment)) {
                 found.push(segment.trim());
             }
         }
