@@ -94,7 +94,7 @@ const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
 const CLI_TIMEOUT_MS = 10_000;
 
 function defaultRunCli(bin: string, args: string[], timeoutMs: number): string {
-    // The same Windows shim routing the provider spawn uses (issue #31): a
+    // The same Windows shim rewriting the provider spawn uses (issue #31): a
     // .cmd cannot be exec'd without a shell, and the probes talk to the same
     // npm-installed CLIs.
     const plan = resolveSpawnPlan(bin, args);
@@ -102,7 +102,6 @@ function defaultRunCli(bin: string, args: string[], timeoutMs: number): string {
         encoding: 'utf-8',
         timeout: timeoutMs,
         stdio: 'pipe',
-        ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
 }
 

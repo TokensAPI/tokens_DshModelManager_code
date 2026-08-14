@@ -47,10 +47,10 @@ Wait for the reset, or move to `gemini-api`, which has its own budget. Parallel 
 ## Provider CLI not found
 
 ```
-Provider CLI not found: agy. Install it and sign in first.
+Provider CLI not found: agy (spawn ENOENT). Install it and sign in first.
 ```
 
-The binary is not on PATH, or `--provider-bin` points somewhere wrong.
+The binary is not on PATH, or `--provider-bin` points somewhere wrong. A different spawn-level failure (`... could not start \`claude\`: spawn EACCES`) keeps its real error code so the cause is nameable. On Windows the npm-installed CLIs are `.cmd` shims; modlens resolves them through PATHEXT and runs their real Node entry directly, so neither the bare name (ENOENT) nor the `.cmd` (EINVAL) trips it up.
 
 ```
 Working directory does not exist: /some/path

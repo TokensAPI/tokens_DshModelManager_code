@@ -47,10 +47,10 @@ agy's free tier is one weekly bucket shared by the desktop app, the CLI, and the
 ## 找不到 provider CLI
 
 ```
-Provider CLI not found: agy. Install it and sign in first.
+Provider CLI not found: agy (spawn ENOENT). Install it and sign in first.
 ```
 
-二进制不在 PATH 上，或者 `--provider-bin` 指错了地方。
+二进制不在 PATH 上，或者 `--provider-bin` 指错了地方。其他 spawn 级失败（`... could not start \`claude\`: spawn EACCES`）会保留真实错误码，方便定位。Windows 上 npm 装的 CLI 是 `.cmd` shim，modlens 通过 PATHEXT 解析并直接运行它背后的 Node 入口，所以裸名（ENOENT）和 `.cmd`（EINVAL）都不会卡住它。
 
 ```
 Working directory does not exist: /some/path
