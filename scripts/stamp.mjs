@@ -1,9 +1,10 @@
-// Version stamping for the skill launchers. `scripts/release.mjs` calls
-// stampLaunchers() at release time so the pinned version inside run.sh,
-// run.ps1, references/runtime.md, and the SKILL.md no-script fallback can
-// never drift from package.json by hand. The drift test
-// (scripts/stamp.test.mjs) reads the same files back and asserts they match.
-// Keeping the read and the write in one module is what keeps the two in step.
+// Version stamping for every file that names a version: the skill launchers
+// (run.sh, run.ps1, references/runtime.md, the SKILL.md no-script fallback)
+// and the install commands printed in the README, INSTALL, and docs.
+// `scripts/release.mjs` calls stampLaunchers() at release time so none of them
+// can drift from package.json by hand. The drift test (scripts/stamp.test.mjs)
+// reads the same files back and asserts they match. Keeping the read and the
+// write in one module is what keeps the two in step.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,18 +81,61 @@ export function stampTargets(base, pkgName) {
     ];
 }
 
-/** Rewrite every launcher/reference version line to the package version. */
-export function stampLaunchers(root = repoRoot) {
+/**
+ * The install commands in the docs carry the version too, and they cannot use
+ * `@latest`. pnpm 11 holds back releases published in the last 24 hours and
+ * resolves the dist-tag against what survives that filter, so `@latest` hands
+ * a new reader whatever shipped a day ago: measured at 3.10.0 on a day when
+ * 3.16.4 was current, twenty releases and several bug fixes behind. A named
+ * version is a deliberate request and installs. Stamping is what makes pinning
+ * affordable, since the number is rewritten at release time rather than by
+ * hand.
+ */
+export function docTargets(root, pkgName) {
+    const escaped = pkgName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return [
+        'README.md',
+        'README.zh-CN.md',
+        'INSTALL.md',
+        join('docs', 'harness-setup.md'),
+        join('docs', 'harness-setup.zh-CN.md'),
+        join('docs', 'troubleshooting.md'),
+        join('docs', 'troubleshooting.zh-CN.md'),
+    ].map((relative) => ({
+        name: `${relative} install pin`,
+        file: join(root, relative),
+        // Only an already-pinned spec. The one deliberate `@latest` left in
+        // the docs sits next to --config.minimumReleaseAge=0, where the gate
+        // is lifted and the tag does resolve to the newest release.
+        pattern: new RegExp(`${escaped}@(\\d+\\.\\d+\\.\\d+)`, 'g'),
+        format: (version) => `${pkgName}@${version}`,
+    }));
+}
+
+/** Every file carrying the version: skill launchers and doc install commands. */
+export function allTargets(root = repoRoot) {
     const pkg = readPackage(root);
-    const version = pkg.version;
-    const base = join(root, 'skills', skillName(root));
+    return [
+        ...stampTargets(join(root, 'skills', skillName(root)), pkg.name),
+        ...docTargets(root, pkg.name),
+    ];
+}
+
+/** The same pattern, guaranteed global, so every occurrence is seen. */
+function everyMatch(pattern) {
+    return pattern.flags.includes('g') ? pattern : new RegExp(pattern.source, `${pattern.flags}g`);
+}
+
+/** Rewrite every version occurrence in those files to the package version. */
+export function stampLaunchers(root = repoRoot) {
+    const version = readPackageVersion(root);
     const stamped = [];
-    for (const target of stampTargets(base, pkg.name)) {
+    for (const target of allTargets(root)) {
         const before = readFileSync(target.file, 'utf-8');
-        if (!target.pattern.test(before)) {
+        if (before.match(everyMatch(target.pattern)) === null) {
             throw new Error(`No version line to stamp in ${target.file}`);
         }
-        const after = before.replace(target.pattern, target.format(version));
+        const after = before.replace(everyMatch(target.pattern), target.format(version));
         if (after !== before) {
             writeFileSync(target.file, after);
         }
@@ -100,11 +144,24 @@ export function stampLaunchers(root = repoRoot) {
     return { version, stamped };
 }
 
-/** The version currently written in each launcher/reference file. */
+/**
+ * The version written at every occurrence, one entry each: a file carrying
+ * two install commands can drift in only one of them.
+ */
 export function readStampedVersions(root = repoRoot) {
-    const base = join(root, 'skills', skillName(root));
-    return stampTargets(base, readPackage(root).name).map((target) => {
-        const match = readFileSync(target.file, 'utf-8').match(target.pattern);
-        return { name: target.name, file: target.file, version: match ? match[1] : null };
-    });
+    const entries = [];
+    for (const target of allTargets(root)) {
+        const matches = [
+            ...readFileSync(target.file, 'utf-8').matchAll(everyMatch(target.pattern)),
+        ];
+        if (matches.length === 0) {
+            entries.push({ name: target.name, file: target.file, version: null });
+            continue;
+        }
+        for (const [index, match] of matches.entries()) {
+            const name = matches.length > 1 ? `${target.name} #${index + 1}` : target.name;
+            entries.push({ name, file: target.file, version: match[1] });
+        }
+    }
+    return entries;
 }
