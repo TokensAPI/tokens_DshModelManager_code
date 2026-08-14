@@ -43,7 +43,21 @@ describe('redactSecrets', () => {
         );
         expect(out).not.toContain('alice');
         expect(out).not.toContain('s3cr3t');
-        expect(out).toContain('proxy.example:8080');
+        expect(out).toContain('http://[redacted]@proxy.example:8080');
+    });
+
+    it('masks the whole userinfo when the password itself contains @', () => {
+        // WHATWG URLs fold unescaped extra @s into the password; stopping at
+        // the first @ used to leak the password's tail ("ss@host").
+        const out = redactSecrets('via http://alice:p@ss@proxy.example:8080');
+        expect(out).toBe('via http://[redacted]@proxy.example:8080');
+    });
+
+    it('never tears scheme-less prose that merely contains //text@', () => {
+        const generated = 'TypeError: unexpected token //foo@bar in generated source';
+        expect(redactSecrets(generated)).toBe(generated);
+        const mention = 'diagnostic: see //owner@example.com for escalation';
+        expect(redactSecrets(mention)).toBe(mention);
     });
 });
 
@@ -55,7 +69,16 @@ describe('maskUrlCredentials', () => {
         expect(maskUrlCredentials('socks5://bob@10.0.0.1:1080')).toBe('socks5://***@10.0.0.1:1080');
     });
 
+    it('masks up to the last @, so a password containing @ leaves no tail', () => {
+        expect(maskUrlCredentials('http://alice:p@ss@proxy.example:8080')).toBe(
+            'http://***@proxy.example:8080',
+        );
+    });
+
     it('leaves credential-free URLs untouched', () => {
         expect(maskUrlCredentials('http://proxy.example:8080')).toBe('http://proxy.example:8080');
+        expect(maskUrlCredentials('http://proxy.example:8080/path@segment')).toBe(
+            'http://proxy.example:8080/path@segment',
+        );
     });
 });
