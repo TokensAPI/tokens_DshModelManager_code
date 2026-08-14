@@ -757,3 +757,96 @@ describe('format mapping lockstep', () => {
         }
     });
 });
+
+describe('dsh paste-to-path host route', () => {
+    type RouteHandler = (
+        req: {
+            method: string;
+            [Symbol.asyncIterator]: () => AsyncIterator<Buffer>;
+        },
+        res: {
+            writeHead: (code: number, headers?: Record<string, string>) => unknown;
+            end: (body?: string) => void;
+        },
+    ) => Promise<void>;
+
+    async function routeOf(config: Record<string, unknown> = {}) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const routes: Array<{ path: string; handler: RouteHandler }> = [];
+        const scoped = {
+            webServer: {
+                register: (route: { path: string; handler: RouteHandler }) => routes.push(route),
+            },
+        };
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: () => {},
+                inject: (deps: string[], fn: (scope: unknown) => void) => {
+                    // The scoped closure runs only where webServer exists.
+                    if (deps.includes('webServer')) fn(scoped);
+                },
+            } as never,
+            config,
+        );
+        return routes;
+    }
+
+    function fakeReq(method: string, body: Buffer) {
+        return {
+            method,
+            destroy: () => {},
+            async *[Symbol.asyncIterator]() {
+                yield body;
+            },
+        };
+    }
+
+    function fakeRes() {
+        const out = { code: 0, body: '' };
+        return {
+            out,
+            res: {
+                writeHead: (code: number) => {
+                    out.code = code;
+                    return { end: (b?: string) => (out.body = b ?? '') };
+                },
+                end: (b?: string) => {
+                    out.body = b ?? '';
+                },
+            },
+        };
+    }
+
+    it('registers /modlens/paste under the web profile and writes a private file', async () => {
+        const routes = await routeOf();
+        expect(routes[0]?.path).toBe('/modlens/paste');
+        const { out, res } = fakeRes();
+        const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 5]);
+        await routes[0].handler(fakeReq('POST', png) as never, res as never);
+        expect(out.code).toBe(200);
+        const { path: written } = JSON.parse(out.body) as { path: string };
+        expect(written.endsWith('paste.png')).toBe(true);
+        expect(fs.readFileSync(written)).toEqual(png);
+        expect(fs.statSync(written).mode & 0o777).toBe(0o600);
+        fs.rmSync(path.dirname(written), { recursive: true, force: true });
+    });
+
+    it('refuses non-POST, non-image bytes, and honors the off switch', async () => {
+        const routes = await routeOf();
+        const a = fakeRes();
+        await routes[0].handler(fakeReq('GET', Buffer.alloc(0)) as never, a.res as never);
+        expect(a.out.code).toBe(405);
+        const b = fakeRes();
+        await routes[0].handler(
+            fakeReq('POST', Buffer.from('not an image')) as never,
+            b.res as never,
+        );
+        expect(b.out.code).toBe(400);
+        expect(await routeOf({ pasteToPath: false })).toEqual([]);
+    });
+});
