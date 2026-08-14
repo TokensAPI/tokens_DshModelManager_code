@@ -60,6 +60,30 @@ describe('redactSecrets', () => {
         expect(redactSecrets(mention)).toBe(mention);
     });
 
+    it('masks slash-less and separator-variant schemes the parser accepts', () => {
+        // Special schemes need no slashes at all for WHATWG to read an
+        // authority, and the parser strips raw line breaks, so all of these
+        // are proxy URLs the runtime would connect through.
+        for (const raw of [
+            'http:alice:secret@proxy.example',
+            'http:/alice:secret@proxy.example',
+            'http:\\alice:secret@proxy.example',
+            'http://alice:sec\nret@proxy.example',
+            'http://alice:sec\rret@proxy.example',
+        ]) {
+            const out = redactSecrets(`via ${raw} done`);
+            expect(out).toBe('via http://[redacted]@proxy.example/ done');
+            expect(maskUrlCredentials(raw)).toBe('http://***@proxy.example/');
+        }
+    });
+
+    it('leaves scheme-and-@ prose alone when the parse finds no credentials', () => {
+        const ratio = 'render at ratio:3@2x for retina';
+        expect(redactSecrets(ratio)).toBe(ratio);
+        const mail = 'contact mailto:owner@example.net for access';
+        expect(redactSecrets(mail)).toBe(mail);
+    });
+
     it('masks every credential shape the WHATWG parser accepts', () => {
         // The runtime connects through the WHATWG parser, so the mask parses
         // first instead of approximating with a regex: backslash authorities,
