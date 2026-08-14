@@ -43,14 +43,14 @@ describe('redactSecrets', () => {
         );
         expect(out).not.toContain('alice');
         expect(out).not.toContain('s3cr3t');
-        expect(out).toContain('http://[redacted]@proxy.example:8080');
+        expect(out).toContain('http://[redacted]@proxy.example:8080/');
     });
 
     it('masks the whole userinfo when the password itself contains @', () => {
         // WHATWG URLs fold unescaped extra @s into the password; stopping at
         // the first @ used to leak the password's tail ("ss@host").
         const out = redactSecrets('via http://alice:p@ss@proxy.example:8080');
-        expect(out).toBe('via http://[redacted]@proxy.example:8080');
+        expect(out).toBe('via http://[redacted]@proxy.example:8080/');
     });
 
     it('never tears scheme-less prose that merely contains //text@', () => {
@@ -60,11 +60,32 @@ describe('redactSecrets', () => {
         expect(redactSecrets(mention)).toBe(mention);
     });
 
+    it('masks every credential shape the WHATWG parser accepts', () => {
+        // The runtime connects through the WHATWG parser, so the mask parses
+        // first instead of approximating with a regex: backslash authorities,
+        // slash runs, and tabs inside the authority all carry credentials the
+        // parser reads and the proxy uses.
+        expect(redactSecrets('via http:\\\\alice:secret@proxy.example done')).toBe(
+            'via http://[redacted]@proxy.example/ done',
+        );
+        expect(redactSecrets('via http:////alice:secret@proxy.example done')).toBe(
+            'via http://[redacted]@proxy.example/ done',
+        );
+        expect(redactSecrets('via http://alice:sec\tret@proxy.example done')).toBe(
+            'via http://[redacted]@proxy.example/ done',
+        );
+        // A backslash path relocated the visible host in the regex days; the
+        // parser keeps the real host.
+        const out = redactSecrets('via http://alice:secret@proxy.example\\path@tail.example');
+        expect(out).toContain('http://[redacted]@proxy.example/');
+        expect(out).not.toContain('secret');
+    });
+
     it('stops at the authority: an @ inside a query or fragment is content', () => {
         // Greedy-to-last-@ must not cross ? or #, or the real host and query
         // get swallowed and query text impersonates the host.
         expect(redactSecrets('http://alice:secret@proxy.example?contact=owner@example.net')).toBe(
-            'http://[redacted]@proxy.example?contact=owner@example.net',
+            'http://[redacted]@proxy.example/?contact=owner@example.net',
         );
         const noCreds = 'fetch http://example.com?email=owner@example.net failed';
         expect(redactSecrets(noCreds)).toBe(noCreds);
@@ -76,14 +97,23 @@ describe('redactSecrets', () => {
 describe('maskUrlCredentials', () => {
     it('masks userinfo while keeping the URL recognizable', () => {
         expect(maskUrlCredentials('http://alice:s3cr3t@proxy.example:8080')).toBe(
-            'http://***@proxy.example:8080',
+            'http://***@proxy.example:8080/',
         );
         expect(maskUrlCredentials('socks5://bob@10.0.0.1:1080')).toBe('socks5://***@10.0.0.1:1080');
     });
 
     it('masks up to the last @, so a password containing @ leaves no tail', () => {
         expect(maskUrlCredentials('http://alice:p@ss@proxy.example:8080')).toBe(
-            'http://***@proxy.example:8080',
+            'http://***@proxy.example:8080/',
+        );
+        expect(maskUrlCredentials('http:\\\\alice:secret@proxy.example')).toBe(
+            'http://***@proxy.example/',
+        );
+        expect(maskUrlCredentials('http:////alice:secret@proxy.example')).toBe(
+            'http://***@proxy.example/',
+        );
+        expect(maskUrlCredentials('http://alice:sec\tret@proxy.example')).toBe(
+            'http://***@proxy.example/',
         );
     });
 
