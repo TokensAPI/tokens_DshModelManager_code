@@ -531,6 +531,65 @@ describe('dsh plugin request-time image conversion (v2)', () => {
     });
 });
 
+describe('dsh plugin tool-name collision (#21)', () => {
+    it('falls back to modlens_read_image and keeps the rest of the plugin alive', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const registered: string[] = [];
+        const adapters: string[] = [];
+        plugin.apply(
+            {
+                tools: {
+                    register: (tool: { name: string }) => {
+                        // The host's native read_image (dsh-tool-fs) is there first.
+                        if (tool.name === 'read_image') {
+                            throw new Error('tool "read_image" is already registered');
+                        }
+                        registered.push(tool.name);
+                    },
+                },
+                attachments: {},
+                on: () => {},
+                llm: {
+                    registerAdapter: (providers: string[]) => {
+                        adapters.push(...providers);
+                    },
+                    listModels: async () => [],
+                    resolveModelInfo: async () => ({}),
+                    stream: () => (async function* () {})(),
+                },
+            } as never,
+            {},
+        );
+        expect(registered).toContain('modlens_read_image');
+        // The collision no longer fails the fiber: the vision wrapper registered.
+        expect(adapters).toContain('deepseek-modlens');
+    });
+
+    it('an unrelated registration error degrades without killing apply', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        expect(() =>
+            plugin.apply(
+                {
+                    tools: {
+                        register: () => {
+                            throw new Error('registry exploded');
+                        },
+                    },
+                    attachments: {},
+                    on: () => {},
+                } as never,
+                {},
+            ),
+        ).not.toThrow();
+    });
+});
+
 describe('image format contract (CLI, skill, dsh in lockstep)', () => {
     it('dsh MEDIA_EXT covers exactly the CLI allow-list', async () => {
         // @ts-expect-error untyped on purpose
