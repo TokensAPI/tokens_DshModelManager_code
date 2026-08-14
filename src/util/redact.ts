@@ -25,16 +25,24 @@ const TOKEN_SHAPES: RegExp[] = [
 ];
 
 /**
- * A substring that might be a URL: a scheme followed by two slashes in either
- * direction. Backslashes included on purpose, because WHATWG treats them as
- * slashes for the special schemes, so `http:\\user:pass@host` is a URL the
- * runtime happily connects through. Tabs may appear inside (the parser strips
- * them), so the token runs to a space or line break, not to any whitespace.
+ * A substring that might be a URL carrying userinfo: a scheme, then anything
+ * up to a space that contains an `@`. Deliberately loose about what sits
+ * between the colon and the `@`, because the WHATWG parser is too: special
+ * schemes take an authority with zero, one, or many slashes or backslashes
+ * (`http:u:p@h`, `http:/u:p@h`, `http:\\u:p@h` all connect), and the parser
+ * strips raw tabs and line breaks from its input, so the token runs to a
+ * SPACE only and may span lines. Loose extraction is safe because a token is
+ * only ever rewritten when the parser confirms real credentials inside it.
  */
-const URL_CANDIDATE = /\b[a-z][a-z0-9+.-]*:[\\/]{2}[^ \n\r]*/gi;
+const URL_CANDIDATE = /\b[a-z][a-z0-9+.-]*:[^ ]*@[^ ]*/gi;
 
-/** The last-resort regex mask for a candidate the URL parser refuses. */
-const RAW_USERINFO = /^([a-z][a-z0-9+.-]*:[\\/]{2})[^\s/?#]*@/i;
+/**
+ * The last-resort regex mask for a candidate the URL parser refuses. Two
+ * separators minimum on purpose: the slash-less special-scheme forms all
+ * parse fine and never reach this fallback, while `word:text@thing` prose
+ * must not be torn when its parse (with no credentials) declines to rewrite.
+ */
+const RAW_USERINFO = /^([a-z][a-z0-9+.-]*:[\\/]{2,4})[^\s/?#]*@/i;
 
 /**
  * Rebuild a URL with its userinfo replaced, through the SAME parser the
