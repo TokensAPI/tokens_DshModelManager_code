@@ -770,7 +770,7 @@ describe('dsh paste-to-path host route', () => {
         },
     ) => Promise<void>;
 
-    async function routeOf(config: Record<string, unknown> = {}) {
+    async function routeOf(config: Record<string, unknown> = {}, llm?: unknown) {
         // @ts-expect-error untyped on purpose
         const plugin = (await import('../dsh/index.js')) as {
             apply: (ctx: unknown, config?: Record<string, unknown>) => void;
@@ -785,6 +785,10 @@ describe('dsh paste-to-path host route', () => {
             {
                 tools: { register: () => {} },
                 attachments: {},
+                // A listProviders/listModels-only llm: the vision provider
+                // registration path feature-detects registerAdapter and backs
+                // off, so this reaches exactly the paste policy code.
+                ...(llm ? { llm } : {}),
                 on: () => {},
                 inject: (deps: string[], fn: (scope: unknown) => void) => {
                     // The scoped closure runs only where webServer exists.
@@ -796,9 +800,10 @@ describe('dsh paste-to-path host route', () => {
         return routes;
     }
 
-    function fakeReq(method: string, body: Buffer) {
+    function fakeReq(method: string, body: Buffer, url = '/modlens/paste') {
         return {
             method,
+            url,
             destroy: () => {},
             async *[Symbol.asyncIterator]() {
                 yield body;
@@ -840,10 +845,10 @@ describe('dsh paste-to-path host route', () => {
         fs.rmSync(path.dirname(written), { recursive: true, force: true });
     });
 
-    it('refuses non-POST, non-image bytes, and honors the off switch', async () => {
+    it('refuses non-GET/POST, non-image bytes, and honors the off switch', async () => {
         const routes = await routeOf();
         const a = fakeRes();
-        await routes[0].handler(fakeReq('GET', Buffer.alloc(0)) as never, a.res as never);
+        await routes[0].handler(fakeReq('PUT', Buffer.alloc(0)) as never, a.res as never);
         expect(a.out.code).toBe(405);
         const b = fakeRes();
         await routes[0].handler(
@@ -852,6 +857,98 @@ describe('dsh paste-to-path host route', () => {
         );
         expect(b.out.code).toBe(400);
         expect(await routeOf({ pasteToPath: false })).toEqual([]);
+    });
+
+    it('sniffs to the CLI table: near-miss magic bytes are refused, real brands pass', async () => {
+        const routes = await routeOf();
+        const post = async (body: Buffer) => {
+            const { out, res } = fakeRes();
+            await routes[0].handler(fakeReq('POST', body) as never, res as never);
+            return out;
+        };
+        // Generic BMFF: `ftyp` at offset 4 but a video brand. The old sniff
+        // accepted any ftyp box and saved plain video as paste.heic.
+        const bmff = Buffer.concat([
+            Buffer.from([0, 0, 0, 24]),
+            Buffer.from('ftypmp42'),
+            Buffer.alloc(8),
+        ]);
+        expect((await post(bmff)).code).toBe(400);
+        // A real heif brand still lands, with its own extension.
+        const heif = Buffer.concat([
+            Buffer.from([0, 0, 0, 24]),
+            Buffer.from('ftypmif1'),
+            Buffer.alloc(8),
+        ]);
+        const okHeif = await post(heif);
+        expect(okHeif.code).toBe(200);
+        const heifPath = (JSON.parse(okHeif.body) as { path: string }).path;
+        expect(heifPath.endsWith('paste.heif')).toBe(true);
+        fs.rmSync(path.dirname(heifPath), { recursive: true, force: true });
+        // Truncated PNG magic (first four bytes only) is not a PNG.
+        expect((await post(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]))).code).toBe(400);
+        // "GIF" alone is not a GIF signature; the full GIF89a is.
+        expect((await post(Buffer.from('GIFfake'))).code).toBe(400);
+        const okGif = await post(Buffer.from('GIF89a '));
+        expect(okGif.code).toBe(200);
+        const gifPath = (JSON.parse(okGif.body) as { path: string }).path;
+        fs.rmSync(path.dirname(gifPath), { recursive: true, force: true });
+    });
+
+    it('GET answers the takeover policy from host model metadata, not name guessing', async () => {
+        const llm = {
+            listProviders: () => [{ id: 'deepseek-official' }, { id: 'qwen' }],
+            listModels: async (id: string) =>
+                id === 'deepseek-official'
+                    ? [
+                          {
+                              id: 'deepseek-v4-flash',
+                              name: 'DeepSeek-V4-Flash',
+                              inputModalities: ['text'],
+                          },
+                      ]
+                    : [
+                          {
+                              id: 'qwen2.5-vl',
+                              name: 'Qwen2.5-VL',
+                              inputModalities: ['text', 'image'],
+                          },
+                      ],
+        };
+        const routes = await routeOf({}, llm);
+        const ask = async (label: string) => {
+            const { out, res } = fakeRes();
+            await routes[0].handler(
+                fakeReq(
+                    'GET',
+                    Buffer.alloc(0),
+                    `/modlens/paste?model=${encodeURIComponent(label)}`,
+                ) as never,
+                res as never,
+            );
+            expect(out.code).toBe(200);
+            return (JSON.parse(out.body) as { takeover: boolean }).takeover;
+        };
+        // A text-only model resolved from metadata: take the paste over.
+        expect(await ask('选择模型，当前 DeepSeek-V4-Flash，推理等级 High')).toBe(true);
+        // A vision model no name heuristic would catch: paste stays native.
+        expect(await ask('Select model, current Qwen2.5-VL')).toBe(false);
+        // Our own wrapped variant converts at request time: stays native.
+        expect(await ask('DeepSeek-V4-Flash (modlens vision)')).toBe(false);
+        // Unresolvable labels fail toward the native paste path.
+        expect(await ask('Mystery Model 9000')).toBe(false);
+        expect(await ask('')).toBe(false);
+    });
+
+    it('GET without an llm surface (or without a match) never takes over', async () => {
+        const routes = await routeOf();
+        const { out, res } = fakeRes();
+        await routes[0].handler(
+            fakeReq('GET', Buffer.alloc(0), '/modlens/paste?model=DeepSeek-V4-Flash') as never,
+            res as never,
+        );
+        expect(out.code).toBe(200);
+        expect((JSON.parse(out.body) as { takeover: boolean }).takeover).toBe(false);
     });
 });
 

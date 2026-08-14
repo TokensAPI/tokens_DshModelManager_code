@@ -64,4 +64,4 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@latest
 
 过去在 dsh Web UI 里，**纯文本模型**下粘贴图片会死在图片准入检查这一步。插件现在带了一个浏览器端半边（由 dsh 的客户端插件系统自动加载），恰好在这种情况下接管粘贴：图片字节发到插件在 dsh web 服务器上的 `/modlens/paste` 路由（仅回环地址，校验 magic byte，上限 25 MB），落成一个私有临时文件，输入框收到的则是纯文本的文件路径。这与 Pi、OpenCode、Claude Code 递给模型的形态一致，也正是 modlens skill 和 `read_image` 工具的首要触发条件。消息里不带图片附件，准入检查根本不会触发。
 
-接管是有条件的：当选中的模型是 `(modlens vision)` 变体或已知的视觉模型时，原生粘贴流程不受影响（变体在发请求时转换且保留缩略图，视觉模型则自己读图）。在插件配置行里设 `pasteToPath: false` 可整体关掉这个功能。
+接管是有条件的，且裁决权在 host 一侧：浏览器半边先向插件路由询问当前选中的模型是否纯文本，host 用 provider 注册表里声明的模型元数据（`inputModalities`）回答，而不是靠名称猜。`(modlens vision)` 变体和任何声明支持图片输入的模型都保留原生粘贴流程（变体在发请求时转换且保留缩略图，视觉模型自己读图），host 认不出的模型同样不接管：在 host 确认该接管之前，粘贴一律走原生路径。在插件配置行里设 `pasteToPath: false` 可整体关掉这个功能，路由不存在时浏览器半边会彻底停手。

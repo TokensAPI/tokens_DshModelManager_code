@@ -20,7 +20,7 @@ window.__ModuleLoader__.load({
     var exports = module.exports
 
     function imageFilesOf(event) {
-      var items = event.clipboardData && event.clipboardData.items
+      var items = event.clipboardData?.items
       if (!items) return []
       var files = []
       for (var i = 0; i < items.length; i++) {
@@ -33,10 +33,7 @@ window.__ModuleLoader__.load({
     }
 
     function insertText(target, text) {
-      var el =
-        target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT')
-          ? target
-          : document.activeElement
+      var el = target && (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') ? target : document.activeElement
       if (!el || (el.tagName !== 'TEXTAREA' && el.tagName !== 'INPUT')) return
       el.focus()
       // execCommand fires the input event React's controlled textarea needs;
@@ -48,8 +45,7 @@ window.__ModuleLoader__.load({
         inserted = false
       }
       if (!inserted) {
-        var proto =
-          el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype
+        var proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype
         var setter = Object.getOwnPropertyDescriptor(proto, 'value').set
         setter.call(el, el.value + text)
         el.dispatchEvent(new Event('input', { bubbles: true }))
@@ -72,14 +68,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    // The takeover is for text-only models: the (modlens vision) variants
-    // convert pastes at request time with the thumbnail preserved, and real
-    // vision models read images natively — both keep the original paste UX.
-    // The model selector button's accessible label is the only client-side
-    // source of the current model; when it cannot be found, taking over is
-    // the safe default (text-only is the common case this exists for).
-    var VISION_HINT = /\(modlens vision\)|deepseek-(vl|ocr)|janus|glm-[\d.]*v\b|vision|image/i
-
     function currentModelLabel() {
       var buttons = document.querySelectorAll('button[aria-label]')
       for (var i = 0; i < buttons.length; i++) {
@@ -89,10 +77,65 @@ window.__ModuleLoader__.load({
       return ''
     }
 
+    // Whether to take a paste over is the HOST's call (GET /modlens/paste
+    // with the selector label; the host resolves it against real model
+    // metadata). A name regex here once declared every vision model it did
+    // not recognize text-only and hijacked its native paste. The verdict is
+    // cached per label and refreshed in the background; until a label has a
+    // cached `true`, pastes stay native — the safe direction for both a
+    // vision model (keeps its thumbnail) and a text-only one (keeps only its
+    // old error message, once). A 404 means the route is off (pasteToPath:
+    // false, or no host half), so the client stands down entirely instead of
+    // swallowing pastes into a dead endpoint.
+    var routeAvailable = true
+    var verdicts = {}
+    var VERDICT_TTL_MS = 15000
+
+    function refreshVerdict(label) {
+      if (!routeAvailable) return
+      var cached = verdicts[label]
+      var now = Date.now()
+      if (cached && (cached.pending || now - cached.at < VERDICT_TTL_MS)) return
+      var entry = { pending: true, takeover: cached ? cached.takeover : false, at: cached ? cached.at : 0 }
+      verdicts[label] = entry
+      fetch(`/modlens/paste?model=${encodeURIComponent(label)}`)
+        .then((res) => {
+          if (res.status === 404) {
+            routeAvailable = false
+            entry.pending = false
+            return null
+          }
+          if (!res.ok) throw new Error(`policy ${res.status}`)
+          return res.json()
+        })
+        .then((body) => {
+          entry.pending = false
+          if (body) {
+            entry.takeover = body.takeover === true
+            entry.at = Date.now()
+          }
+        })
+        .catch(() => {
+          entry.pending = false
+        })
+    }
+
+    // A paste needs the composer focused first, so a focus-time prefetch has
+    // the verdict ready before the first paste can land.
+    function onFocusIn() {
+      refreshVerdict(currentModelLabel())
+    }
+
     function onPaste(event) {
+      if (!routeAvailable) return
       var files = imageFilesOf(event)
       if (files.length === 0) return
-      if (VISION_HINT.test(currentModelLabel())) return
+      var label = currentModelLabel()
+      var cached = verdicts[label]
+      refreshVerdict(label)
+      // No confirmed host verdict yet: leave the paste native. Wrong only
+      // for a text-only model's very first paste, and self-correcting.
+      if (!cached || cached.at === 0 || cached.takeover !== true) return
       // Take the paste before the composer's intake starts an attachment (and
       // with it the host-side image admission a text-only model fails).
       event.preventDefault()
@@ -107,15 +150,22 @@ window.__ModuleLoader__.load({
           if (text) insertText(target, `${text} `)
         })
         .catch((error) => {
-          console.error(`[modlens] paste-to-path failed: ${error && error.message ? error.message : error}`)
+          console.error(`[modlens] paste-to-path failed: ${error?.message ? error.message : error}`)
         })
     }
 
     function apply(ctx) {
       document.addEventListener('paste', onPaste, true)
+      document.addEventListener('focusin', onFocusIn, true)
       // cordis effect: unregister on plugin disposal (HMR, profile reload).
       if (typeof ctx.effect === 'function') {
-        ctx.effect(() => () => document.removeEventListener('paste', onPaste, true), 'modlens: paste-to-path listener')
+        ctx.effect(
+          () => () => {
+            document.removeEventListener('paste', onPaste, true)
+            document.removeEventListener('focusin', onFocusIn, true)
+          },
+          'modlens: paste-to-path listener',
+        )
       }
     }
 

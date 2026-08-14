@@ -15,9 +15,7 @@ import { fileURLToPath } from 'node:url'
 const CLI_PATH = fileURLToPath(new URL('../dist/main.js', import.meta.url))
 // Kept in lockstep with src/schema.ts by a repo test; the plugin file cannot
 // import the TS source and stays fully dependency-free (node builtins only).
-const OUTPUT_SCHEMA = JSON.parse(
-  readFileSync(new URL('./vision-schema.json', import.meta.url), 'utf8'),
-)
+const OUTPUT_SCHEMA = JSON.parse(readFileSync(new URL('./vision-schema.json', import.meta.url), 'utf8'))
 
 const CLI_TIMEOUT_MS = 180_000
 
@@ -55,7 +53,9 @@ export function apply(ctx, config = {}) {
   if (config.pasteToPath !== false && typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (scope) => {
       try {
-        registerPasteRoute(scope)
+        // scope carries webServer; the plugin's own ctx carries llm for the
+        // takeover verdicts.
+        registerPasteRoute(scope, ctx)
       } catch (error) {
         console.error(`[modlens] paste-to-path route skipped: ${error}`)
       }
@@ -117,9 +117,7 @@ export function apply(ctx, config = {}) {
       }
       const { stdout, stderr, code } = await run(process.execPath, cliArgs, exec.signal)
       if (code !== 0) {
-        throw new Error(
-          `modlens failed (exit ${code}): ${(stderr || stdout).trim().slice(0, 500)}`,
-        )
+        throw new Error(`modlens failed (exit ${code}): ${(stderr || stdout).trim().slice(0, 500)}`)
       }
       let parsed
       try {
@@ -140,9 +138,7 @@ export function apply(ctx, config = {}) {
     if (preferred !== fallback && /already|duplicate/i.test(String(error))) {
       try {
         ctx.tools.register(readImageTool(fallback))
-        console.error(
-          `[modlens] tool name "${preferred}" is taken by the host; registered as "${fallback}" instead`,
-        )
+        console.error(`[modlens] tool name "${preferred}" is taken by the host; registered as "${fallback}" instead`)
       } catch (retryError) {
         console.error(`[modlens] read_image registration skipped: ${retryError}`)
       }
@@ -153,27 +149,140 @@ export function apply(ctx, config = {}) {
 }
 
 // Image magic bytes for the paste route: refuse anything that is not a real
-// image before a byte touches disk. Mirrors the CLI's sniffing table.
+// image before a byte touches disk. Mirrors the CLI's sniffing table
+// (src/imageInput.ts SNIFFERS) signature for signature: full PNG magic, both
+// GIF variants, and ftyp only with a known heic/heif brand — a generic BMFF
+// (`ftypmp42`, plain video) must not be saved as an image.
 const PASTE_SNIFFS = [
-  { ext: '.png', test: (b) => b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  {
+    ext: '.png',
+    test: (b) =>
+      b.length >= 8 &&
+      b[0] === 0x89 &&
+      b[1] === 0x50 &&
+      b[2] === 0x4e &&
+      b[3] === 0x47 &&
+      b[4] === 0x0d &&
+      b[5] === 0x0a &&
+      b[6] === 0x1a &&
+      b[7] === 0x0a,
+  },
   { ext: '.jpg', test: (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
-  { ext: '.gif', test: (b) => b.length >= 6 && b.toString('ascii', 0, 3) === 'GIF' },
-  { ext: '.webp', test: (b) => b.length >= 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP' },
-  { ext: '.heic', test: (b) => b.length >= 12 && b.toString('ascii', 4, 8) === 'ftyp' },
+  {
+    ext: '.gif',
+    test: (b) => b.length >= 6 && ['GIF87a', 'GIF89a'].includes(b.toString('ascii', 0, 6)),
+  },
+  {
+    ext: '.webp',
+    test: (b) => b.length >= 12 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WEBP',
+  },
+  {
+    ext: '.heic',
+    test: (b) =>
+      b.length >= 12 &&
+      b.toString('ascii', 4, 8) === 'ftyp' &&
+      ['heic', 'heix', 'hevc', 'hevx'].includes(b.toString('ascii', 8, 12)),
+  },
+  {
+    ext: '.heif',
+    test: (b) =>
+      b.length >= 12 &&
+      b.toString('ascii', 4, 8) === 'ftyp' &&
+      ['mif1', 'msf1', 'heif'].includes(b.toString('ascii', 8, 12)),
+  },
 ]
 const PASTE_MAX_BYTES = 25 * 1024 * 1024
 
 /**
- * POST /modlens/paste: image bytes in, `{ path }` out. Bound to the dsh web
- * server, which listens on loopback by default; the file is private (0600)
- * in a fresh unpredictable temp dir, magic-byte checked and size-capped.
+ * Should the browser take a paste over for the model behind this selector
+ * label? Decided here, not in the browser, because only the host holds the
+ * structured model metadata: a name regex in the client called every vision
+ * model it did not recognize text-only and hijacked its native paste. The
+ * label is matched against provider inventory (longest model name or id it
+ * contains wins) and the verdict is that model's declared inputModalities.
+ * Anything unresolvable answers false: the native paste path is the safe
+ * default, and a text-only model merely keeps its old error message.
  */
-function registerPasteRoute(ctx) {
+async function pasteTakeoverVerdict(host, label) {
+  if (typeof label !== 'string' || label.trim() === '') return false
+  // Our own wrappers convert pastes at request time with the thumbnail
+  // preserved; taking their paste over would defeat the better path.
+  if (/\(modlens vision\)/i.test(label)) return false
+  const llm = host.llm
+  if (!llm || typeof llm.listProviders !== 'function' || typeof llm.listModels !== 'function') {
+    return false
+  }
+  const lowered = label.toLowerCase()
+  let best = null
+  for (const info of llm.listProviders()) {
+    const providerId = info?.id
+    if (!providerId) continue
+    let models = []
+    try {
+      models = await llm.listModels(providerId)
+    } catch {
+      continue
+    }
+    for (const model of models) {
+      for (const candidate of [model?.name, model?.id]) {
+        if (typeof candidate !== 'string' || candidate.length < 3) continue
+        if (!lowered.includes(candidate.toLowerCase())) continue
+        if (!best || candidate.length > best.matched) {
+          best = {
+            matched: candidate.length,
+            image: Array.isArray(model?.inputModalities) && model.inputModalities.includes('image'),
+          }
+        }
+      }
+    }
+  }
+  return best ? !best.image : false
+}
+
+// Verdicts are stable for the lifetime of a model route but the inventory can
+// grow (llm-pi-ai mounts after settings load), so cache briefly, not forever.
+const PASTE_VERDICT_TTL_MS = 15_000
+const PASTE_VERDICT_CAP = 32
+
+/**
+ * The paste route. POST /modlens/paste: image bytes in, `{ path }` out; the
+ * file is private (0600) in a fresh unpredictable temp dir, magic-byte
+ * checked and size-capped. GET /modlens/paste?model=<selector label>:
+ * `{ takeover }` — the browser half asks before ever touching a paste, so a
+ * disabled route (pasteToPath: false, or no web profile) means the client
+ * stands down instead of swallowing pastes into a 404. Bound to the dsh web
+ * server, which listens on loopback by default.
+ */
+function registerPasteRoute(ctx, host) {
+  const verdicts = new Map()
   ctx.webServer.register({
     name: 'modlens-paste',
     kind: 'exact',
     path: '/modlens/paste',
     handler: async (req, res) => {
+      if (req.method === 'GET') {
+        try {
+          const label = new URL(req.url, 'http://localhost').searchParams.get('model') ?? ''
+          const cached = verdicts.get(label)
+          let takeover
+          if (cached && Date.now() - cached.at < PASTE_VERDICT_TTL_MS) {
+            takeover = cached.takeover
+          } else {
+            takeover = await pasteTakeoverVerdict(host, label)
+            verdicts.delete(label)
+            verdicts.set(label, { takeover, at: Date.now() })
+            if (verdicts.size > PASTE_VERDICT_CAP) {
+              verdicts.delete(verdicts.keys().next().value)
+            }
+          }
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ takeover }))
+        } catch (error) {
+          res.writeHead(500, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ error: String(error?.message ?? error) }))
+        }
+        return
+      }
       if (req.method !== 'POST') {
         res.writeHead(405).end()
         return
@@ -208,7 +317,7 @@ function registerPasteRoute(ctx) {
         res.end(JSON.stringify({ path: file }))
       } catch (error) {
         res.writeHead(500, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ error: String(error && error.message ? error.message : error) }))
+        res.end(JSON.stringify({ error: String(error?.message ? error.message : error) }))
       }
     },
   })
@@ -321,11 +430,7 @@ function registerVisionProvider(ctx, config) {
   }
 
   if (config.upstream) {
-    registerWrapper(
-      config.upstream,
-      config.providerId || 'deepseek-modlens',
-      'DeepSeek (modlens vision)',
-    )
+    registerWrapper(config.upstream, config.providerId || 'deepseek-modlens', 'DeepSeek (modlens vision)')
     return
   }
 
@@ -488,9 +593,7 @@ function abortableWait(promise, signal) {
 function contentHasImage(blocks) {
   return (
     Array.isArray(blocks) &&
-    blocks.some(
-      (b) => b?.type === 'image' || (b?.type === 'tool-result' && contentHasImage(b.content)),
-    )
+    blocks.some((b) => b?.type === 'image' || (b?.type === 'tool-result' && contentHasImage(b.content)))
   )
 }
 
@@ -574,9 +677,7 @@ async function readImageBlock(ctx, block, signal) {
     if (!stored?.data) {
       // Named failure instead of Buffer.from(undefined)'s bare TypeError the
       // next time a developer-preview release moves the field (issue #17).
-      throw new Error(
-        "attachments.readImage returned no 'data' bytes; the dsh attachment shape may have changed",
-      )
+      throw new Error("attachments.readImage returned no 'data' bytes; the dsh attachment shape may have changed")
     }
     const mediaType = stored.ref?.mediaType ?? block.attachment?.mediaType
     const ext = MEDIA_EXT[mediaType]
