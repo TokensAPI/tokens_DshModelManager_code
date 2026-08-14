@@ -165,3 +165,33 @@ export function readStampedVersions(root = repoRoot) {
     }
     return entries;
 }
+
+/**
+ * Every install command in `text` that would not install the version this
+ * repo ships. pnpm 11 holds back releases published in the last 24 hours and
+ * resolves a tag against what survives, so only an exact x.y.z installs the
+ * current one, and only a command that lifts the gate itself may ask for a
+ * tag. Exported so the rules are testable directly: reviewing this check by
+ * hand is how five ways of writing an unpinned install got past it.
+ */
+export function unpinnedInstalls(text) {
+    // A command split with a trailing backslash carries its spec and its
+    // flags on different lines.
+    const joined = text.replace(/\\\n\s*/g, ' ');
+    const pattern = /add\s+['"`]?@liustack\/modlens(@[^\s`'")]*)?/g;
+    const found = [];
+    for (const line of joined.split('\n')) {
+        const matches = [...line.matchAll(pattern)];
+        for (const [index, match] of matches.entries()) {
+            const spec = (match[1] ?? '').slice(1);
+            if (/^\d+\.\d+\.\d+$/.test(spec)) continue;
+            // The gate-lifting flag counts only for the command it belongs
+            // to: a table row can hold two commands, and the flag on one of
+            // them says nothing about the other.
+            const end = index + 1 < matches.length ? matches[index + 1].index : line.length;
+            if (line.slice(match.index, end).includes('--config.minimumReleaseAge=0')) continue;
+            found.push(line.slice(match.index, end).trim());
+        }
+    }
+    return found;
+}
