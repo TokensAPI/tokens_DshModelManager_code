@@ -200,14 +200,14 @@ const PASTE_MAX_BYTES = 25 * 1024 * 1024
  * model it did not recognize text-only and hijacked its native paste.
  *
  * The label carries no provider id, only prose plus a display name, so the
- * host cannot know WHICH matching model is selected — a longest-match pick
+ * host cannot know WHICH matching model is selected: a longest-match pick
  * was still hijackable (a text route named "Current Pro" outscored a selected
  * vision model named "Pro", because the label's own "current" prose completed
  * the longer name). So no picking at all: the answer is true only when EVERY
  * model whose name or id appears in the label is positively confirmed
  * text-only. One image-capable match anywhere vetoes; a model with no
  * declared inputModalities is UNKNOWN, not text-only; and a provider whose
- * catalog cannot be read is unknown too — a veto, never a shrug, since the
+ * catalog cannot be read is unknown too, a veto rather than a shrug, since the
  * unreadable route is exactly where the vision twin could live. Anything
  * unresolvable answers false: the native path is the safe default, and a
  * text-only model merely keeps its old error message.
@@ -234,13 +234,21 @@ async function pasteTakeoverVerdict(host, label) {
     }
     for (const model of models) {
       for (const candidate of [model?.name, model?.id]) {
-        if (typeof candidate !== 'string' || candidate.length < 3) continue
+        if (typeof candidate !== 'string' || candidate.length === 0) continue
         if (!lowered.includes(candidate.toLowerCase())) continue
+        // The veto has no length floor: a vision model named "AI" appears in
+        // the label just as legitimately as a long name does, and skipping
+        // short names let a longer text-only name confirm the takeover alone.
         const modalities = model?.inputModalities
         if (!Array.isArray(modalities) || modalities.includes('image')) {
           return false
         }
-        matchedAny = true
+        // Positive confirmation does have a floor: one- and two-character
+        // text-only names match label prose far too easily to identify the
+        // selected model.
+        if (candidate.length >= 3) {
+          matchedAny = true
+        }
       }
     }
   }
@@ -256,7 +264,7 @@ const PASTE_VERDICT_CAP = 32
  * The paste route. POST /modlens/paste: image bytes in, `{ path }` out; the
  * file is private (0600) in a fresh unpredictable temp dir, magic-byte
  * checked and size-capped. GET /modlens/paste?model=<selector label>:
- * `{ takeover }` — the browser half asks before ever touching a paste, so a
+ * `{ takeover }`: the browser half asks before ever touching a paste, so a
  * disabled route (pasteToPath: false, or no web profile) means the client
  * stands down instead of swallowing pastes into a 404. Bound to the dsh web
  * server, which listens on loopback by default.
