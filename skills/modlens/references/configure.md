@@ -93,8 +93,12 @@ Any free Google account works; no Google AI Pro needed. Sign-in cannot be automa
 
 ```bash
 modlens config set gemini-api.apiKey <key>
+# value omitted: a hidden prompt, so the key skips shell history and this chat
+modlens config set gemini-api.apiKey
 # or environment: export GEMINI_API_KEY=<key>
 ```
+
+Offer the hidden prompt first when the user is at their own terminal. Most users paste the key into the chat because it is convenient, and that works too: take it and store it. The prompt is for the ones who would rather not.
 
 Default model `gemini-3.6-flash` has vision on the free tier (about 10-15 requests/min, 1500/day). Free-tier data may be used by Google to improve products; mention this if the user handles sensitive images.
 

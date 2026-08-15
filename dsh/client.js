@@ -179,12 +179,13 @@ window.__ModuleLoader__.load({
     // ~/.modlens/config.json: the browser never sees an API key, and never
     // sends a blank one back over a stored key.
     var ENGINES = ['antigravity-cli', 'gemini-api', 'openai', 'anthropic', 'claude-cli']
+    var REUSE = ['claude', 'codex', 'opencode', 'pi', 'grok']
 
     // Two short label sets rather than a locale bundle: the card has a dozen
     // strings, and a bundle would be more machinery than the thing it labels.
     var TEXT = {
       en: {
-        title: 'modlens vision engine',
+        title: 'ModLens vision engine',
         subtitle: 'Shared with every harness through ~/.modlens/config.json.',
         engine: 'Engine',
         apiKey: 'API key',
@@ -197,9 +198,13 @@ window.__ModuleLoader__.load({
         saving: 'saving...',
         saved: 'saved',
         loading: 'loading...',
+        discard: 'Discard',
+        cliNote: 'This engine signs in through its own CLI: no key, no endpoint.',
+        autoTitle: 'Auto mode: reuse local sign-ins',
+        autoHint: 'Let a read borrow another harness on this machine when your own engine cannot answer.',
       },
       zh: {
-        title: 'modlens 视觉引擎',
+        title: 'ModLens 视觉引擎',
         subtitle: '通过 ~/.modlens/config.json 与所有 harness 共享。',
         engine: '引擎',
         apiKey: 'API 密钥',
@@ -212,6 +217,10 @@ window.__ModuleLoader__.load({
         saving: '保存中…',
         saved: '已保存',
         loading: '加载中…',
+        discard: '放弃修改',
+        cliNote: '该引擎通过自己的 CLI 登录，无需密钥和接口地址。',
+        autoTitle: 'auto 模式：复用本机已有登录',
+        autoHint: '你自己的引擎答不了时，允许一次读取借用本机其他 harness 的登录。',
       },
     }
 
@@ -220,165 +229,235 @@ window.__ModuleLoader__.load({
       return lang.indexOf('zh') === 0 ? TEXT.zh : TEXT.en
     }
 
-    function ConfigCard(react) {
+    function ConfigCard(react, ui) {
       var h = react.createElement
+      var DisclosureRow = ui.DisclosureRow
+      var Button = ui.Button
+      var Input = ui.Input
       return function ModlensCard() {
         var t = labels()
-        var state = react.useState(null)
-        var summary = state[0]
-        var setSummary = state[1]
-        var draftState = react.useState({ apiKey: '', baseUrl: '', model: '' })
-        var draft = draftState[0]
-        var setDraft = draftState[1]
+        var openState = react.useState(false)
+        var summaryState = react.useState(null)
+        var draftState = react.useState(null)
         var noteState = react.useState('')
+        var open = openState[0]
+        var summary = summaryState[0]
+        var draft = draftState[0]
         var note = noteState[0]
-        var setNote = noteState[1]
+
+        var seed = (next, provider) => {
+          var engine = next.engines[provider] || { baseUrl: '', model: '' }
+          return {
+            provider: provider,
+            apiKey: '',
+            baseUrl: engine.baseUrl,
+            model: engine.model,
+            reuse: Object.assign({}, next.reuse),
+          }
+        }
 
         var load = react.useCallback(() => {
           fetch('/modlens/config')
-            .then((r) => r.json())
+            .then((r) =>
+              r.json().then((body) => {
+                if (!r.ok) throw new Error(body.error || 'load failed')
+                return body
+              }),
+            )
             .then((next) => {
-              setSummary(next)
-              var engine = next.engines[next.provider] || { baseUrl: '', model: '' }
-              setDraft({ apiKey: '', baseUrl: engine.baseUrl, model: engine.model })
+              summaryState[1](next)
+              draftState[1](seed(next, next.provider))
+              noteState[1]('')
             })
             .catch((error) => {
-              setNote(String(error))
+              noteState[1](String(error.message ? error.message : error))
             })
         }, [])
 
         react.useEffect(() => {
-          load()
-        }, [load])
+          if (open && summary === null) load()
+        }, [open, summary, load])
 
-        if (summary === null) {
-          return h('div', { style: { padding: '12px 0' } }, t.loading)
-        }
+        var body = null
+        if (open) {
+          if (summary === null || draft === null) {
+            body = h('div', { style: { padding: '8px 0', opacity: 0.7 } }, note || t.loading)
+          } else {
+            var keyless = (summary.keyless || []).indexOf(draft.provider) >= 0
+            var current = summary.engines[draft.provider] || { hasKey: false }
+            var pristine = seed(summary, draft.provider)
+            var dirty =
+              draft.provider !== summary.provider ||
+              draft.apiKey !== '' ||
+              draft.baseUrl !== pristine.baseUrl ||
+              draft.model !== pristine.model ||
+              REUSE.some((name) => draft.reuse[name] !== summary.reuse[name])
 
-        // Switching engine swaps in that engine's own values: the fields
-        // belong to the selected engine, never to the one before it.
-        var pick = (name) => {
-          var engine = summary.engines[name] || { baseUrl: '', model: '' }
-          setSummary(Object.assign({}, summary, { provider: name }))
-          setDraft({ apiKey: '', baseUrl: engine.baseUrl, model: engine.model })
-          setNote('')
-        }
+            var set = (key, value) => {
+              var next = Object.assign({}, draft)
+              next[key] = value
+              draftState[1](next)
+              noteState[1]('')
+            }
 
-        var field = (label, key, type, placeholder) =>
-          h('label', { key: key, style: { display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 0' } }, [
-            h('span', { key: 'l', style: { fontSize: '12px', opacity: 0.75 } }, label),
-            h('input', {
-              key: 'i',
-              type: type,
-              value: draft[key],
-              placeholder: placeholder,
-              onChange: (event) => {
-                var next = {}
-                next[key] = event.target.value
-                setDraft(Object.assign({}, draft, next))
-              },
-              style: {
-                padding: '6px 8px',
-                borderRadius: '6px',
-                border: '1px solid rgba(127,127,127,0.4)',
-                background: 'transparent',
-                color: 'inherit',
-              },
-            }),
-          ])
+            var field = (label, key, type, placeholder) =>
+              h(
+                'label',
+                { key: key, style: { display: 'block', padding: '6px 0' } },
+                h('div', { style: { fontSize: '12px', opacity: 0.7, paddingBottom: '4px' } }, label),
+                h(Input, {
+                  type: type,
+                  value: draft[key],
+                  placeholder: placeholder,
+                  style: { width: '100%' },
+                  onChange: (event) => {
+                    set(key, event.target.value)
+                  },
+                }),
+              )
 
-        var current = summary.engines[summary.provider] || { hasKey: false }
-        return h(
-          'div',
-          {
-            style: {
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '2px',
-              border: '1px solid var(--dsw-alpha-border, rgba(127,127,127,0.25))',
-              borderRadius: '10px',
-              padding: '14px 16px',
-            },
-          },
-          [
-            h('div', { key: 'title', style: { fontWeight: 600 } }, t.title),
-            h('div', { key: 'sub', style: { fontSize: '12px', opacity: 0.7, paddingBottom: '6px' } }, t.subtitle),
-            h(
-              'label',
-              { key: 'engine', style: { display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 0' } },
-              [
-                h('span', { key: 'l', style: { fontSize: '12px', opacity: 0.75 } }, t.engine),
+            body = h(
+              'div',
+              { style: { display: 'flex', flexDirection: 'column' } },
+              h(
+                'label',
+                { key: 'engine', style: { display: 'block', padding: '6px 0' } },
+                h('div', { style: { fontSize: '12px', opacity: 0.7, paddingBottom: '4px' } }, t.engine),
                 h(
                   'select',
                   {
-                    key: 's',
-                    value: summary.provider,
+                    value: draft.provider,
                     onChange: (event) => {
-                      pick(event.target.value)
+                      draftState[1](seed(summary, event.target.value))
+                      noteState[1]('')
                     },
                     style: {
-                      padding: '6px 8px',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(127,127,127,0.4)',
+                      width: '100%',
+                      padding: '7px 10px',
+                      borderRadius: '8px',
+                      border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
                       background: 'transparent',
                       color: 'inherit',
                     },
                   },
                   ENGINES.map((name) => h('option', { key: name, value: name }, name)),
                 ),
-              ],
-            ),
-            field(t.apiKey, 'apiKey', 'password', current.hasKey ? t.stored : t.unset),
-            field(t.baseUrl, 'baseUrl', 'text', t.fallback),
-            field(t.model, 'model', 'text', t.fallback),
-            h(
-              'div',
-              { key: 'actions', style: { display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '8px' } },
-              [
+              ),
+              // A CLI engine signs in through its own tool: a key and an
+              // endpoint would be fields with nothing behind them.
+              keyless ? null : field(t.apiKey, 'apiKey', 'password', current.hasKey ? t.stored : t.unset),
+              keyless ? null : field(t.baseUrl, 'baseUrl', 'text', t.fallback),
+              field(t.model, 'model', 'text', t.fallback),
+              keyless
+                ? h('div', { key: 'cli', style: { fontSize: '12px', opacity: 0.6, padding: '2px 0 6px' } }, t.cliNote)
+                : null,
+              h(
+                'div',
+                { key: 'auto', style: { paddingTop: '10px' } },
+                h('div', { style: { fontSize: '12px', opacity: 0.7 } }, t.autoTitle),
+                h('div', { style: { fontSize: '12px', opacity: 0.55, paddingBottom: '6px' } }, t.autoHint),
                 h(
-                  'button',
+                  'div',
+                  { style: { display: 'flex', flexWrap: 'wrap', gap: '10px 16px' } },
+                  REUSE.map((name) =>
+                    h(
+                      'label',
+                      {
+                        key: name,
+                        style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' },
+                      },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: Boolean(draft.reuse[name]),
+                        onChange: (event) => {
+                          var next = Object.assign({}, draft.reuse)
+                          next[name] = event.target.checked
+                          set('reuse', next)
+                        },
+                      }),
+                      name,
+                    ),
+                  ),
+                ),
+              ),
+              h(
+                'div',
+                {
+                  key: 'actions',
+                  style: {
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    alignItems: 'center',
+                    gap: '8px',
+                    paddingTop: '12px',
+                    marginTop: '10px',
+                    borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.2))',
+                  },
+                },
+                h('span', { style: { marginRight: 'auto', fontSize: '12px', opacity: 0.7 } }, note),
+                h(
+                  Button,
                   {
-                    key: 'save',
-                    type: 'button',
+                    variant: 'ghost',
+                    size: 'sm',
+                    disabled: !dirty,
                     onClick: () => {
-                      setNote(t.saving)
+                      draftState[1](seed(summary, summary.provider))
+                      noteState[1]('')
+                    },
+                  },
+                  t.discard,
+                ),
+                h(
+                  Button,
+                  {
+                    variant: 'primary',
+                    size: 'sm',
+                    disabled: !dirty,
+                    onClick: () => {
+                      noteState[1](t.saving)
                       fetch('/modlens/config', {
                         method: 'POST',
                         headers: { 'content-type': 'application/json' },
-                        body: JSON.stringify({
-                          provider: summary.provider,
-                          apiKey: draft.apiKey,
-                          baseUrl: draft.baseUrl,
-                          model: draft.model,
-                        }),
+                        body: JSON.stringify(draft),
                       })
-                        .then((r) => r.json().then((body) => ({ ok: r.ok, body: body })))
-                        .then((result) => {
-                          if (!result.ok) throw new Error(result.body.error || 'save failed')
-                          setSummary(result.body)
-                          var engine = result.body.engines[result.body.provider]
-                          setDraft({ apiKey: '', baseUrl: engine.baseUrl, model: engine.model })
-                          setNote(t.saved)
+                        .then((r) =>
+                          r.json().then((payload) => {
+                            if (!r.ok) throw new Error(payload.error || 'save failed')
+                            return payload
+                          }),
+                        )
+                        .then((next) => {
+                          summaryState[1](next)
+                          draftState[1](seed(next, next.provider))
+                          noteState[1](t.saved)
                         })
                         .catch((error) => {
-                          setNote(String(error.message ? error.message : error))
+                          noteState[1](String(error.message ? error.message : error))
                         })
-                    },
-                    style: {
-                      padding: '6px 12px',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(127,127,127,0.4)',
-                      background: 'transparent',
-                      color: 'inherit',
-                      cursor: 'pointer',
                     },
                   },
                   t.save,
                 ),
-                h('span', { key: 'note', style: { fontSize: '12px', opacity: 0.7 } }, note),
-              ],
-            ),
-          ],
+              ),
+            )
+          }
+        }
+
+        return h(
+          DisclosureRow,
+          {
+            icon: null,
+            title: t.title,
+            open: open,
+            expandable: true,
+            expandOnRowClick: true,
+            onToggle: () => {
+              openState[1](!open)
+            },
+            collapsedContent: h('span', { style: { fontSize: '13px', opacity: 0.6 } }, t.subtitle),
+          },
+          body,
         )
       }
     }
@@ -406,7 +485,8 @@ window.__ModuleLoader__.load({
         console.error('[modlens] settings card skipped: ' + error)
         return
       }
-      var Card = ConfigCard(react)
+      var ui = require('@deepseek-ai/dsh-client-ui-primitives')
+      var Card = ConfigCard(react, ui)
       ctx.slots.inject('settings.plugin.item', function* () {
         yield ctx.slots.register({ name: 'settings.plugin.item', id: 'modlens', order: 30 }, Card)
       })

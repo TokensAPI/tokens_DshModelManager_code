@@ -872,6 +872,12 @@ function renderEvidence(value) {
 // introduce them. Kept to the names modlens itself uses so the card and
 // `modlens doctor` say the same words.
 const ENGINES = ['antigravity-cli', 'gemini-api', 'openai', 'anthropic', 'claude-cli']
+// The two CLI engines sign in through their own tool, so a key or an endpoint
+// would be a field with nothing behind it. Both still take a model.
+const KEYLESS_ENGINES = ['antigravity-cli', 'claude-cli']
+// Auto mode: the local harnesses whose logins a read may borrow. `claude`
+// absent counts as granted, since claude-cli predates the grant model.
+const REUSE_HARNESSES = ['claude', 'codex', 'opencode', 'pi', 'grok']
 
 /** ~/.modlens/config.json, the one file every harness shares. */
 function modlensConfigPath() {
@@ -919,8 +925,18 @@ function engineSummary(config = readModlensConfig()) {
       hasKey: typeof settings.apiKey === 'string' && settings.apiKey !== '',
     }
   }
+  const reuse = {}
+  for (const harness of REUSE_HARNESSES) {
+    const granted = config.reuse?.[harness]
+    reuse[harness] = typeof granted === 'boolean' ? granted : harness === 'claude'
+  }
   const provider = typeof config.provider === 'string' ? config.provider : ''
-  return { provider: ENGINES.includes(provider) ? provider : ENGINES[0], engines }
+  return {
+    provider: ENGINES.includes(provider) ? provider : ENGINES[0],
+    engines,
+    keyless: KEYLESS_ENGINES,
+    reuse,
+  }
 }
 
 /**
@@ -951,6 +967,17 @@ function applyEngineSettings(patch) {
     settings.apiKey = apiKey
   }
   config.providers[patch.provider] = settings
+  // Auto mode, when the card sent it: only the harnesses this build knows,
+  // only booleans, so an unexpected key cannot land in the shared file.
+  if (patch.reuse !== null && typeof patch.reuse === 'object') {
+    config.reuse = { ...config.reuse }
+    for (const harness of REUSE_HARNESSES) {
+      const granted = patch.reuse[harness]
+      if (typeof granted === 'boolean') {
+        config.reuse[harness] = granted
+      }
+    }
+  }
   const file = modlensConfigPath()
   // A symlink here would write through to wherever it points, so it is
   // refused rather than followed: the CLI writes a real file, and anything
