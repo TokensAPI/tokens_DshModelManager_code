@@ -2,6 +2,8 @@
 // accepts image_url content (DashScope qwen-vl, OpenAI, GLM, ...). No portable
 // schema enforcement across vendors, so the schema rides in the prompt and the
 // response goes through tolerant JSON extraction.
+
+import { assertNoRetiredEndpointBinding } from '../config.ts';
 import { readLocalImageBase64 } from '../imageInput.ts';
 import { apiFetch } from '../net/proxy.ts';
 import { buildVisionPrompt, JSON_TEMPLATE_INSTRUCTION } from '../prompt.ts';
@@ -18,6 +20,7 @@ import type {
 export async function executeOpenaiCompat(
     options: BuildProviderInvocationOptions,
 ): Promise<ProviderParsedOutput> {
+    assertNoRetiredEndpointBinding('openai', options.settings ?? {});
     const apiKey = options.settings?.apiKey;
     // No default on purpose. Defaulting to official OpenAI would take a key
     // meant for another vendor, and the image beside it, and send both to

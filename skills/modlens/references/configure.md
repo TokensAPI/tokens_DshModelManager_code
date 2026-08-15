@@ -142,6 +142,8 @@ modlens config set provider kimi-cli
 modlens config set kimi-cli.model <alias>   # optional; kimi's own default otherwise
 ```
 
+Naming it is what turns it on. Unlike the other CLI routes it never joins the failover chain on its own, because it spends a subscription and installing the CLI is not agreement to spend it.
+
 The model alias is kimi's, in `<provider>/<model>` form as `kimi provider list`
 shows it, and it has to accept image input. This route enforces no schema (the
 CLI has no `--json-schema`), so the contract travels as a filled-in JSON

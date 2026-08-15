@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
+    assertNoRetiredEndpointBinding,
     CONFIG_TEMPLATE,
     defaultProviderName,
     initConfigFile,
@@ -312,5 +313,42 @@ describe('provider credentials come from the file alone (#42)', () => {
         );
         expect(rendered).not.toContain('ambient-key');
         expect(rendered).not.toContain('(env)');
+    });
+});
+
+describe('the retired endpoint bindings tell their users (#42)', () => {
+    it('refuses when the variable is set and the file has no endpoint', () => {
+        // Silence here would deliver a gateway's key, and the image beside
+        // it, to the vendor's own endpoint.
+        expect(() =>
+            assertNoRetiredEndpointBinding(
+                'anthropic',
+                { apiKey: 'k' },
+                {
+                    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+                },
+            ),
+        ).toThrow(/ANTHROPIC_BASE_URL.*anthropic\.baseUrl.*gateway\.example/s);
+    });
+
+    it('says nothing to anyone the change did not affect', () => {
+        // Endpoint in the file: the variable is irrelevant.
+        expect(() =>
+            assertNoRetiredEndpointBinding(
+                'anthropic',
+                { baseUrl: 'https://x/v1' },
+                {
+                    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+                },
+            ),
+        ).not.toThrow();
+        // No variable: the default endpoint was always what they used.
+        expect(() =>
+            assertNoRetiredEndpointBinding('anthropic', { apiKey: 'k' }, {}),
+        ).not.toThrow();
+        // A provider with no retired binding.
+        expect(() =>
+            assertNoRetiredEndpointBinding('gemini-api', {}, { ANTHROPIC_BASE_URL: 'https://x' }),
+        ).not.toThrow();
     });
 });
