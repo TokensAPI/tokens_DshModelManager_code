@@ -165,37 +165,49 @@ describe('providerChain', () => {
     });
 });
 
-describe('kimi-cli in the chain (#44)', () => {
-    const withKimi = { providers: {} };
+describe('kimi-cli only when chosen (#44)', () => {
+    const bare = { providers: {} };
 
-    it('joins the local chain when kimi is installed, and never the remote one', () => {
-        // It reads a local file through the CLI's own tool, so a URL has
-        // nothing for it to open.
-        const local = providerChain('local', withKimi, { PATH: pathWith('kimi') }).map(
+    it('stays out of the chain merely for being installed', () => {
+        // It spends a Kimi Code subscription, and installing the CLI is not
+        // agreement to spend it. claude-cli's automatic membership is a
+        // compatibility carve-out this provider has no claim to.
+        const local = providerChain('local', bare, { PATH: pathWith('kimi') }).map(
             (provider) => provider.name,
         );
-        expect(local).toContain('kimi-cli');
-        const remote = providerChain('remote', withKimi, { PATH: pathWith('kimi') }).map(
-            (provider) => provider.name,
-        );
-        expect(remote).not.toContain('kimi-cli');
+        expect(local).not.toContain('kimi-cli');
     });
 
-    it('stays out when kimi is not installed', () => {
-        const chain = providerChain('local', withKimi, { PATH: pathWith() }).map(
-            (provider) => provider.name,
-        );
-        expect(chain).not.toContain('kimi-cli');
-    });
-
-    it('moves to the front when it is the configured preference', () => {
+    it('runs when it is the configured provider', () => {
         const chain = providerChain(
             'local',
-            { ...withKimi, provider: 'kimi-cli' },
+            { ...bare, provider: 'kimi-cli' },
             {
                 PATH: pathWith('kimi'),
             },
         ).map((provider) => provider.name);
         expect(chain[0]).toBe('kimi-cli');
+    });
+
+    it('never joins a remote read, which it cannot fetch', () => {
+        const chain = providerChain(
+            'remote',
+            { ...bare, provider: 'kimi-cli' },
+            {
+                PATH: pathWith('kimi'),
+            },
+        ).map((provider) => provider.name);
+        expect(chain).not.toContain('kimi-cli');
+    });
+
+    it('is not conjured up by a preference when kimi is not installed', () => {
+        const chain = providerChain(
+            'local',
+            { ...bare, provider: 'kimi-cli' },
+            {
+                PATH: pathWith(),
+            },
+        ).map((provider) => provider.name);
+        expect(chain).not.toContain('kimi-cli');
     });
 });

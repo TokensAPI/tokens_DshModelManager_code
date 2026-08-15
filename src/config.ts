@@ -74,6 +74,36 @@ export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 // and the proxy conventions (HTTPS_PROXY and friends) are unaffected: neither
 // is a credential, and neither can be split from a matching half.
 
+/**
+ * The endpoint bindings retired in 3.17.0, and the field each one used to
+ * fill. Kept so the exact people they affected get told, rather than silently
+ * having their key sent to the vendor's own endpoint: someone who routed a
+ * gateway through `ANTHROPIC_BASE_URL` and left `anthropic.baseUrl` unset
+ * would otherwise have that gateway's key, and the image beside it, delivered
+ * to Anthropic. The check fires only in exactly that case.
+ */
+const RETIRED_ENDPOINT_BINDINGS: Record<string, string> = {
+    openai: 'OPENAI_BASE_URL',
+    anthropic: 'ANTHROPIC_BASE_URL',
+};
+
+export function assertNoRetiredEndpointBinding(
+    providerName: string,
+    settings: ProviderSettings,
+    env: NodeJS.ProcessEnv = process.env,
+): void {
+    const variable = RETIRED_ENDPOINT_BINDINGS[providerName];
+    if (!variable || settings.baseUrl?.trim()) {
+        return;
+    }
+    if (!env[variable]?.trim()) {
+        return;
+    }
+    throw new Error(
+        `${variable} is set, but modlens stopped reading it in 3.17.0, and ${providerName}.baseUrl is not in the config file. Refusing rather than sending this key to the provider's own endpoint: run modlens config set ${providerName}.baseUrl ${env[variable]?.trim()} to keep the endpoint you were using.`,
+    );
+}
+
 export function loadConfigFile(configPath = CONFIG_PATH): ModlensConfig {
     let raw: string;
     try {

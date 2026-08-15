@@ -130,10 +130,13 @@ const LOCAL_FAILOVER_ORDER = [
     'anthropic',
     'antigravity-cli',
     'claude-cli',
-    // Local only, like claude-cli, and last for the same reason: it spends a
-    // subscription the user is already paying for elsewhere.
-    'kimi-cli',
 ] as const;
+
+// Reachable only when chosen. kimi-cli spends a Kimi Code subscription, and
+// unlike claude-cli it has no history of being a built-in to inherit consent
+// from, so being installed is not agreement to spend it. Pinning it with
+// `-p kimi-cli` or `config set provider kimi-cli` is.
+const PIN_ONLY_PROVIDERS = ['kimi-cli'] as const;
 const REMOTE_FAILOVER_ORDER = ['gemini-api', 'openai', 'anthropic', 'antigravity-cli'] as const;
 
 /**
@@ -169,6 +172,16 @@ export function providerChain(
             const isAgent = Boolean(resolveProvider(canonical).isolateWorkdir);
             if (kind === 'local' || !isAgent) {
                 names.splice(index, 1);
+                names.unshift(canonical);
+            }
+        } else if (
+            index === -1 &&
+            canonical &&
+            (PIN_ONLY_PROVIDERS as readonly string[]).includes(canonical)
+        ) {
+            // Not in the base chain by design; naming it is the consent, and
+            // it still reads local files only.
+            if (kind === 'local') {
                 names.unshift(canonical);
             }
         }

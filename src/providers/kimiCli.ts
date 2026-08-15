@@ -39,11 +39,24 @@ export const KIMI_REENTRY_ENV = 'MODLENS_INSIDE_KIMI_CLI';
  * A fresh empty directory standing in for skill discovery, minted per call.
  * A fixed path could be pre-created holding a skill, which would hand the
  * guard's own name to whatever wanted to defeat it; mkdtemp gives a directory
- * nobody else can have populated. It is left behind empty, which costs one
- * inode and keeps the failure mode boring.
+ * nobody else can have populated.
+ *
+ * Removed when this process exits rather than after the run: the directory has
+ * to outlive the child, and an exit hook covers the paths a finally would miss
+ * (a failed spawn, a timeout kill, a caller that never awaits). It is empty, so
+ * the worst a missed cleanup costs is one directory entry.
  */
 function freshEmptySkillsDir(): string {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-kimi-skills-'));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-kimi-skills-'));
+    process.once('exit', () => {
+        try {
+            fs.rmdirSync(dir);
+        } catch {
+            // Gone already, or not empty because something wrote into it,
+            // which is not this process's business to clean up.
+        }
+    });
+    return dir;
 }
 
 export function buildKimiCliInvocation(

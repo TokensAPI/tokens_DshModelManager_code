@@ -1,5 +1,7 @@
 // Claude API provider. Structured output enforced the Anthropic way: a forced
 // tool call whose input_schema is the vision result schema.
+
+import { assertNoRetiredEndpointBinding } from '../config.ts';
 import { readLocalImageBase64 } from '../imageInput.ts';
 import { apiFetch } from '../net/proxy.ts';
 import { buildVisionPrompt } from '../prompt.ts';
@@ -20,6 +22,7 @@ const TOOL_NAME = 'report_vision_evidence';
 export async function executeAnthropicApi(
     options: BuildProviderInvocationOptions,
 ): Promise<ProviderParsedOutput> {
+    assertNoRetiredEndpointBinding('anthropic', options.settings ?? {});
     const apiKey = options.settings?.apiKey;
     if (!apiKey) {
         throw new Error(
