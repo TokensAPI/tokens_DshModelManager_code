@@ -1006,6 +1006,38 @@ function applyEngineSettings(patch) {
  * could otherwise repoint someone's engine at an endpoint of its choosing.
  * A read is refused the same way for symmetry, though it carries no secret.
  */
+/**
+ * The self-check behind the card's auto-mode section: which local harnesses
+ * exist to be borrowed at all. `doctor --json` already probes them without
+ * network or quota, so the route spawns the CLI this package ships and lifts
+ * its reuse section. Cached briefly, since one probe can take a second and
+ * re-expanding the card should not re-pay it.
+ */
+const DISCOVERY_TTL_MS = 60_000
+let discoveryCache = null
+async function discoverReuse() {
+  if (discoveryCache !== null && Date.now() - discoveryCache.at < DISCOVERY_TTL_MS) {
+    return discoveryCache.value
+  }
+  try {
+    const { stdout, code } = await run(process.execPath, [CLI_PATH, 'doctor', '--json'], AbortSignal.timeout(30_000))
+    if (code !== 0) return null
+    const reuse = JSON.parse(stdout)?.reuse
+    if (!reuse || !Array.isArray(reuse.probes)) return null
+    // doctor names the harness claude-code; the grant key is claude.
+    const probes = reuse.probes.map((probe) => ({
+      harness: probe.harness === 'claude-code' ? 'claude' : probe.harness,
+      cliFound: probe.cliFound === true,
+      loggedIn: probe.loggedIn,
+      cliPath: typeof probe.cliPath === 'string' ? probe.cliPath : '',
+    }))
+    discoveryCache = { at: Date.now(), value: probes }
+    return probes
+  } catch {
+    return null
+  }
+}
+
 /** localhost, ::1, or anything in 127/8, matching dsh's own /api fence. */
 function isLoopbackHost(hostname) {
   if (hostname === 'localhost' || hostname === '[::1]') return true
@@ -1060,7 +1092,14 @@ function registerConfigRoute(ctx) {
       }
       if (req.method === 'GET') {
         try {
-          send(200, engineSummary())
+          const summary = engineSummary()
+          const wantsDiscovery = new URL(req.url, 'http://localhost').searchParams.has('discover')
+          if (wantsDiscovery) {
+            // null when the probe failed: the card then falls back to the
+            // plain grant list rather than showing nothing.
+            summary.discovery = await discoverReuse()
+          }
+          send(200, summary)
         } catch (error) {
           send(409, { error: String(error?.message ?? error) })
         }

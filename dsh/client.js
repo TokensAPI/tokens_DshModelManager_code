@@ -202,6 +202,9 @@ window.__ModuleLoader__.load({
         cliNote: 'This engine signs in through its own CLI: no key, no endpoint.',
         autoTitle: 'Auto mode: reuse local sign-ins',
         autoHint: 'Let a read borrow another harness on this machine when your own engine cannot answer.',
+        found: 'found',
+        notLoggedIn: 'found, not signed in',
+        notFound: 'not on this machine',
       },
       zh: {
         title: 'ModLens 视觉引擎',
@@ -221,6 +224,9 @@ window.__ModuleLoader__.load({
         cliNote: '该引擎通过自己的 CLI 登录，无需密钥和接口地址。',
         autoTitle: 'auto 模式：复用本机已有登录',
         autoHint: '你自己的引擎答不了时，允许一次读取借用本机其他 harness 的登录。',
+        found: '已找到',
+        notLoggedIn: '已找到，未登录',
+        notFound: '本机没有',
       },
     }
 
@@ -231,9 +237,36 @@ window.__ModuleLoader__.load({
 
     function ConfigCard(react, ui) {
       var h = react.createElement
-      var DisclosureRow = ui.DisclosureRow
-      var Button = ui.Button
       var Input = ui.Input
+
+      // The chrome is the native plugin card's, value for value (border,
+      // layer backgrounds, 12px radius, header row with a rotating chevron,
+      // footer with discard ghost + save primary), so this card reads as a
+      // sibling of the built-in three rather than a lodger.
+      var chevron = (open) =>
+        h(
+          'svg',
+          {
+            width: 16,
+            height: 16,
+            viewBox: '0 0 16 16',
+            style: {
+              color: 'var(--dsw-alias-label-tertiary)',
+              flex: 'none',
+              transition: 'transform .16s',
+              transform: open ? 'rotate(180deg)' : 'none',
+            },
+          },
+          h('path', {
+            d: 'M4 6l4 4 4-4',
+            fill: 'none',
+            stroke: 'currentColor',
+            strokeWidth: 1.5,
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+          }),
+        )
+
       return function ModlensCard() {
         var t = labels()
         var openState = react.useState(false)
@@ -257,7 +290,9 @@ window.__ModuleLoader__.load({
         }
 
         var load = react.useCallback(() => {
-          fetch('/modlens/config')
+          // discover: the self-check probing which local harnesses exist to
+          // be borrowed. Paid once per expand, cached host-side.
+          fetch('/modlens/config?discover=1')
             .then((r) =>
               r.json().then((body) => {
                 if (!r.ok) throw new Error(body.error || 'load failed')
@@ -278,10 +313,31 @@ window.__ModuleLoader__.load({
           if (open && summary === null) load()
         }, [open, summary, load])
 
+        var fieldRow = (label, control, key) =>
+          h(
+            'div',
+            {
+              key: key,
+              style: {
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '6px',
+                padding: '12px 0',
+                borderTop: '1px solid var(--dsw-alias-border-l2)',
+              },
+            },
+            h('div', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-secondary)' } }, label),
+            control,
+          )
+
         var body = null
         if (open) {
           if (summary === null || draft === null) {
-            body = h('div', { style: { padding: '8px 0', opacity: 0.7 } }, note || t.loading)
+            body = h(
+              'div',
+              { style: { padding: '12px 0', color: 'var(--dsw-alias-label-tertiary)', fontSize: '13px' } },
+              note || t.loading,
+            )
           } else {
             var keyless = (summary.keyless || []).indexOf(draft.provider) >= 0
             var current = summary.engines[draft.provider] || { hasKey: false }
@@ -300,29 +356,62 @@ window.__ModuleLoader__.load({
               noteState[1]('')
             }
 
-            var field = (label, key, type, placeholder) =>
-              h(
-                'label',
-                { key: key, style: { display: 'block', padding: '6px 0' } },
-                h('div', { style: { fontSize: '12px', opacity: 0.7, paddingBottom: '4px' } }, label),
+            var textField = (label, key, type, placeholder) =>
+              fieldRow(
+                label,
                 h(Input, {
                   type: type,
                   value: draft[key],
                   placeholder: placeholder,
-                  style: { width: '100%' },
                   onChange: (event) => {
                     set(key, event.target.value)
                   },
                 }),
+                key,
               )
+
+            // Auto mode: the probes say which harnesses exist on this
+            // machine. Found ones get a checkbox with their status; missing
+            // ones are named as absent so the list explains itself.
+            var probes = Array.isArray(summary.discovery) ? summary.discovery : null
+            var autoRows = REUSE.map((name) => {
+              var probe = probes && probes.find((candidate) => candidate.harness === name)
+              var found = probe ? probe.cliFound : true
+              var status = !probes ? '' : !found ? t.notFound : probe.loggedIn === false ? t.notLoggedIn : t.found
+              return h(
+                'label',
+                {
+                  key: name,
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '13px',
+                    opacity: found ? 1 : 0.45,
+                  },
+                },
+                h('input', {
+                  type: 'checkbox',
+                  disabled: !found,
+                  checked: found && Boolean(draft.reuse[name]),
+                  onChange: (event) => {
+                    var next = Object.assign({}, draft.reuse)
+                    next[name] = event.target.checked
+                    set('reuse', next)
+                  },
+                }),
+                h('span', null, name),
+                status
+                  ? h('span', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: '12px' } }, status)
+                  : null,
+              )
+            })
 
             body = h(
               'div',
-              { style: { display: 'flex', flexDirection: 'column' } },
-              h(
-                'label',
-                { key: 'engine', style: { display: 'block', padding: '6px 0' } },
-                h('div', { style: { fontSize: '12px', opacity: 0.7, paddingBottom: '4px' } }, t.engine),
+              null,
+              fieldRow(
+                t.engine,
                 h(
                   'select',
                   {
@@ -332,94 +421,129 @@ window.__ModuleLoader__.load({
                       noteState[1]('')
                     },
                     style: {
+                      appearance: 'none',
                       width: '100%',
-                      padding: '7px 10px',
+                      padding: '8px 12px',
                       borderRadius: '8px',
-                      border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
+                      border: '1px solid var(--dsw-alias-border-l2)',
                       background: 'transparent',
                       color: 'inherit',
+                      font: 'inherit',
+                      fontSize: '13px',
                     },
                   },
                   ENGINES.map((name) => h('option', { key: name, value: name }, name)),
                 ),
+                'engine',
               ),
-              // A CLI engine signs in through its own tool: a key and an
-              // endpoint would be fields with nothing behind them.
-              keyless ? null : field(t.apiKey, 'apiKey', 'password', current.hasKey ? t.stored : t.unset),
-              keyless ? null : field(t.baseUrl, 'baseUrl', 'text', t.fallback),
-              field(t.model, 'model', 'text', t.fallback),
               keyless
-                ? h('div', { key: 'cli', style: { fontSize: '12px', opacity: 0.6, padding: '2px 0 6px' } }, t.cliNote)
-                : null,
-              h(
-                'div',
-                { key: 'auto', style: { paddingTop: '10px' } },
-                h('div', { style: { fontSize: '12px', opacity: 0.7 } }, t.autoTitle),
-                h('div', { style: { fontSize: '12px', opacity: 0.55, paddingBottom: '6px' } }, t.autoHint),
+                ? fieldRow(
+                    t.apiKey,
+                    h('div', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-tertiary)' } }, t.cliNote),
+                    'clinote',
+                  )
+                : textField(t.apiKey, 'apiKey', 'password', current.hasKey ? t.stored : t.unset),
+              keyless ? null : textField(t.baseUrl, 'baseUrl', 'text', t.fallback),
+              textField(t.model, 'model', 'text', t.fallback),
+              fieldRow(
                 h(
-                  'div',
-                  { style: { display: 'flex', flexWrap: 'wrap', gap: '10px 16px' } },
-                  REUSE.map((name) =>
-                    h(
-                      'label',
-                      {
-                        key: name,
-                        style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px' },
+                  'span',
+                  null,
+                  t.autoTitle,
+                  h(
+                    'span',
+                    {
+                      style: {
+                        color: 'var(--dsw-alias-label-tertiary)',
+                        fontWeight: 400,
+                        marginLeft: '8px',
                       },
-                      h('input', {
-                        type: 'checkbox',
-                        checked: Boolean(draft.reuse[name]),
-                        onChange: (event) => {
-                          var next = Object.assign({}, draft.reuse)
-                          next[name] = event.target.checked
-                          set('reuse', next)
-                        },
-                      }),
-                      name,
-                    ),
+                    },
+                    t.autoHint,
                   ),
                 ),
+                h(
+                  'div',
+                  { style: { display: 'flex', flexWrap: 'wrap', gap: '10px 18px', paddingTop: '2px' } },
+                  autoRows,
+                ),
+                'auto',
               ),
               h(
                 'div',
                 {
-                  key: 'actions',
+                  key: 'footer',
                   style: {
+                    borderTop: '1px solid var(--dsw-alias-border-l2)',
                     display: 'flex',
                     justifyContent: 'flex-end',
                     alignItems: 'center',
                     gap: '8px',
-                    paddingTop: '12px',
-                    marginTop: '10px',
-                    borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.2))',
+                    padding: '12px 0 4px',
                   },
                 },
-                h('span', { style: { marginRight: 'auto', fontSize: '12px', opacity: 0.7 } }, note),
                 h(
-                  Button,
+                  'span',
                   {
-                    variant: 'ghost',
-                    size: 'sm',
+                    style: {
+                      marginRight: 'auto',
+                      fontSize: '12px',
+                      color: 'var(--dsw-alias-label-tertiary)',
+                    },
+                  },
+                  note,
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
                     disabled: !dirty,
                     onClick: () => {
                       draftState[1](seed(summary, summary.provider))
                       noteState[1]('')
                     },
+                    style: {
+                      appearance: 'none',
+                      font: 'inherit',
+                      fontSize: '13px',
+                      lineHeight: 1.5,
+                      cursor: dirty ? 'pointer' : 'default',
+                      border: '1px solid var(--dsw-alias-border-l2)',
+                      borderRadius: '8px',
+                      padding: '5px 14px',
+                      background: 'none',
+                      color: 'var(--dsw-alias-label-secondary)',
+                      opacity: dirty ? 1 : 0.4,
+                    },
                   },
                   t.discard,
                 ),
                 h(
-                  Button,
+                  'button',
                   {
-                    variant: 'primary',
-                    size: 'sm',
+                    type: 'button',
                     disabled: !dirty,
                     onClick: () => {
                       noteState[1](t.saving)
+                      // Only the grants the user actually touched: writing
+                      // an untouched one turns "never asked" into an explicit
+                      // answer, and a recorded refusal is never asked again.
+                      var reuseChanges = {}
+                      REUSE.forEach((name) => {
+                        if (draft.reuse[name] !== summary.reuse[name]) {
+                          reuseChanges[name] = draft.reuse[name]
+                        }
+                      })
                       fetch('/modlens/config', {
                         method: 'POST',
                         headers: { 'content-type': 'application/json' },
-                        body: JSON.stringify(draft),
+                        body: JSON.stringify({
+                          provider: draft.provider,
+                          apiKey: draft.apiKey,
+                          baseUrl: draft.baseUrl,
+                          model: draft.model,
+                          reuse: reuseChanges,
+                        }),
                       })
                         .then((r) =>
                           r.json().then((payload) => {
@@ -428,6 +552,9 @@ window.__ModuleLoader__.load({
                           }),
                         )
                         .then((next) => {
+                          // The save response carries no discovery; keep the
+                          // probes already on screen.
+                          next.discovery = summary.discovery
                           summaryState[1](next)
                           draftState[1](seed(next, next.provider))
                           noteState[1](t.saved)
@@ -435,6 +562,19 @@ window.__ModuleLoader__.load({
                         .catch((error) => {
                           noteState[1](String(error.message ? error.message : error))
                         })
+                    },
+                    style: {
+                      appearance: 'none',
+                      font: 'inherit',
+                      fontSize: '13px',
+                      lineHeight: 1.5,
+                      cursor: dirty ? 'pointer' : 'default',
+                      border: '1px solid transparent',
+                      borderRadius: '8px',
+                      padding: '5px 14px',
+                      background: 'var(--dsw-alias-label-primary)',
+                      color: 'var(--dsw-alias-bg-layer-3)',
+                      opacity: dirty ? 1 : 0.4,
                     },
                   },
                   t.save,
@@ -445,19 +585,57 @@ window.__ModuleLoader__.load({
         }
 
         return h(
-          DisclosureRow,
+          'div',
           {
-            icon: null,
-            title: t.title,
-            open: open,
-            expandable: true,
-            expandOnRowClick: true,
-            onToggle: () => {
-              openState[1](!open)
+            style: {
+              border: '1px solid var(--dsw-alias-border-l2)',
+              background: open ? 'var(--dsw-alias-bg-layer-2)' : 'var(--dsw-alias-bg-layer-3)',
+              borderRadius: '12px',
+              transition: 'border-color .16s, background .16s',
             },
-            collapsedContent: h('span', { style: { fontSize: '13px', opacity: 0.6 } }, t.subtitle),
           },
-          body,
+          h(
+            'button',
+            {
+              type: 'button',
+              onClick: () => {
+                openState[1](!open)
+              },
+              style: {
+                appearance: 'none',
+                width: '100%',
+                font: 'inherit',
+                color: 'inherit',
+                textAlign: 'left',
+                cursor: 'pointer',
+                background: 'none',
+                border: 0,
+                borderRadius: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                padding: '14px 16px',
+              },
+            },
+            h(
+              'div',
+              { style: { flex: 1, minWidth: 0 } },
+              h('div', { style: { fontSize: '14px', fontWeight: 600 } }, t.title),
+              h(
+                'div',
+                {
+                  style: {
+                    color: 'var(--dsw-alias-label-tertiary)',
+                    fontSize: '13px',
+                    lineHeight: 1.5,
+                  },
+                },
+                t.subtitle,
+              ),
+            ),
+            chevron(open),
+          ),
+          open ? h('div', { style: { margin: '0 16px', paddingBottom: '8px' } }, body) : null,
         )
       }
     }
