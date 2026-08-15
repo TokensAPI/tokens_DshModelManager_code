@@ -22,7 +22,7 @@ export async function executeGeminiApi(
     const apiKey = options.settings?.apiKey;
     if (!apiKey) {
         throw new Error(
-            'gemini-api provider needs an API key. Set GEMINI_API_KEY, or run: modlens config set gemini-api.apiKey <key> (free key: https://aistudio.google.com)',
+            'gemini-api provider needs an API key. Run: modlens config set gemini-api.apiKey and paste it at the hidden prompt (free key: https://aistudio.google.com)',
         );
     }
 

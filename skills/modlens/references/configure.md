@@ -67,7 +67,7 @@ Field semantics:
   - `allowModels` non-empty (allowlist mode): only the listed models run the engine, every other identified model is denied. Right for the actual 2026 landscape, where text-only models are the short list. A deny pattern still wins over an allow match, so a broad allow can have its vision variants carved out, as in the example above: `glm-5.*` allows the text line while `glm-*v*` catches `glm-5v-turbo`. Anchor allow patterns tightly (`deepseek-v4-*`, not `deepseek*`) so a vendor's next multimodal generation falls off the list and steps aside until you have checked it.
   - List a model by what actually reaches it, not by what it could see: a multimodal model behind a gateway that strips images still needs modlens, and your session transcript records the model name the gateway reports. `modlens doctor`'s Guard section shows the rules and a live verdict for checking the result.
   - `denyWhenUnknown` (default `false`) decides what happens when no signal identifies the active model, in either mode: `false` proceeds, `true` denies. The active model is detected from, strongest first: the `MODLENS_MODEL` env var (`none` means "treat as unknown"), the harness's session storage, the `--model` self-report.
-- Environment variables override the file for these bindings: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`. Beyond those, modlens reads `MODLENS_HARNESS` (paste-recovery and guard scope), `MODLENS_MODEL` (guard override, see `guards`), and the fingerprints harnesses inject themselves, which pin the guard's storage lookup to the current session: `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, plus the presence markers harness detection relies on (`CLAUDECODE`, `PI_CODING_AGENT`, `CODEX_SANDBOX`).
+- Provider credentials come from this file and nowhere else. `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` used to override it and no longer do: a baseUrl and an apiKey are one credential, and taking one from the file and the other from the environment built a pairing that existed in neither. modlens still reads `MODLENS_HARNESS` (paste-recovery and guard scope), `MODLENS_MODEL` (guard override, see `guards`), and the fingerprints harnesses inject themselves, which pin the guard's storage lookup to the current session: `CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, plus the presence markers harness detection relies on (`CLAUDECODE`, `PI_CODING_AGENT`, `CODEX_SANDBOX`).
 - `reuse.<claude|codex|opencode|pi|grok>`: per-harness grants for spending other local logins, written by the onboarding conversation (`references/onboard.md`). `true` lets reads reuse that harness (pi credentials join the inline region with every guard intact; a signed-in Codex, an OpenCode vision model, or pi driven directly join the agent region before `claude-cli`), `false` records a refusal so the user is never re-asked, absent means never asked and nothing runs. `claude` absent counts as granted: `claude-cli` predates this model as a built-in provider, and `reuse.claude false` removes it from the chain (`-p claude-cli` still pins). Reused engines get no priority over the user's own: regions order by speed class only. Every reused answer adds a `meta.warnings` line naming whose quota it spent, and `modlens doctor`'s Reuse section shows each harness's decision plus what discovery found (probe results cache for 6 hours in `~/.modlens/auto-cache.json`; doctor always re-probes). Set with `modlens config set reuse.codex true` (empty clears back to never-asked).
 - Unknown top-level keys and unknown provider names are ignored rather than rejected, so a typo fails quiet: run `modlens doctor` after hand-editing, it shows which file and env values are actually in effect.
 
@@ -95,7 +95,6 @@ Any free Google account works; no Google AI Pro needed. Sign-in cannot be automa
 modlens config set gemini-api.apiKey <key>
 # value omitted: a hidden prompt, so the key skips argv, shell history, and this chat
 modlens config set gemini-api.apiKey
-# or environment: export GEMINI_API_KEY=<key>
 ```
 
 Offer the hidden prompt first when the user is at their own terminal. Most users paste the key into the chat because it is convenient, and that works too: take it and store it. The prompt is for the ones who would rather not.
@@ -112,7 +111,7 @@ modlens config set openai.apiKey <sk-key>
 modlens config set openai.model qwen3.6-27b
 ```
 
-For official OpenAI: baseUrl `https://api.openai.com/v1`, a vision-capable model. Environment equivalents: `OPENAI_BASE_URL`, `OPENAI_API_KEY`. The model must be multimodal; text-only models will fail or hallucinate.
+`baseUrl` defaults to `https://api.openai.com/v1`, so official OpenAI needs only a key and a vision-capable model; set `baseUrl` for any other compatible endpoint. The model must be multimodal; text-only models will fail or hallucinate.
 
 This route enforces nothing server-side by default, so a weaker model can answer with half the contract and the run fails with an explicit error. If that happens, ask the gateway to enforce it:
 
@@ -126,12 +125,11 @@ The contract goes out as `response_format: json_schema` in strict form, derived 
 
 ```bash
 modlens config set anthropic.apiKey <sk-ant-key>
-# or: export ANTHROPIC_API_KEY=<key>
 ```
 
 Default model is Claude Haiku (`claude-haiku-4-5-20251001`). Schema is enforced through a forced tool call.
 
-**`ANTHROPIC_BASE_URL` trap.** modlens binds `ANTHROPIC_BASE_URL` to `anthropic.baseUrl`, so it inherits whatever that variable points at. If the user set it in their shell to route Claude Code through a text-only gateway (a common way to run a non-Claude model behind the Claude Code UI), then `-p anthropic` silently sends the vision request to that gateway too, where it fails or comes back blind, with no hint that the endpoint was swapped. Check `echo $ANTHROPIC_BASE_URL` when anthropic vision misbehaves. Fixes: unset it for the modlens call, pin the real endpoint with `modlens config set anthropic.baseUrl https://api.anthropic.com`, or use `-p gemini-api` instead.
+**The `ANTHROPIC_BASE_URL` trap is gone.** modlens used to bind that variable to `anthropic.baseUrl`, so a shell that routed Claude Code through a text-only gateway silently sent vision requests there too. Credentials come from the config file now, so a variable set for another tool cannot reach this route. Set `anthropic.baseUrl` in the file when you do want a different endpoint.
 
 ### claude-cli (Claude Code login, no key)
 

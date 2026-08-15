@@ -26,7 +26,7 @@ describe('executeGeminiApi', () => {
                 timeoutMs: 5000,
                 settings: {},
             }),
-        ).rejects.toThrow('GEMINI_API_KEY');
+        ).rejects.toThrow(/needs an API key/);
     });
 
     it('builds a generateContent call with responseJsonSchema and parses the output', async () => {

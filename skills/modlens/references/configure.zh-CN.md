@@ -67,7 +67,7 @@ modlens config set <provider>.<field> <value>   # 字段：apiKey、baseUrl、mo
   - `allowModels` 非空（白名单模式）：只有列出的模型运行引擎，其他所有已识别的模型一律拒绝。适合 2026 年的实际格局，纯文本模型才是那份短名单。deny 模式仍然优先于 allow 匹配，所以宽泛的 allow 可以把视觉变体剔出去，正如上面的示例：`glm-5.*` 放行文本系列，`glm-*v*` 抓住 `glm-5v-turbo`。allow 模式要锚定得紧一些（写 `deepseek-v4-*` 而不是 `deepseek*`），这样厂商下一代多模态型号会自动掉出名单，等你检查过再上场。
   - 按真正抵达模型的内容来列名单，而不是按它本来能看到什么：多模态模型如果躲在一个剥离图片的网关后面，照样需要 modlens，而你的会话记录里存的是网关上报的模型名。`modlens doctor` 的 Guard 一节会显示规则和一条实时判定，方便核对结果。
   - `denyWhenUnknown`（默认 `false`）决定在两种模式下，当没有任何信号能识别当前模型时怎么办：`false` 放行，`true` 拒绝。当前模型的检测来源从强到弱依次是：`MODLENS_MODEL` 环境变量（`none` 表示「按未知处理」）、harness 的会话存储、`--model` 自报。
-- 以下绑定上，环境变量会覆盖配置文件：`GEMINI_API_KEY`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`。除此之外，modlens 还读取 `MODLENS_HARNESS`（粘贴恢复和 guard 的作用范围）、`MODLENS_MODEL`（guard 覆盖，见 `guards`），以及各 harness 自己注入的指纹，它们把 guard 的存储查询钉在当前 session 上：`CLAUDE_CODE_SESSION_ID`、`CODEX_THREAD_ID`，加上 harness 检测依赖的存在性标记（`CLAUDECODE`、`PI_CODING_AGENT`、`CODEX_SANDBOX`）。
+- provider 的凭据只来自这个文件。`GEMINI_API_KEY`、`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL` 过去会覆盖配置文件，现在不会了：地址和密钥本是一副凭据，一半取自文件、一半取自环境，拼出来的组合在哪儿都不存在。modlens 仍然读取 `MODLENS_HARNESS`（粘贴恢复和 guard 的作用范围）、`MODLENS_MODEL`（guard 覆盖，见 `guards`），以及各 harness 自己注入的指纹，它们把 guard 的存储查询钉在当前 session 上：`CLAUDE_CODE_SESSION_ID`、`CODEX_THREAD_ID`，加上 harness 检测依赖的存在性标记（`CLAUDECODE`、`PI_CODING_AGENT`、`CODEX_SANDBOX`）。
 - `reuse.<claude|codex|opencode|pi|grok>`：按 harness 记录的授权，决定能否花费本机其他登录态，由引导对话（`references/onboard.md`）写入。`true` 允许读图时复用该 harness（pi 的凭据加入 inline 区且所有 guard 照常生效，已登录的 Codex、OpenCode 的视觉模型或直接驱动的 pi 加入 agent 区，排在 `claude-cli` 之前），`false` 记下一次拒绝，用户不会被再次询问，缺失表示从未问过，什么都不会运行。`claude` 缺失视为已授权：`claude-cli` 作为内置 provider 早于这套模型存在，`reuse.claude false` 会把它移出链条（`-p claude-cli` 仍可钉死）。复用来的引擎不比用户自己的优先：分区只按速度档次排序。每个复用得来的答案都会在 `meta.warnings` 里加一行，说明花的是谁的额度，`modlens doctor` 的 Reuse 一节会显示每个 harness 的决定和探测发现的结果（探测结果在 `~/.modlens/auto-cache.json` 里缓存 6 小时，doctor 每次都重新探测）。用 `modlens config set reuse.codex true` 设置（传空恢复为从未问过）。
 - 未知的顶层键和未知的 provider 名会被忽略而不是报错，所以敲错字会无声失败：手工编辑后跑一下 `modlens doctor`，它会显示哪些文件值和环境变量真正生效。
 
@@ -95,7 +95,6 @@ agy    # 用户需自己在浏览器完成登录，然后退出
 modlens config set gemini-api.apiKey <key>
 # 省略值：进入隐藏输入，密钥不进 argv、不进 shell 历史，也不进这段对话
 modlens config set gemini-api.apiKey
-# 或走环境变量：export GEMINI_API_KEY=<key>
 ```
 
 用户就在自己终端前时，先给隐藏输入这条。大多数人图方便还是会把 key 直接贴进对话，那也没问题：照收照存。隐藏输入是留给在乎的人的。
@@ -112,7 +111,7 @@ modlens config set openai.apiKey <sk-key>
 modlens config set openai.model qwen3.6-27b
 ```
 
-官方 OpenAI 的写法：baseUrl 用 `https://api.openai.com/v1`，配一个具备视觉能力的模型。对应的环境变量：`OPENAI_BASE_URL`、`OPENAI_API_KEY`。模型必须是多模态的，纯文本模型会失败或产生幻觉。
+`baseUrl` 默认就是 `https://api.openai.com/v1`，所以用官方 OpenAI 只需要一个密钥和一个具备视觉能力的模型；换其他兼容端点时才需要设 `baseUrl`。模型必须是多模态的，纯文本模型会失败或产生幻觉。
 
 这条路线默认在服务端不做任何约束，能力弱一些的模型可能只答出契约的一半，运行就会以明确报错失败。真遇到就让网关自己强制执行：
 
@@ -126,12 +125,11 @@ modlens config set openai.structuredOutput true
 
 ```bash
 modlens config set anthropic.apiKey <sk-ant-key>
-# 或：export ANTHROPIC_API_KEY=<key>
 ```
 
 默认模型是 Claude Haiku（`claude-haiku-4-5-20251001`）。schema 通过强制工具调用来约束。
 
-**`ANTHROPIC_BASE_URL` 陷阱。**modlens 把 `ANTHROPIC_BASE_URL` 绑定到 `anthropic.baseUrl`，所以这个变量指向哪它就继承哪。如果用户在 shell 里设过它，用来把 Claude Code 路由到某个纯文本网关（在 Claude Code 界面下跑非 Claude 模型的常见做法），那么 `-p anthropic` 也会把视觉请求无声地发到那个网关，要么失败，要么返回的结果像没看过图，而且没有任何端点被换掉的提示。anthropic 的视觉表现异常时，先 `echo $ANTHROPIC_BASE_URL` 查一下。解法：给 modlens 调用临时取消这个变量，或用 `modlens config set anthropic.baseUrl https://api.anthropic.com` 钉死真实端点，或改用 `-p gemini-api`。
+**`ANTHROPIC_BASE_URL` 陷阱已经不存在了。**modlens 过去把这个变量绑定到 `anthropic.baseUrl`，于是一个为了把 Claude Code 路由到纯文本网关而设的变量，会让视觉请求也无声地发到那里。现在凭据只来自配置文件，为别的工具设的变量碰不到这条路线。确实想换端点时，在文件里设 `anthropic.baseUrl`。
 
 ### claude-cli（Claude Code 登录态，无需 key）
 

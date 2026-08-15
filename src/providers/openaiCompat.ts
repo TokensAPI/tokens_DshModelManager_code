@@ -15,16 +15,23 @@ import type {
     VisionProvider,
 } from './index.ts';
 
+const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+
 export async function executeOpenaiCompat(
     options: BuildProviderInvocationOptions,
 ): Promise<ProviderParsedOutput> {
     const apiKey = options.settings?.apiKey;
-    const baseUrl = options.settings?.baseUrl?.replace(/\/$/, '');
+    // Official OpenAI when nothing says otherwise. This route exists for any
+    // compatible endpoint and most users point it elsewhere, but a key with no
+    // endpoint used to be an error, and since the environment stopped
+    // supplying one (issue #42) the obvious default is the one whose wire
+    // format every other endpoint copies.
+    const baseUrl = (options.settings?.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
     const model = options.model || options.settings?.model;
 
-    if (!apiKey || !baseUrl || !model) {
+    if (!apiKey || !model) {
         throw new Error(
-            'openai provider needs baseUrl, apiKey, and model. Set OPENAI_BASE_URL and OPENAI_API_KEY, or run: modlens config set openai.baseUrl <url> / openai.apiKey <key> / openai.model <name>',
+            'openai provider needs an apiKey and a model. Run: modlens config set openai.apiKey (a hidden prompt) and modlens config set openai.model <name>. baseUrl defaults to https://api.openai.com/v1, so set it only for another compatible endpoint.',
         );
     }
 

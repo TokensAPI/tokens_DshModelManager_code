@@ -24,26 +24,27 @@ describe('defaultProviderName', () => {
 });
 
 describe('resolveProviderSettings', () => {
-    it('env vars override config file values, unbound fields pass through', () => {
+    it('takes credentials from the file and nowhere else (#42)', () => {
+        // These bindings existed and were removed: an ambient key silently
+        // replacing a configured one is a 401 with nothing in it naming the
+        // environment as the source.
         const settings = resolveProviderSettings(
             'gemini-api',
             { providers: { 'gemini-api': { apiKey: 'from-file', model: 'm1' } } },
             { GEMINI_API_KEY: 'from-env' },
         );
-        expect(settings.apiKey).toBe('from-env');
+        expect(settings.apiKey).toBe('from-file');
         expect(settings.model).toBe('m1');
     });
 
-    it('binds openai and anthropic base urls from env', () => {
+    it('leaves an unconfigured provider unconfigured, whatever the environment holds', () => {
         const settings = resolveProviderSettings(
             'openai',
             {},
-            {
-                OPENAI_API_KEY: 'k',
-                OPENAI_BASE_URL: 'https://gw.example.com/v1',
-            },
+            { OPENAI_API_KEY: 'k', OPENAI_BASE_URL: 'https://gw.example.com/v1' },
         );
-        expect(settings.baseUrl).toBe('https://gw.example.com/v1');
+        expect(settings.baseUrl).toBeUndefined();
+        expect(settings.apiKey).toBeUndefined();
     });
 });
 
@@ -63,9 +64,12 @@ describe('setConfigValue + loadConfigFile + renderEffectiveConfig', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('merges env vars over the file and labels each value source', () => {
+    it('shows the file values, and never invents one from the environment', () => {
         const rendered = renderEffectiveConfig(
-            { provider: 'gemini-api', providers: { 'gemini-api': { model: 'm1' } } },
+            {
+                provider: 'gemini-api',
+                providers: { 'gemini-api': { model: 'm1', apiKey: 'AIzaFromFile12345' } },
+            },
             { GEMINI_API_KEY: 'AIzaFromEnv12345' },
         );
         const parsed = JSON.parse(rendered) as {
@@ -73,9 +77,11 @@ describe('setConfigValue + loadConfigFile + renderEffectiveConfig', () => {
             providers: Record<string, Record<string, string>>;
         };
         expect(parsed.provider).toBe('gemini-api');
-        // apiKey came from the environment, masked, and tagged env.
-        expect(parsed.providers['gemini-api'].apiKey).toMatch(/\(env\)$/);
-        expect(parsed.providers['gemini-api'].apiKey).not.toContain('FromEnv');
+        // The key is the file's, masked, and tagged file; the ambient one is
+        // not shown, because it is not used.
+        expect(parsed.providers['gemini-api'].apiKey).toMatch(/\(file\)$/);
+        expect(parsed.providers['gemini-api'].apiKey).not.toContain('FromFile');
+        expect(rendered).not.toContain('FromEnv');
         // model came from the file, tagged file.
         expect(parsed.providers['gemini-api'].model).toBe('m1 (file)');
     });
@@ -268,5 +274,43 @@ describe('structuredOutput (#37)', () => {
         expect(() => setConfigValue('openai.structuredOutput', 'yes', file)).toThrow(
             /must be true or false/,
         );
+    });
+});
+
+describe('provider credentials come from the file alone (#42)', () => {
+    // Ambient OPENAI_* variables are set for other tools all the time, and
+    // they used to win over an explicitly configured engine. What broke was
+    // not who wins: baseUrl and apiKey are one credential, and taking one
+    // from the file and the other from the environment produced a pairing
+    // that exists in neither, which is why the failure read as a 401 against
+    // an endpoint the user never pointed that key at.
+    it('ignores an ambient key when the file configures the engine', () => {
+        const settings = resolveProviderSettings(
+            'openai',
+            { providers: { openai: { apiKey: 'file-key', baseUrl: 'https://kimi.example/v1' } } },
+            { OPENAI_API_KEY: 'ambient-key', OPENAI_BASE_URL: 'https://api.openai.com/v1' },
+        );
+        expect(settings.apiKey).toBe('file-key');
+        expect(settings.baseUrl).toBe('https://kimi.example/v1');
+    });
+
+    it('does not fill a gap from the environment either', () => {
+        // Half from the file and half from the environment is the pairing
+        // that caused this; an absent field stays absent and doctor says so.
+        const settings = resolveProviderSettings(
+            'openai',
+            { providers: { openai: { baseUrl: 'https://kimi.example/v1' } } },
+            { OPENAI_API_KEY: 'ambient-key' },
+        );
+        expect(settings.apiKey).toBeUndefined();
+    });
+
+    it('reports nothing from the environment in the effective config', () => {
+        const rendered = renderEffectiveConfig(
+            { providers: { openai: { model: 'm' } } },
+            { OPENAI_API_KEY: 'ambient-key' },
+        );
+        expect(rendered).not.toContain('ambient-key');
+        expect(rendered).not.toContain('(env)');
     });
 });

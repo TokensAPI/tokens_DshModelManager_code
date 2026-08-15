@@ -26,7 +26,7 @@ describe('executeAnthropicApi', () => {
                 timeoutMs: 5000,
                 settings: {},
             }),
-        ).rejects.toThrow('ANTHROPIC_API_KEY');
+        ).rejects.toThrow(/needs an API key/);
     });
 
     it('forces a tool call with the vision schema and reads tool_use input', async () => {

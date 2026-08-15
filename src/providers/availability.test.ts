@@ -71,10 +71,19 @@ describe('providerAvailable', () => {
         expect(providerAvailable('openai', full, env)).toBe(true);
     });
 
-    it('reads keys from the environment as well as the config', () => {
+    it('ignores keys in the environment: the file is the only source (#42)', () => {
         expect(providerAvailable('gemini-api', {}, { PATH: pathWith(), GEMINI_API_KEY: 'g' })).toBe(
-            true,
+            false,
         );
+        expect(
+            providerAvailable(
+                'gemini-api',
+                { providers: { 'gemini-api': { apiKey: 'g' } } },
+                {
+                    PATH: pathWith(),
+                },
+            ),
+        ).toBe(true);
         expect(providerAvailable('unknown-provider', {}, { PATH: pathWith() })).toBe(false);
     });
 });
