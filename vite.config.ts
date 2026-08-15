@@ -4,6 +4,11 @@ import { defineConfig } from 'vite';
 import pkg from './package.json' with { type: 'json' };
 
 export default defineConfig({
+    test: {
+        // One build for every suite that drives the real binary, so none of
+        // them races another's build or silently tests a stale bundle.
+        globalSetup: './vitest.globalSetup.ts',
+    },
     define: {
         __APP_VERSION__: JSON.stringify(pkg.version),
     },

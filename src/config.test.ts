@@ -331,6 +331,24 @@ describe('the retired endpoint bindings tell their users (#42)', () => {
         ).toThrow(/ANTHROPIC_BASE_URL.*anthropic\.baseUrl.*gateway\.example/s);
     });
 
+    it('masks credentials the endpoint URL carries, since errors travel', () => {
+        // An error lands in logs, issue reports and screenshots.
+        let message = '';
+        try {
+            assertNoRetiredEndpointBinding(
+                'openai',
+                { apiKey: 'k' },
+                {
+                    OPENAI_BASE_URL: 'https://user:hunter2@gw.example/v1',
+                },
+            );
+        } catch (error) {
+            message = (error as Error).message;
+        }
+        expect(message).toContain('gw.example');
+        expect(message).not.toContain('hunter2');
+    });
+
     it('says nothing to anyone the change did not affect', () => {
         // Endpoint in the file: the variable is irrelevant.
         expect(() =>
