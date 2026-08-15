@@ -101,6 +101,21 @@ install-time version, so re-run the install to overwrite it in place.
 behind the CLI doing the reporting, which makes the drift visible before it
 costs anyone a debugging session.
 
+### A session that already holds an image
+
+dsh refuses to switch a session that contains image attachments to a model
+whose declared modalities exclude images, which includes every plain text-only
+DeepSeek entry. The rule is dsh's and it is sound: a text-only model cannot
+receive a history carrying image blocks, and the `(modlens vision)` variant is
+switchable there not because it declares image input but because it converts
+those blocks to evidence text at request time, which the plain entry does not
+do ([#40](https://github.com/liustack/modlens/issues/40)).
+
+Pasting through the first route above avoids the situation entirely: the image
+becomes a file path and the session never holds an attachment, so nothing locks
+the model selector. It only comes up after a paste on a variant or on a vision
+model, where an attachment is the point.
+
 ### Paste-to-path (web profile)
 
 Pasting an image into the dsh Web UI under a **text-only model** used to die at
