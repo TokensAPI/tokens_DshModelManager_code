@@ -48,7 +48,7 @@ modlens recover-paste                           # pull a pasted image into a fil
 }
 ```
 
-`meta` 记录结果是怎么产生的：什么时间（`generatedAt`）、用了哪个 `model`、provider 有会话时的 `conversationId`、实际耗时 `durationSeconds`，以及 provider 上报的原始 `usage`（结构因 provider 而异，没有时为 `null`）。`attempts` 按顺序列出故障转移链尝试过的每个 provider 和失败原因。`warnings` 携带路由通知（故障转移、被忽略的 extraBody、自动模式下这次识别花了谁的额度）。
+`meta` 记录结果是怎么产生的：什么时间（`generatedAt`）、用了哪个 `model`（provider 跑的是它自己配好、又没告诉我们型号的模型时为 `null`，`kimi-cli` 用 kimi 默认模型就是这种情况）、provider 有会话时的 `conversationId`、实际耗时 `durationSeconds`，以及 provider 上报的原始 `usage`（结构因 provider 而异，没有时为 `null`）。`attempts` 按顺序列出故障转移链尝试过的每个 provider 和失败原因。`warnings` 携带路由通知（故障转移、被忽略的 extraBody、自动模式下这次识别花了谁的额度）。
 
 ## 参数
 

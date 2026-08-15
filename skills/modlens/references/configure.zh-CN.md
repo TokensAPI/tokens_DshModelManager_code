@@ -111,7 +111,7 @@ modlens config set openai.apiKey <sk-key>
 modlens config set openai.model qwen3.6-27b
 ```
 
-`baseUrl` 默认就是 `https://api.openai.com/v1`，所以用官方 OpenAI 只需要一个密钥和一个具备视觉能力的模型；换其他兼容端点时才需要设 `baseUrl`。模型必须是多模态的，纯文本模型会失败或产生幻觉。
+`baseUrl` 必填，用官方 OpenAI 也要写（`https://api.openai.com/v1`）：这条路线服务任意兼容端点，替用户猜一个，就等于把本该发给别家的密钥连同图片一起送到用户从没指定过的地方。模型必须是多模态的，纯文本模型会失败或产生幻觉。
 
 这条路线默认在服务端不做任何约束，能力弱一些的模型可能只答出契约的一半，运行就会以明确报错失败。真遇到就让网关自己强制执行：
 

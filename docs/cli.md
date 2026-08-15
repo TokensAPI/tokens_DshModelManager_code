@@ -48,7 +48,7 @@ Output is a fixed JSON shape:
 }
 ```
 
-`meta` records how the result was produced: when (`generatedAt`), which `model`, the provider's `conversationId` when it has one, wall-clock `durationSeconds`, and the raw `usage` the provider reported (shape varies by provider, `null` when none). `attempts` lists every provider the failover chain tried, in order, with failure reasons; `warnings` carries routing notices (failovers, ignored extraBody, whose quota an auto-mode read spent).
+`meta` records how the result was produced: when (`generatedAt`), which `model` (`null` when the provider ran one it never named, as `kimi-cli` does with kimi's own default), the provider's `conversationId` when it has one, wall-clock `durationSeconds`, and the raw `usage` the provider reported (shape varies by provider, `null` when none). `attempts` lists every provider the failover chain tried, in order, with failure reasons; `warnings` carries routing notices (failovers, ignored extraBody, whose quota an auto-mode read spent).
 
 ## Flags
 

@@ -73,16 +73,6 @@ function atTerminal(keys: string): {
 }
 
 describe.skipIf(!runnable)('the hidden prompt on a real terminal', () => {
-    beforeAll(() => {
-        // Deliberately not building here. main.test.ts builds the same bundle,
-        // and two suites running `pnpm build` in parallel means one of them
-        // launches the CLI during the moment vite has emptied dist/, which
-        // fails as a missing module and reads like an unrelated bug.
-        if (!fs.existsSync(cli)) {
-            execFileSync('pnpm', ['build'], { cwd: root, stdio: 'ignore', shell: true });
-        }
-    }, 180_000);
-
     it('saves what was typed without ever echoing it', () => {
         const { out, config } = atTerminal('sk-typed-secret\r');
         expect(config?.providers?.['gemini-api']?.apiKey).toBe('sk-typed-secret');

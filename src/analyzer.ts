@@ -46,7 +46,8 @@ export interface AnalyzeResult {
     result: unknown;
     meta: {
         generatedAt: string;
-        model: string;
+        /** null when the provider ran a model it never named (kimi-cli). */
+        model: string | null;
         conversationId: string | null;
         durationSeconds: number | null;
         usage: unknown | null;
@@ -151,7 +152,10 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
                 result: parsed.result,
                 meta: {
                     generatedAt: new Date().toISOString(),
-                    model,
+                    // Empty means the provider ran whatever it was already
+                    // configured with and never told us which (kimi-cli), so
+                    // the field says unknown rather than naming nothing.
+                    model: model === '' ? null : model,
                     conversationId: parsed.meta.conversationId,
                     durationSeconds: parsed.meta.durationSeconds,
                     usage: parsed.meta.usage,

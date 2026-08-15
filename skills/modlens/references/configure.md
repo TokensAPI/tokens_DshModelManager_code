@@ -111,7 +111,7 @@ modlens config set openai.apiKey <sk-key>
 modlens config set openai.model qwen3.6-27b
 ```
 
-`baseUrl` defaults to `https://api.openai.com/v1`, so official OpenAI needs only a key and a vision-capable model; set `baseUrl` for any other compatible endpoint. The model must be multimodal; text-only models will fail or hallucinate.
+`baseUrl` is required, official OpenAI included (`https://api.openai.com/v1`): this route serves any compatible endpoint, and guessing one would send a key meant for another vendor, and the image beside it, somewhere the user never named. The model must be multimodal; text-only models will fail or hallucinate.
 
 This route enforces nothing server-side by default, so a weaker model can answer with half the contract and the run fails with an explicit error. If that happens, ask the gateway to enforce it:
 
