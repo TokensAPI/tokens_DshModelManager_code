@@ -235,7 +235,7 @@ config
 config
     .command('set <key> [value]')
     .description(
-        'Set a value. Omit the value for an apiKey to enter it at a hidden prompt, keeping it out of argv and shell history',
+        'Set a value. Omit the value for an apiKey to enter it at a hidden prompt (out of argv and shell history), or to read one piped line (out of argv; the command feeding the pipe is yours to keep out of history)',
     )
     .action(async (key: string, value: string | undefined) => {
         try {

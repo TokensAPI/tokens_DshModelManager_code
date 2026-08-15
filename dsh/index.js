@@ -1003,7 +1003,14 @@ function applyEngineSettings(patch) {
     config.providers = { ...config.providers }
     // Write where this engine's settings already live, so a key saved under
     // an alias is updated rather than shadowed by a second copy.
-    const target = settingsKeysFor(engine).find((key) => config.providers[key] !== undefined) ?? engine
+    // Write where the read takes effect. settingsKeysFor merges aliases
+    // first and the canonical key last, so the canonical value wins; picking
+    // the first existing key instead wrote a new value underneath an older
+    // canonical one, which saved successfully and changed nothing. Both CLI
+    // spellings existing at once is ordinary: `config set gemini.apiKey`
+    // then `config set gemini-api.apiKey` leaves exactly that.
+    const holders = settingsKeysFor(engine).filter((key) => config.providers[key] !== undefined)
+    const target = holders.length > 0 ? holders[holders.length - 1] : engine
     const settings = { ...config.providers[target] }
     for (const field of ['baseUrl', 'model']) {
       const value = typeof patch[field] === 'string' ? patch[field].trim() : ''

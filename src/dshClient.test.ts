@@ -339,7 +339,10 @@ describe('settings card (#39)', () => {
             | {
                   factory: (require: (id: string) => unknown) => {
                       apply: (ctx: unknown) => void;
-                      __card: { nextDraft: (s: unknown, p: string, r?: unknown) => unknown };
+                      __card: {
+                          nextDraft: (s: unknown, p: string, r?: unknown) => unknown;
+                          savePayload: (s: unknown, d: unknown) => Record<string, unknown>;
+                      };
                   };
               }
             | undefined;
@@ -407,6 +410,41 @@ describe('settings card (#39)', () => {
         const on = loadCard(200);
         await new Promise((resolve) => setTimeout(resolve, 10));
         expect(on.slotRegistrations).toEqual(['modlens']);
+    });
+
+    it('sends only what the save is about', async () => {
+        // A reuse-only save that carried the engine fields wrote the values
+        // the card loaded back over whatever the file holds now, and one that
+        // carried the provider pinned an engine nobody chose.
+        const { card } = loadCard(200);
+        const summary = {
+            provider: 'openai',
+            engines: { openai: { baseUrl: 'https://a', model: 'a', hasKey: true } },
+            reuse: { claude: true, codex: false, opencode: false, pi: false, grok: false },
+        };
+        const untouched = card.nextDraft(summary, 'openai') as Record<string, unknown> & {
+            reuse: Record<string, boolean>;
+        };
+
+        // Only a grant moved: no provider, no engine, no engine fields.
+        const grantOnly = card.savePayload(summary, {
+            ...untouched,
+            reuse: { ...untouched.reuse, pi: true },
+        });
+        expect(grantOnly).toEqual({ reuse: { pi: true } });
+
+        // An edited field brings the engine with it.
+        const edited = card.savePayload(summary, { ...untouched, model: 'b' });
+        expect(edited.engine).toBe('openai');
+        expect(edited.model).toBe('b');
+        expect(edited.provider).toBeUndefined();
+
+        // Moving the select sends the pin, and unpinning sends the empty.
+        const repinned = card.savePayload(summary, {
+            ...(card.nextDraft(summary, '') as Record<string, unknown>),
+        });
+        expect(repinned.provider).toBe('');
+        expect(repinned.engine).toBeUndefined();
     });
 
     it('keeps pending reuse grants when the engine changes', async () => {
