@@ -15,23 +15,21 @@ import type {
     VisionProvider,
 } from './index.ts';
 
-const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
-
 export async function executeOpenaiCompat(
     options: BuildProviderInvocationOptions,
 ): Promise<ProviderParsedOutput> {
     const apiKey = options.settings?.apiKey;
-    // Official OpenAI when nothing says otherwise. This route exists for any
-    // compatible endpoint and most users point it elsewhere, but a key with no
-    // endpoint used to be an error, and since the environment stopped
-    // supplying one (issue #42) the obvious default is the one whose wire
-    // format every other endpoint copies.
-    const baseUrl = (options.settings?.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
+    // No default on purpose. Defaulting to official OpenAI would take a key
+    // meant for another vendor, and the image beside it, and send both to
+    // OpenAI, which is the same fault issue #42 removed pointed the other way:
+    // a pairing the user never configured. Anyone whose endpoint used to come
+    // from OPENAI_BASE_URL gets an error naming the setting instead.
+    const baseUrl = options.settings?.baseUrl?.replace(/\/$/, '');
     const model = options.model || options.settings?.model;
 
-    if (!apiKey || !model) {
+    if (!apiKey || !baseUrl || !model) {
         throw new Error(
-            'openai provider needs an apiKey and a model. Run: modlens config set openai.apiKey (a hidden prompt) and modlens config set openai.model <name>. baseUrl defaults to https://api.openai.com/v1, so set it only for another compatible endpoint.',
+            'openai provider needs baseUrl, apiKey, and model, all from the config file: modlens config set openai.baseUrl <url>, modlens config set openai.apiKey (a hidden prompt), modlens config set openai.model <name>. If your endpoint used to come from OPENAI_BASE_URL, that binding is gone since 3.17.0 and the value belongs in the config file now (official OpenAI is https://api.openai.com/v1).',
         );
     }
 
