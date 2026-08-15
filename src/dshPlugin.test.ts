@@ -787,10 +787,11 @@ describe('dsh paste-to-path host route', () => {
         const plugin = (await import('../dsh/index.js')) as {
             apply: (ctx: unknown, config?: Record<string, unknown>) => void;
         };
-        const routes: Array<{ path: string; handler: RouteHandler }> = [];
+        const routes: Array<{ name: string; path: string; handler: RouteHandler }> = [];
         const scoped = {
             webServer: {
-                register: (route: { path: string; handler: RouteHandler }) => routes.push(route),
+                register: (route: { name: string; path: string; handler: RouteHandler }) =>
+                    routes.push(route),
             },
         };
         plugin.apply(
@@ -870,7 +871,13 @@ describe('dsh paste-to-path host route', () => {
             b.res as never,
         );
         expect(b.out.code).toBe(400);
-        expect(await routeOf({ pasteToPath: false })).toEqual([]);
+        // The two switches are separate: turning paste-to-path off says
+        // nothing about whether the engine can be configured, so the settings
+        // card's route stays and only this one goes.
+        const withoutPaste = await routeOf({ pasteToPath: false });
+        expect(withoutPaste.map((route) => route.name)).toEqual(['modlens-config']);
+        const withoutBoth = await routeOf({ pasteToPath: false, settingsCard: false });
+        expect(withoutBoth).toEqual([]);
     });
 
     it('sniffs to the CLI table: near-miss magic bytes are refused, real brands pass', async () => {
@@ -2037,6 +2044,131 @@ describe('settings card route (#39)', () => {
             });
             expect(status).toBe(403);
             expect(fs.readFileSync(file, 'utf-8')).toBe(before);
+        });
+    });
+
+    it('refuses a Host that is not loopback, which is what rebinding forges', async () => {
+        // Host is the header a rebound page cannot fake: it carries the
+        // attacker's domain while the socket reaches this server.
+        await withConfig({ provider: 'openai' }, async (handler) => {
+            const { status } = await call(handler, {
+                method: 'GET',
+                url: '/x',
+                headers: { host: 'evil.example' },
+            });
+            expect(status).toBe(403);
+        });
+    });
+
+    it('refuses a cross-site fetch even when the headers otherwise look local', async () => {
+        await withConfig({ provider: 'openai' }, async (handler) => {
+            const { status } = await call(handler, {
+                method: 'GET',
+                url: '/x',
+                headers: { host: '127.0.0.1:3080', 'sec-fetch-site': 'cross-site' },
+            });
+            expect(status).toBe(403);
+        });
+    });
+
+    it('reports a broken config instead of treating it as empty', async () => {
+        // Treating it as empty is how a save would quietly replace someone's
+        // whole configuration with four fields.
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
+        const file = path.join(home, '.modlens', 'config.json');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, '{ this is not json');
+        const realHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+        process.env.HOME = home;
+        process.env.USERPROFILE = home;
+        try {
+            const stage = house();
+            (await load()).apply(stage.ctx, {});
+            const handler = stage.routes['modlens-config'];
+            const read = await call(handler, { method: 'GET', url: '/x' });
+            expect(read.status).toBe(409);
+            expect(String(read.body.error)).toContain('not valid JSON');
+            const write = await call(handler, {
+                method: 'POST',
+                url: '/x',
+                [Symbol.asyncIterator]: async function* () {
+                    yield Buffer.from(JSON.stringify({ provider: 'openai', model: 'm' }));
+                },
+            });
+            expect(write.status).toBe(400);
+            expect(fs.readFileSync(file, 'utf-8')).toBe('{ this is not json');
+        } finally {
+            process.env.HOME = realHome.HOME;
+            process.env.USERPROFILE = realHome.USERPROFILE;
+            fs.rmSync(home, { recursive: true, force: true });
+        }
+    });
+
+    it('refuses to write through a symlinked config file', async () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
+        const real = path.join(home, 'real.json');
+        const file = path.join(home, '.modlens', 'config.json');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(real, JSON.stringify({ provider: 'openai' }));
+        fs.symlinkSync(real, file);
+        const realHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+        process.env.HOME = home;
+        process.env.USERPROFILE = home;
+        try {
+            const stage = house();
+            (await load()).apply(stage.ctx, {});
+            const { status, body } = await call(stage.routes['modlens-config'], {
+                method: 'POST',
+                url: '/x',
+                [Symbol.asyncIterator]: async function* () {
+                    yield Buffer.from(JSON.stringify({ provider: 'openai', model: 'm' }));
+                },
+            });
+            expect(status).toBe(400);
+            expect(String(body.error)).toContain('symlink');
+            expect(JSON.parse(fs.readFileSync(real, 'utf-8'))).toEqual({ provider: 'openai' });
+        } finally {
+            process.env.HOME = realHome.HOME;
+            process.env.USERPROFILE = realHome.USERPROFILE;
+            fs.rmSync(home, { recursive: true, force: true });
+        }
+    });
+
+    it('leaves unrelated config keys alone', async () => {
+        await withConfig(
+            {
+                provider: 'openai',
+                proxy: 'http://127.0.0.1:7890',
+                guards: { denyModels: 'gemini-3*' },
+                providers: { openai: { apiKey: 'sk-a' } },
+            },
+            async (handler, file) => {
+                await call(handler, {
+                    method: 'POST',
+                    url: '/x',
+                    [Symbol.asyncIterator]: async function* () {
+                        yield Buffer.from(JSON.stringify({ provider: 'openai', model: 'm' }));
+                    },
+                });
+                const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+                expect(saved.proxy).toBe('http://127.0.0.1:7890');
+                expect(saved.guards).toEqual({ denyModels: 'gemini-3*' });
+            },
+        );
+    });
+
+    it('writes with the same 0600 mode the CLI uses', async () => {
+        await withConfig({ provider: 'openai' }, async (handler, file) => {
+            await call(handler, {
+                method: 'POST',
+                url: '/x',
+                [Symbol.asyncIterator]: async function* () {
+                    yield Buffer.from(JSON.stringify({ provider: 'openai', model: 'm' }));
+                },
+            });
+            if (process.platform !== 'win32') {
+                expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+            }
         });
     });
 
