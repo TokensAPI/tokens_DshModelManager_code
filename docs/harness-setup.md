@@ -60,6 +60,21 @@ npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@3.16.6
 
 This registers a `modlens_read_image` tool whose schema reaches the model on every request (no trigger heuristics), runs the modlens CLI shipped inside the same package, and returns the structured evidence as the tool's canonical JSON output. Engines, reuse grants, and guard rules stay in `~/.modlens/config.json`, shared with every other harness. dsh is in developer preview and its plugin surface may change; the plugin keeps its touch small (raw tool registration, the llm adapter surface for the vision variants, the attachment reader, and one agent pre-step hook) and degrades loudly if any of them moves.
 
+### Configuring the engine from the web UI
+
+dsh web users have no terminal in front of them, so the engine settings have a
+card in **Settings → Plugins → Plugin configuration**: which engine reads
+images, its key, endpoint and model, and which local sign-ins a read may
+borrow. Expanding it probes this machine and lists the harnesses it actually
+found, so the grants are a choice between real options rather than five names.
+
+The values live where they always did, in `~/.modlens/config.json`, shared
+with every other harness: the card reads and writes that file through a
+loopback route, so an edit here is the same edit `modlens config set` makes.
+The card never receives a stored key, only whether one is set, and leaving the
+key field empty keeps the stored one. `settingsCard: false` in the plugin row
+removes it, route included.
+
 ### Keeping it up to date
 
 modlens ships often, and both install shapes freeze at whatever version they
