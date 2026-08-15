@@ -186,7 +186,8 @@ window.__ModuleLoader__.load({
     var TEXT = {
       en: {
         title: 'Vision engine (ModLens)',
-        subtitle: 'Open config file',
+        subtitle: 'Vision engine provider configuration.',
+        openConfig: 'Open config file',
         engine: 'Engine',
         apiKey: 'API key',
         baseUrl: 'Base URL',
@@ -208,7 +209,8 @@ window.__ModuleLoader__.load({
       },
       zh: {
         title: '视觉引擎（ModLens）',
-        subtitle: '打开配置文件',
+        subtitle: '视觉引擎提供商配置。',
+        openConfig: '打开配置文件',
         engine: '引擎',
         apiKey: 'API 密钥',
         baseUrl: '接口地址',
@@ -235,6 +237,21 @@ window.__ModuleLoader__.load({
       return lang.indexOf('zh') === 0 ? TEXT.zh : TEXT.en
     }
 
+    // The next draft when the engine changes or a summary arrives. The three
+    // engine fields belong to the newly selected engine; the reuse grants are
+    // the user's pending answers and survive an engine switch, since granting
+    // codex has nothing to do with which engine reads the images.
+    function nextDraft(summary, provider, keepReuse) {
+      var engine = summary.engines[provider] || { baseUrl: '', model: '' }
+      return {
+        provider: provider,
+        apiKey: '',
+        baseUrl: engine.baseUrl,
+        model: engine.model,
+        reuse: Object.assign({}, keepReuse || summary.reuse),
+      }
+    }
+
     function ConfigCard(react, ui) {
       var h = react.createElement
       var Input = ui.Input
@@ -251,7 +268,7 @@ window.__ModuleLoader__.load({
             height: 16,
             viewBox: '0 0 16 16',
             style: {
-              color: 'var(--dsw-alias-label-tertiary)',
+              color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))',
               flex: 'none',
               transition: 'transform .16s',
               transform: open ? 'rotate(180deg)' : 'none',
@@ -278,16 +295,7 @@ window.__ModuleLoader__.load({
         var draft = draftState[0]
         var note = noteState[0]
 
-        var seed = (next, provider) => {
-          var engine = next.engines[provider] || { baseUrl: '', model: '' }
-          return {
-            provider: provider,
-            apiKey: '',
-            baseUrl: engine.baseUrl,
-            model: engine.model,
-            reuse: Object.assign({}, next.reuse),
-          }
-        }
+        var seed = (next, provider, keepReuse) => nextDraft(next, provider, keepReuse)
 
         var load = react.useCallback(() => {
           // discover: the self-check probing which local harnesses exist to
@@ -313,20 +321,26 @@ window.__ModuleLoader__.load({
           if (open && summary === null) load()
         }, [open, summary, load])
 
-        var fieldRow = (label, control, key) =>
+        // A row wrapping ONE control is a label, which names that control. A
+        // row wrapping a set of them must not be: the label becomes the first
+        // checkbox's accessible name and swallows the whole section's prose.
+        // Those rows are a named group instead.
+        var fieldRow = (label, control, key, groupName) =>
           h(
-            'div',
+            groupName ? 'div' : 'label',
             {
               key: key,
+              role: groupName ? 'group' : undefined,
+              'aria-label': groupName || undefined,
               style: {
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '6px',
                 padding: '12px 0',
-                borderTop: '1px solid var(--dsw-alias-border-l2)',
+                borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
               },
             },
-            h('div', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-secondary)' } }, label),
+            h('div', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-secondary, inherit)' } }, label),
             control,
           )
 
@@ -335,7 +349,13 @@ window.__ModuleLoader__.load({
           if (summary === null || draft === null) {
             body = h(
               'div',
-              { style: { padding: '12px 0', color: 'var(--dsw-alias-label-tertiary)', fontSize: '13px' } },
+              {
+                style: {
+                  padding: '12px 0',
+                  color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))',
+                  fontSize: '13px',
+                },
+              },
               note || t.loading,
             )
           } else {
@@ -374,10 +394,14 @@ window.__ModuleLoader__.load({
             // machine. Found ones get a checkbox with their status; missing
             // ones are named as absent so the list explains itself.
             var probes = Array.isArray(summary.discovery) ? summary.discovery : null
-            var autoRows = REUSE.map((name) => {
+            // Being listed means being found: an absent harness is simply
+            // not shown, and only "not signed in" earns a note.
+            var autoRows = REUSE.filter((name) => {
+              if (!probes) return true
+              var probe = probes.find((candidate) => candidate.harness === name)
+              return probe ? probe.cliFound : false
+            }).map((name) => {
               var probe = probes && probes.find((candidate) => candidate.harness === name)
-              var found = probe ? probe.cliFound : true
-              var status = !probes ? '' : !found ? t.notFound : probe.loggedIn === false ? t.notLoggedIn : t.found
               return h(
                 'label',
                 {
@@ -387,13 +411,11 @@ window.__ModuleLoader__.load({
                     alignItems: 'center',
                     gap: '8px',
                     fontSize: '13px',
-                    opacity: found ? 1 : 0.45,
                   },
                 },
                 h('input', {
                   type: 'checkbox',
-                  disabled: !found,
-                  checked: found && Boolean(draft.reuse[name]),
+                  checked: Boolean(draft.reuse[name]),
                   onChange: (event) => {
                     var next = Object.assign({}, draft.reuse)
                     next[name] = event.target.checked
@@ -401,8 +423,17 @@ window.__ModuleLoader__.load({
                   },
                 }),
                 h('span', null, name),
-                status
-                  ? h('span', { style: { color: 'var(--dsw-alias-label-tertiary)', fontSize: '12px' } }, status)
+                probe && probe.loggedIn === false
+                  ? h(
+                      'span',
+                      {
+                        style: {
+                          color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))',
+                          fontSize: '12px',
+                        },
+                      },
+                      t.notLoggedIn,
+                    )
                   : null,
               )
             })
@@ -417,7 +448,7 @@ window.__ModuleLoader__.load({
                   {
                     value: draft.provider,
                     onChange: (event) => {
-                      draftState[1](seed(summary, event.target.value))
+                      draftState[1](seed(summary, event.target.value, draft.reuse))
                       noteState[1]('')
                     },
                     style: {
@@ -425,7 +456,7 @@ window.__ModuleLoader__.load({
                       width: '100%',
                       padding: '8px 12px',
                       borderRadius: '8px',
-                      border: '1px solid var(--dsw-alias-border-l2)',
+                      border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
                       background: 'transparent',
                       color: 'inherit',
                       font: 'inherit',
@@ -439,7 +470,11 @@ window.__ModuleLoader__.load({
               keyless
                 ? fieldRow(
                     t.apiKey,
-                    h('div', { style: { fontSize: '13px', color: 'var(--dsw-alias-label-tertiary)' } }, t.cliNote),
+                    h(
+                      'div',
+                      { style: { fontSize: '13px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))' } },
+                      t.cliNote,
+                    ),
                     'clinote',
                   )
                 : textField(t.apiKey, 'apiKey', 'password', current.hasKey ? t.stored : t.unset),
@@ -454,7 +489,7 @@ window.__ModuleLoader__.load({
                     'span',
                     {
                       style: {
-                        color: 'var(--dsw-alias-label-tertiary)',
+                        color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))',
                         fontWeight: 400,
                         marginLeft: '8px',
                       },
@@ -468,13 +503,14 @@ window.__ModuleLoader__.load({
                   autoRows,
                 ),
                 'auto',
+                t.autoTitle,
               ),
               h(
                 'div',
                 {
                   key: 'footer',
                   style: {
-                    borderTop: '1px solid var(--dsw-alias-border-l2)',
+                    borderTop: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
                     display: 'flex',
                     justifyContent: 'flex-end',
                     alignItems: 'center',
@@ -483,12 +519,35 @@ window.__ModuleLoader__.load({
                   },
                 },
                 h(
+                  'a',
+                  {
+                    href: '#',
+                    onClick: (event) => {
+                      event.preventDefault()
+                      fetch('/modlens/config', {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({ open: true }),
+                      }).catch(() => {})
+                    },
+                    style: {
+                      fontSize: '12px',
+                      color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))',
+                      textDecoration: 'underline',
+                      textUnderlineOffset: '2px',
+                    },
+                  },
+                  t.openConfig,
+                ),
+                h(
                   'span',
                   {
+                    role: 'status',
                     style: {
                       marginRight: 'auto',
+                      marginLeft: '10px',
                       fontSize: '12px',
-                      color: 'var(--dsw-alias-label-tertiary)',
+                      color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))',
                     },
                   },
                   note,
@@ -497,7 +556,7 @@ window.__ModuleLoader__.load({
                   'button',
                   {
                     type: 'button',
-                    disabled: !dirty,
+                    disabled: !dirty || note === t.saving,
                     onClick: () => {
                       draftState[1](seed(summary, summary.provider))
                       noteState[1]('')
@@ -508,11 +567,11 @@ window.__ModuleLoader__.load({
                       fontSize: '13px',
                       lineHeight: 1.5,
                       cursor: dirty ? 'pointer' : 'default',
-                      border: '1px solid var(--dsw-alias-border-l2)',
+                      border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
                       borderRadius: '8px',
                       padding: '5px 14px',
                       background: 'none',
-                      color: 'var(--dsw-alias-label-secondary)',
+                      color: 'var(--dsw-alias-label-secondary, inherit)',
                       opacity: dirty ? 1 : 0.4,
                     },
                   },
@@ -522,7 +581,7 @@ window.__ModuleLoader__.load({
                   'button',
                   {
                     type: 'button',
-                    disabled: !dirty,
+                    disabled: !dirty || note === t.saving,
                     onClick: () => {
                       noteState[1](t.saving)
                       // Only the grants the user actually touched: writing
@@ -572,8 +631,8 @@ window.__ModuleLoader__.load({
                       border: '1px solid transparent',
                       borderRadius: '8px',
                       padding: '5px 14px',
-                      background: 'var(--dsw-alias-label-primary)',
-                      color: 'var(--dsw-alias-bg-layer-3)',
+                      background: 'var(--dsw-alias-label-primary, currentColor)',
+                      color: 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.05))',
                       opacity: dirty ? 1 : 0.4,
                     },
                   },
@@ -588,8 +647,10 @@ window.__ModuleLoader__.load({
           'div',
           {
             style: {
-              border: '1px solid var(--dsw-alias-border-l2)',
-              background: open ? 'var(--dsw-alias-bg-layer-2)' : 'var(--dsw-alias-bg-layer-3)',
+              border: '1px solid var(--dsw-alias-border-l2, rgba(127,127,127,0.35))',
+              background: open
+                ? 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.10))'
+                : 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.05))',
               borderRadius: '12px',
               transition: 'border-color .16s, background .16s',
             },
@@ -598,6 +659,7 @@ window.__ModuleLoader__.load({
             'button',
             {
               type: 'button',
+              'aria-expanded': open,
               onClick: () => {
                 openState[1](!open)
               },
@@ -622,27 +684,12 @@ window.__ModuleLoader__.load({
               { style: { flex: 1, minWidth: 0 } },
               h('div', { style: { fontSize: '14px', fontWeight: 600 } }, t.title),
               h(
-                'span',
+                'div',
                 {
-                  role: 'link',
-                  tabIndex: 0,
-                  onClick: (event) => {
-                    // A link inside the header button: opening the file must
-                    // not also toggle the card.
-                    event.stopPropagation()
-                    fetch('/modlens/config', {
-                      method: 'POST',
-                      headers: { 'content-type': 'application/json' },
-                      body: JSON.stringify({ open: true }),
-                    }).catch(() => {})
-                  },
                   style: {
-                    color: 'var(--dsw-alias-label-tertiary)',
+                    color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))',
                     fontSize: '13px',
                     lineHeight: 1.5,
-                    textDecoration: 'underline',
-                    textUnderlineOffset: '2px',
-                    cursor: 'pointer',
                   },
                 },
                 t.subtitle,
@@ -662,11 +709,21 @@ window.__ModuleLoader__.load({
       // takes webServer.
       if (typeof ctx.inject !== 'function') return
       ctx.inject(['slots'], (scope) => {
-        try {
-          mountCard(scope)
-        } catch (error) {
-          console.error('[modlens] settings card skipped: ' + error)
-        }
+        // The card and its route live and die together: with the host route
+        // off (settingsCard: false, or no web profile) a card would only
+        // render an error, which is not what turning a feature off means.
+        // Any response at all proves the route exists; only a 404 or a
+        // network failure reads as absent.
+        fetch('/modlens/config')
+          .then((response) => {
+            if (response.status === 404) return
+            try {
+              mountCard(scope)
+            } catch (error) {
+              console.error('[modlens] settings card skipped: ' + error)
+            }
+          })
+          .catch(() => {})
       })
     }
 
@@ -702,6 +759,8 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply
+    // Exposed for the repo's tests only; not part of the plugin contract.
+    exports.__card = { nextDraft: nextDraft }
     // `slots` is optional, so it is not required here: registerCard checks.
     exports.inject = []
     return module.exports
