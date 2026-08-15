@@ -235,7 +235,7 @@ config
 config
     .command('set <key> [value]')
     .description(
-        'Set a value. Omit the value for an apiKey to enter it without it touching shell history',
+        'Set a value. Omit the value for an apiKey to enter it at a hidden prompt, keeping it out of argv and shell history',
     )
     .action(async (key: string, value: string | undefined) => {
         try {

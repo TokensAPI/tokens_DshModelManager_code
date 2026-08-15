@@ -188,6 +188,8 @@ window.__ModuleLoader__.load({
         title: 'Vision engine (ModLens)',
         subtitle: 'Vision engine provider configuration.',
         openConfig: 'Open config file',
+        automatic: 'Automatic (failover chain decides)',
+        pickToConfigure: 'Pick an engine above to configure its key and endpoint.',
         engine: 'Engine',
         apiKey: 'API key',
         baseUrl: 'Base URL',
@@ -211,6 +213,8 @@ window.__ModuleLoader__.load({
         title: '视觉引擎（ModLens）',
         subtitle: '视觉引擎提供商配置。',
         openConfig: '打开配置文件',
+        automatic: '自动（不固定，由故障转移链决定）',
+        pickToConfigure: '在上面选一个引擎，才能配置它的密钥和地址。',
         engine: '引擎',
         apiKey: 'API 密钥',
         baseUrl: '接口地址',
@@ -242,6 +246,9 @@ window.__ModuleLoader__.load({
     // the user's pending answers and survive an engine switch, since granting
     // codex has nothing to do with which engine reads the images.
     function nextDraft(summary, provider, keepReuse) {
+      // provider '' is its own answer: not pinned, the failover chain
+      // decides. There is then no single engine whose key belongs in these
+      // fields, so they stay empty and the card says how to get them back.
       var engine = summary.engines[provider] || { baseUrl: '', model: '' }
       return {
         provider: provider,
@@ -463,23 +470,42 @@ window.__ModuleLoader__.load({
                       fontSize: '13px',
                     },
                   },
-                  ENGINES.map((name) => h('option', { key: name, value: name }, name)),
+                  [h('option', { key: '', value: '' }, t.automatic)].concat(
+                    ENGINES.map((name) => h('option', { key: name, value: name }, name)),
+                  ),
                 ),
                 'engine',
               ),
-              keyless
+              draft.provider === ''
                 ? fieldRow(
                     t.apiKey,
                     h(
                       'div',
-                      { style: { fontSize: '13px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))' } },
-                      t.cliNote,
+                      {
+                        style: {
+                          fontSize: '13px',
+                          color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))',
+                        },
+                      },
+                      t.pickToConfigure,
                     ),
-                    'clinote',
+                    'unpinned',
                   )
-                : textField(t.apiKey, 'apiKey', 'password', current.hasKey ? t.stored : t.unset),
-              keyless ? null : textField(t.baseUrl, 'baseUrl', 'text', t.fallback),
-              textField(t.model, 'model', 'text', t.fallback),
+                : keyless
+                  ? fieldRow(
+                      t.apiKey,
+                      h(
+                        'div',
+                        {
+                          style: { fontSize: '13px', color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))' },
+                        },
+                        t.cliNote,
+                      ),
+                      'clinote',
+                    )
+                  : textField(t.apiKey, 'apiKey', 'password', current.hasKey ? t.stored : t.unset),
+              draft.provider === '' || keyless ? null : textField(t.baseUrl, 'baseUrl', 'text', t.fallback),
+              draft.provider === '' ? null : textField(t.model, 'model', 'text', t.fallback),
               fieldRow(
                 h(
                   'span',
@@ -593,16 +619,25 @@ window.__ModuleLoader__.load({
                           reuseChanges[name] = draft.reuse[name]
                         }
                       })
+                      // Only what this save is actually about. The pin
+                      // travels only when the select moved, and the engine
+                      // fields only when an engine is selected: a save that
+                      // always carried both pinned an engine nobody chose and
+                      // rewrote settings nobody edited.
+                      var payload = { reuse: reuseChanges }
+                      if (draft.provider !== summary.provider) {
+                        payload.provider = draft.provider
+                      }
+                      if (draft.provider !== '') {
+                        payload.engine = draft.provider
+                        payload.apiKey = draft.apiKey
+                        payload.baseUrl = draft.baseUrl
+                        payload.model = draft.model
+                      }
                       fetch('/modlens/config', {
                         method: 'POST',
                         headers: { 'content-type': 'application/json' },
-                        body: JSON.stringify({
-                          provider: draft.provider,
-                          apiKey: draft.apiKey,
-                          baseUrl: draft.baseUrl,
-                          model: draft.model,
-                          reuse: reuseChanges,
-                        }),
+                        body: JSON.stringify(payload),
                       })
                         .then((r) =>
                           r.json().then((payload) => {

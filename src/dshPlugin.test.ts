@@ -1989,7 +1989,7 @@ describe('settings card route (#39)', () => {
                     url: '/x',
                     [Symbol.asyncIterator]: async function* () {
                         yield Buffer.from(
-                            JSON.stringify({ provider: 'openai', apiKey: '', model: 'new' }),
+                            JSON.stringify({ engine: 'openai', apiKey: '', model: 'new' }),
                         );
                     },
                 });
@@ -2018,7 +2018,11 @@ describe('settings card route (#39)', () => {
                     url: '/x',
                     [Symbol.asyncIterator]: async function* () {
                         yield Buffer.from(
-                            JSON.stringify({ provider: 'anthropic', model: 'claude' }),
+                            JSON.stringify({
+                                provider: 'anthropic',
+                                engine: 'anthropic',
+                                model: 'claude',
+                            }),
                         );
                     },
                 });
@@ -2169,6 +2173,85 @@ describe('settings card route (#39)', () => {
             if (process.platform !== 'win32') {
                 expect(fs.statSync(file).mode & 0o777).toBe(0o600);
             }
+        });
+    });
+
+    it('leaves an unpinned provider unpinned when only a grant changed', async () => {
+        // Empty means the failover chain decides. A save that carried the
+        // displayed engine anyway pinned one nobody chose, changing which
+        // engine reads every later image.
+        await withConfig(
+            { provider: '', providers: { 'gemini-api': { apiKey: 'sk-a' } } },
+            async (handler, file) => {
+                const { status } = await call(handler, {
+                    method: 'POST',
+                    url: '/x',
+                    [Symbol.asyncIterator]: async function* () {
+                        yield Buffer.from(JSON.stringify({ reuse: { codex: true } }));
+                    },
+                });
+                expect(status).toBe(200);
+                const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+                expect(saved.provider).toBe('');
+                expect(saved.reuse).toEqual({ codex: true });
+                expect(saved.providers['gemini-api']).toEqual({ apiKey: 'sk-a' });
+            },
+        );
+    });
+
+    it('reports an alias as its engine, settings included, and does not move them', async () => {
+        // A key stored under `gemini` is gemini-api's key, and a provider
+        // pinned as `gemini` is pinned to gemini-api. Reporting either as
+        // something else put the card at odds with what actually runs.
+        await withConfig(
+            { provider: 'gemini', providers: { gemini: { apiKey: 'sk-a', model: 'g' } } },
+            async (handler, file) => {
+                const read = await call(handler, { method: 'GET', url: '/x' });
+                expect(read.body.provider).toBe('gemini-api');
+                const engines = read.body.engines as Record<
+                    string,
+                    { hasKey: boolean; model: string }
+                >;
+                expect(engines['gemini-api'].hasKey).toBe(true);
+                expect(engines['gemini-api'].model).toBe('g');
+
+                await call(handler, {
+                    method: 'POST',
+                    url: '/x',
+                    [Symbol.asyncIterator]: async function* () {
+                        yield Buffer.from(
+                            JSON.stringify({ engine: 'gemini-api', model: 'g2', baseUrl: '' }),
+                        );
+                    },
+                });
+                const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+                // Updated where it already lived, not shadowed by a second copy.
+                expect(saved.providers.gemini).toEqual({ apiKey: 'sk-a', model: 'g2' });
+                expect(saved.providers['gemini-api']).toBeUndefined();
+                expect(saved.provider).toBe('gemini');
+            },
+        );
+    });
+
+    it('pins only when the card says the pin moved', async () => {
+        await withConfig({ provider: 'openai' }, async (handler, file) => {
+            await call(handler, {
+                method: 'POST',
+                url: '/x',
+                [Symbol.asyncIterator]: async function* () {
+                    yield Buffer.from(JSON.stringify({ provider: 'anthropic' }));
+                },
+            });
+            expect(JSON.parse(fs.readFileSync(file, 'utf-8')).provider).toBe('anthropic');
+            // And an explicit empty unpins.
+            await call(handler, {
+                method: 'POST',
+                url: '/x',
+                [Symbol.asyncIterator]: async function* () {
+                    yield Buffer.from(JSON.stringify({ provider: '' }));
+                },
+            });
+            expect(JSON.parse(fs.readFileSync(file, 'utf-8')).provider).toBeUndefined();
         });
     });
 

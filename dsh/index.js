@@ -875,6 +875,32 @@ const ENGINES = ['antigravity-cli', 'gemini-api', 'openai', 'anthropic', 'claude
 // The two CLI engines sign in through their own tool, so a key or an endpoint
 // would be a field with nothing behind it. Both still take a model.
 const KEYLESS_ENGINES = ['antigravity-cli', 'claude-cli']
+// Every accepted spelling, mirroring src/providers/index.ts. Settings saved
+// under an alias are the same engine's settings, and a provider pinned by an
+// alias is pinned to that engine: showing either as something else would put
+// the card at odds with what actually reads the images.
+const ENGINE_ALIASES = {
+  antigravity: 'antigravity-cli',
+  agy: 'antigravity-cli',
+  gemini: 'gemini-api',
+  'openai-compat': 'openai',
+  claude: 'anthropic',
+  'claude-code': 'claude-cli',
+}
+
+/** The canonical engine a stored name means, or '' when it names none. */
+function canonicalEngine(name) {
+  if (typeof name !== 'string') return ''
+  const trimmed = name.trim().toLowerCase()
+  if (ENGINES.includes(trimmed)) return trimmed
+  return ENGINE_ALIASES[trimmed] ?? ''
+}
+
+/** The config keys holding one engine's settings: its own, plus its aliases. */
+function settingsKeysFor(engine) {
+  const aliases = Object.keys(ENGINE_ALIASES).filter((alias) => ENGINE_ALIASES[alias] === engine)
+  return [...aliases, engine]
+}
 // Auto mode: the local harnesses whose logins a read may borrow. `claude`
 // absent counts as granted, since claude-cli predates the grant model.
 const REUSE_HARNESSES = ['claude', 'codex', 'opencode', 'pi', 'grok']
@@ -918,7 +944,9 @@ function readModlensConfig() {
 function engineSummary(config = readModlensConfig()) {
   const engines = {}
   for (const name of ENGINES) {
-    const settings = config.providers?.[name] ?? {}
+    // Alias first, canonical last: the canonical key wins on conflict, the
+    // same order resolveProviderSettings uses.
+    const settings = Object.assign({}, ...settingsKeysFor(name).map((key) => config.providers?.[key] ?? {}))
     engines[name] = {
       baseUrl: typeof settings.baseUrl === 'string' ? settings.baseUrl : '',
       model: typeof settings.model === 'string' ? settings.model : '',
@@ -930,9 +958,12 @@ function engineSummary(config = readModlensConfig()) {
     const granted = config.reuse?.[harness]
     reuse[harness] = typeof granted === 'boolean' ? granted : harness === 'claude'
   }
-  const provider = typeof config.provider === 'string' ? config.provider : ''
+  // Three states, kept apart: pinned to an engine, pinned by one of its
+  // aliases (reported canonically), or not pinned at all, which is its own
+  // answer and means the failover chain decides. Collapsing the third into
+  // the first pins an engine the user never chose.
   return {
-    provider: ENGINES.includes(provider) ? provider : ENGINES[0],
+    provider: canonicalEngine(config.provider),
     engines,
     keyless: KEYLESS_ENGINES,
     reuse,
@@ -947,29 +978,50 @@ function engineSummary(config = readModlensConfig()) {
  * to clear one by submitting the blank field it was shown.
  */
 function applyEngineSettings(patch) {
-  if (!ENGINES.includes(patch?.provider)) {
-    throw new Error(`unknown engine: ${patch?.provider}`)
-  }
   const config = readModlensConfig()
-  config.provider = patch.provider
-  config.providers = { ...config.providers }
-  const settings = { ...config.providers[patch.provider] }
-  for (const field of ['baseUrl', 'model']) {
-    const value = typeof patch[field] === 'string' ? patch[field].trim() : ''
-    if (value === '') {
-      delete settings[field]
+  // The pin moves only when the card says it moved. A save that carried the
+  // currently displayed engine regardless turned "not pinned" into a pin on
+  // whatever happened to be shown, changing which engine reads every later
+  // image without the user asking for it.
+  if (patch?.provider !== undefined) {
+    if (patch.provider === '') {
+      delete config.provider
+    } else if (ENGINES.includes(patch.provider)) {
+      config.provider = patch.provider
     } else {
-      settings[field] = value
+      throw new Error(`unknown engine: ${patch.provider}`)
     }
   }
-  const apiKey = typeof patch.apiKey === 'string' ? patch.apiKey.trim() : ''
-  if (apiKey !== '') {
-    settings.apiKey = apiKey
+  // Engine fields are edited one engine at a time, named by `engine`. Absent
+  // means this save touched no engine settings, which is what a reuse-only
+  // save looks like.
+  const engine = patch?.engine
+  if (engine !== undefined) {
+    if (!ENGINES.includes(engine)) {
+      throw new Error(`unknown engine: ${engine}`)
+    }
+    config.providers = { ...config.providers }
+    // Write where this engine's settings already live, so a key saved under
+    // an alias is updated rather than shadowed by a second copy.
+    const target = settingsKeysFor(engine).find((key) => config.providers[key] !== undefined) ?? engine
+    const settings = { ...config.providers[target] }
+    for (const field of ['baseUrl', 'model']) {
+      const value = typeof patch[field] === 'string' ? patch[field].trim() : ''
+      if (value === '') {
+        delete settings[field]
+      } else {
+        settings[field] = value
+      }
+    }
+    const apiKey = typeof patch.apiKey === 'string' ? patch.apiKey.trim() : ''
+    if (apiKey !== '') {
+      settings.apiKey = apiKey
+    }
+    config.providers[target] = settings
   }
-  config.providers[patch.provider] = settings
   // Auto mode, when the card sent it: only the harnesses this build knows,
   // only booleans, so an unexpected key cannot land in the shared file.
-  if (patch.reuse !== null && typeof patch.reuse === 'object') {
+  if (patch?.reuse !== null && typeof patch?.reuse === 'object') {
     config.reuse = { ...config.reuse }
     for (const harness of REUSE_HARNESSES) {
       const granted = patch.reuse[harness]
