@@ -79,10 +79,14 @@ function loadClient(options: {
         },
     };
 
-    let loaded: { factory: () => { apply: (ctx: unknown) => void } } | undefined;
+    let loaded:
+        | { factory: (require: (id: string) => unknown) => { apply: (ctx: unknown) => void } }
+        | undefined;
     const windowStub = {
         __ModuleLoader__: {
-            load: (definition: { factory: () => { apply: (ctx: unknown) => void } }) => {
+            load: (definition: {
+                factory: (require: (id: string) => unknown) => { apply: (ctx: unknown) => void };
+            }) => {
                 loaded = definition;
             },
         },
@@ -116,7 +120,7 @@ function loadClient(options: {
     const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
     run(windowStub, documentStub, fetchStub, class {});
     if (!loaded) throw new Error('client.js never called __ModuleLoader__.load');
-    loaded.factory().apply(ctx);
+    loaded.factory(() => ({})).apply(ctx);
 
     return {
         dispatchPaste: (files) => {
@@ -318,5 +322,122 @@ describe('dsh paste-to-path browser half', () => {
         harness.dispose();
         expect(harness.listeners().paste).toBe(0);
         expect(harness.listeners().focusin).toBe(0);
+    });
+});
+
+describe('settings card (#39)', () => {
+    // The card half, loaded the same way the paste half is: the script with
+    // browser globals handed in. What matters here is that it never mounts
+    // where its route is off, and that pending grants survive an engine
+    // switch, both found by review rather than by the browser.
+    const SOURCE_TEXT = fs.readFileSync(path.join(__dirname, '..', 'dsh', 'client.js'), 'utf-8');
+
+    function loadCard(configStatus: number) {
+        const slotRegistrations: string[] = [];
+        const injected: string[][] = [];
+        let loaded:
+            | {
+                  factory: (require: (id: string) => unknown) => {
+                      apply: (ctx: unknown) => void;
+                      __card: { nextDraft: (s: unknown, p: string, r?: unknown) => unknown };
+                  };
+              }
+            | undefined;
+        const windowStub = {
+            __ModuleLoader__: {
+                load: (definition: typeof loaded) => {
+                    loaded = definition;
+                },
+            },
+        };
+        const documentStub = {
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            querySelectorAll: () => [],
+            documentElement: { lang: 'en' },
+        };
+        const fetchStub = (url: string) =>
+            Promise.resolve({
+                ok: configStatus >= 200 && configStatus < 300,
+                status: url.startsWith('/modlens/config') ? configStatus : 200,
+                json: () => Promise.resolve({}),
+            });
+        const run = new Function('window', 'document', 'fetch', 'Event', 'navigator', SOURCE_TEXT);
+        run(windowStub, documentStub, fetchStub, class {}, { language: 'en' });
+        if (!loaded) throw new Error('client.js never called __ModuleLoader__.load');
+        const exports = loaded.factory(() => ({
+            createElement: () => null,
+            useState: (initial: unknown) => [initial, () => {}],
+            useEffect: () => {},
+            useCallback: (fn: unknown) => fn,
+        }));
+        exports.apply({
+            effect: () => {},
+            inject: (deps: string[], fn: (scope: unknown) => void) => {
+                injected.push(deps);
+                if (deps.includes('slots')) {
+                    fn({
+                        slots: {
+                            inject: (_name: string, gen: () => Generator) => {
+                                for (const _entry of gen()) {
+                                    // consuming the generator performs the registration
+                                }
+                            },
+                            register: (spec: { id: string }) => {
+                                slotRegistrations.push(spec.id);
+                                return spec;
+                            },
+                        },
+                    });
+                }
+            },
+        });
+        return { slotRegistrations, injected, card: exports.__card };
+    }
+
+    it('does not mount where its route is off, instead of rendering an error', async () => {
+        // settingsCard: false removes the host route. A card that mounted
+        // anyway would show a failure where the user asked for nothing.
+        const off = loadCard(404);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(off.slotRegistrations).toEqual([]);
+    });
+
+    it('mounts when the route answers', async () => {
+        const on = loadCard(200);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(on.slotRegistrations).toEqual(['modlens']);
+    });
+
+    it('keeps pending reuse grants when the engine changes', async () => {
+        // The grants answer "may a read borrow this harness", which has
+        // nothing to do with which engine reads the image; dropping them on
+        // an engine switch silently discarded the user's answers.
+        const { card } = loadCard(200);
+        const summary = {
+            provider: 'openai',
+            engines: {
+                openai: { baseUrl: 'https://a', model: 'a', hasKey: true },
+                'gemini-api': { baseUrl: '', model: 'g', hasKey: false },
+            },
+            reuse: { claude: true, codex: false },
+        };
+        const pending = { claude: true, codex: true };
+        const next = card.nextDraft(summary, 'gemini-api', pending) as {
+            provider: string;
+            model: string;
+            baseUrl: string;
+            apiKey: string;
+            reuse: Record<string, boolean>;
+        };
+        expect(next.provider).toBe('gemini-api');
+        expect(next.model).toBe('g');
+        expect(next.baseUrl).toBe('');
+        expect(next.apiKey).toBe('');
+        expect(next.reuse).toEqual(pending);
+        // Without a pending set it falls back to what is stored.
+        expect(
+            (card.nextDraft(summary, 'openai') as { reuse: Record<string, boolean> }).reuse,
+        ).toEqual(summary.reuse);
     });
 });

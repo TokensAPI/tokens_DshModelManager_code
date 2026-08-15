@@ -93,7 +93,7 @@ Any free Google account works; no Google AI Pro needed. Sign-in cannot be automa
 
 ```bash
 modlens config set gemini-api.apiKey <key>
-# value omitted: a hidden prompt, so the key skips shell history and this chat
+# value omitted: a hidden prompt, so the key skips argv, shell history, and this chat
 modlens config set gemini-api.apiKey
 # or environment: export GEMINI_API_KEY=<key>
 ```

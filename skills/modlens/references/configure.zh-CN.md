@@ -93,7 +93,7 @@ agy    # 用户需自己在浏览器完成登录，然后退出
 
 ```bash
 modlens config set gemini-api.apiKey <key>
-# 省略值：进入隐藏输入，密钥不进 shell 历史也不进这段对话
+# 省略值：进入隐藏输入，密钥不进 argv、不进 shell 历史，也不进这段对话
 modlens config set gemini-api.apiKey
 # 或走环境变量：export GEMINI_API_KEY=<key>
 ```

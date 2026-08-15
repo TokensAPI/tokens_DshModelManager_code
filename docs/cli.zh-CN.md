@@ -94,5 +94,5 @@ modlens recover-paste                           # pull a pasted image into a fil
 其他子命令：
 
 - `modlens guard [--model <id>]`：判断当前激活的模型到底该不该运行引擎。退出码 0 表示放行，1 表示拒绝，判定结果以 JSON 输出。
-- `modlens config <init|set|show>`：`set` 在 `apiKey` 字段上省略值会进入不回显的输入提示（或从管道读一行），密钥不进 argv 也不进 shell 历史。可用的键有 `provider`、`proxy`（API provider 的 HTTP/HTTPS 代理，也认 `HTTPS_PROXY`/`HTTP_PROXY`）、`reuse.<claude|codex|opencode|pi|grok>`、`guards.<denyModels|allowModels|denyWhenUnknown>`，以及 `<provider>.<apiKey|baseUrl|model|proxy|extraBody>`，另有 `openai.structuredOutput`（仅这条路线用得上）。
+- `modlens config <init|set|show>`：`set` 在 `apiKey` 字段上省略值会进入不回显的输入提示，密钥不进 argv、不进 shell 历史，也不进你与终端里那个 agent 的对话。它也接受从管道读一行（`pbpaste | modlens config set openai.apiKey`），这样密钥不进 argv，但产生这条管道的命令本身是否留在历史里，由你自己决定。可用的键有 `provider`、`proxy`（API provider 的 HTTP/HTTPS 代理，也认 `HTTPS_PROXY`/`HTTP_PROXY`）、`reuse.<claude|codex|opencode|pi|grok>`、`guards.<denyModels|allowModels|denyWhenUnknown>`，以及 `<provider>.<apiKey|baseUrl|model|proxy|extraBody>`，另有 `openai.structuredOutput`（仅这条路线用得上）。
 - `modlens doctor`：报告 Node 与 node:sqlite、各 provider 的就绪状态、本机的故障转移链、检测到的 harness、guard 规则和一次现场判定，以及 Reuse 一节里按 harness 的授权决定与发现的视觉能力。不花任何额度，`--json` 输出机器可读报告。
