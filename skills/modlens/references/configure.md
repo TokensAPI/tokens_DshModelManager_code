@@ -131,6 +131,28 @@ Default model is Claude Haiku (`claude-haiku-4-5-20251001`). Schema is enforced 
 
 **The `ANTHROPIC_BASE_URL` trap is gone.** modlens used to bind that variable to `anthropic.baseUrl`, so a shell that routed Claude Code through a text-only gateway silently sent vision requests there too. Credentials come from the config file now, so a variable set for another tool cannot reach this route. Set `anthropic.baseUrl` in the file when you do want a different endpoint.
 
+### kimi-cli (Kimi Code login, no key)
+
+Rides an existing `kimi` sign-in, so it spends the user's Kimi Code subscription
+rather than a key. Install from https://moonshotai.github.io/kimi-code/, run
+`kimi` once and `/login`, then:
+
+```bash
+modlens config set provider kimi-cli
+modlens config set kimi-cli.model <alias>   # optional; kimi's own default otherwise
+```
+
+The model alias is kimi's, in `<provider>/<model>` form as `kimi provider list`
+shows it, and it has to accept image input. This route enforces no schema (the
+CLI has no `--json-schema`), so the contract travels as a filled-in JSON
+template and a weaker model can answer with half of it; `-p gemini-api` is the
+fallback when that happens.
+
+One implementation note worth knowing if you debug it: modlens runs `kimi` with
+skill discovery pointed at an empty directory. Otherwise kimi can find the
+modlens skill in the shared skill directories and read the image by calling
+modlens, which is modlens calling itself.
+
 ### claude-cli (Claude Code login, no key)
 
 Rides an existing `claude` sign-in, so it costs the user's Claude subscription quota, not a separate API bill. Requires Claude Code installed and logged in (`claude --version` to check). Runs with `--allowedTools Read` only. Local image files only; for remote URLs use gemini-api instead. Default model alias `haiku`.

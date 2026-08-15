@@ -1,0 +1,131 @@
+// Kimi Code CLI provider: rides an existing `kimi` login, no API key.
+//
+// Everything here follows the CLI as observed on 0.36.1, which differs from
+// the Claude one in three ways that shape this file:
+//
+// - No `--json-schema`, so nothing enforces the contract server-side and the
+//   prompt carries the filled-in JSON template instead, parsed leniently.
+// - No `--allowedTools`, so the agent's own tools cannot be narrowed. What
+//   matters is narrower anyway: skill discovery reaches the shared skill
+//   directories, so kimi can find the modlens skill and read the image BY
+//   CALLING MODLENS, which is this provider recursing into itself. Observed
+//   directly on 0.36.1. Whether it takes that route is the model's choice, so
+//   it happens sometimes, which is worse to diagnose than always.
+//   `--skills-dir` pointed at an empty directory replaces discovery, and kimi
+//   then feeds the image to its own model.
+// - `--auto` is refused alongside `--prompt` ("Cannot combine --prompt with
+//   --auto"), so it is not passed.
+//
+// Output is NDJSON under `--output-format stream-json`: a version line, then
+// assistant and tool lines, then a resume hint. The plain `text` format
+// prefixes the answer with a bullet and mixes reasoning into stderr, which is
+// why it is not used.
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { buildVisionPrompt, JSON_TEMPLATE_INSTRUCTION } from '../prompt.ts';
+import { extractJson, truncate } from '../util/json.ts';
+import type {
+    BuildProviderInvocationOptions,
+    ProviderInvocation,
+    ProviderParsedOutput,
+    VisionProvider,
+} from './index.ts';
+
+/**
+ * An empty directory standing in for skill discovery. Created once per run and
+ * left in the temp dir: it holds nothing, and creating it is what keeps kimi
+ * from loading the modlens skill and calling modlens back.
+ */
+function emptySkillsDir(): string {
+    const dir = path.join(os.tmpdir(), 'modlens-kimi-no-skills');
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+
+export function buildKimiCliInvocation(
+    options: BuildProviderInvocationOptions,
+): ProviderInvocation {
+    if (options.imageKind === 'remote') {
+        throw new Error(
+            'kimi-cli provider reads local files only. Download the image first, or use -p gemini-api for remote URLs.',
+        );
+    }
+
+    const prompt = `${buildVisionPrompt({
+        imageSource: options.imageSource,
+        imageKind: 'local',
+        extraPrompt: options.extraPrompt,
+    })}
+
+${JSON_TEMPLATE_INSTRUCTION}`;
+
+    const model = options.model || options.settings?.model;
+    const args = [
+        '-p',
+        prompt,
+        '--output-format',
+        'stream-json',
+        // Not a preference: without it kimi may load the modlens skill and
+        // read the image by running modlens, which is this process calling
+        // itself. Observed, and intermittent, which is the bad kind.
+        '--skills-dir',
+        emptySkillsDir(),
+        ...(model ? ['-m', model] : []),
+    ];
+
+    return {
+        command: options.providerBin || 'kimi',
+        args,
+        cwd: path.resolve(options.workdir || path.dirname(options.imageSource)),
+    };
+}
+
+export function parseKimiCliOutput(stdout: string): ProviderParsedOutput {
+    // Last assistant line wins: the run emits an empty one before each tool
+    // call, and the answer is whatever it said last.
+    let answer: string | null = null;
+    for (const line of stdout.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed === '') continue;
+        let entry: { role?: string; content?: unknown };
+        try {
+            entry = JSON.parse(trimmed) as typeof entry;
+        } catch {
+            // The CLI prints its version banner and other stray text on some
+            // paths; a line that is not JSON is not an answer.
+            continue;
+        }
+        if (entry.role === 'assistant' && typeof entry.content === 'string' && entry.content) {
+            answer = entry.content;
+        }
+    }
+
+    if (answer === null) {
+        throw new Error(
+            `Kimi CLI produced no answer. Check that it is signed in (run \`kimi\` and /login) and that its model accepts image input. Got: ${truncate(stdout)}`,
+        );
+    }
+
+    const result = extractJson(answer);
+    if (result === null) {
+        throw new Error(`Kimi CLI returned non-JSON output: ${truncate(answer)}`);
+    }
+
+    return { result, meta: { conversationId: null, durationSeconds: null, usage: null } };
+}
+
+// Whatever the install made default: unlike the Claude CLI there is no
+// obvious cheap tier to pin, and kimi refuses to run without a default_model
+// of its own, so an unset model means "use the one the user chose".
+export const KIMI_CLI_DEFAULT_MODEL = '';
+
+export const kimiCliProvider: VisionProvider = {
+    name: 'kimi-cli',
+    defaultModel: KIMI_CLI_DEFAULT_MODEL,
+    buildInvocation: buildKimiCliInvocation,
+    parseOutput: parseKimiCliOutput,
+    // Same reason claude-cli isolates: the agent runs with a real toolset, so
+    // it gets a throwaway directory holding only the image.
+    isolateWorkdir: true,
+};

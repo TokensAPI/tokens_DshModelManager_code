@@ -64,6 +64,12 @@ export const PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
         bin: 'claude',
         install: 'install the Claude Code CLI, then run `claude` once to sign in',
     },
+    {
+        name: 'kimi-cli',
+        kind: 'subprocess',
+        bin: 'kimi',
+        install: 'https://moonshotai.github.io/kimi-code/ (then run `kimi` and /login)',
+    },
 ];
 
 export function findOnPath(bin: string, env: NodeJS.ProcessEnv): string | null {
