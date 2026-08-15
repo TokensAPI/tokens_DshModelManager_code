@@ -93,8 +93,12 @@ agy    # 用户需自己在浏览器完成登录，然后退出
 
 ```bash
 modlens config set gemini-api.apiKey <key>
+# 省略值：进入隐藏输入，密钥不进 shell 历史也不进这段对话
+modlens config set gemini-api.apiKey
 # 或走环境变量：export GEMINI_API_KEY=<key>
 ```
+
+用户就在自己终端前时，先给隐藏输入这条。大多数人图方便还是会把 key 直接贴进对话，那也没问题：照收照存。隐藏输入是留给在乎的人的。
 
 默认模型 `gemini-3.6-flash` 在免费档就有视觉能力（约每分钟 10-15 次请求，每天 1500 次）。免费档的数据可能被 Google 用于改进产品，用户要处理敏感图片时请提醒这一点。
 

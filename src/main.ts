@@ -18,6 +18,7 @@ import { runGuard } from './guard/index.ts';
 import { listProviders } from './providers/index.ts';
 import { recoverPastedImages } from './recoverPaste/index.ts';
 import { parseExtraBody } from './util/extraBody.ts';
+import { readSecret } from './util/secretInput.ts';
 
 const program = new Command();
 
@@ -232,11 +233,22 @@ config
     });
 
 config
-    .command('set <key> <value>')
-    .description('Set a value, e.g. modlens config set gemini-api.apiKey <key>')
-    .action((key: string, value: string) => {
+    .command('set <key> [value]')
+    .description(
+        'Set a value. Omit the value for an apiKey to enter it without it touching shell history',
+    )
+    .action(async (key: string, value: string | undefined) => {
         try {
-            setConfigValue(key, value);
+            let resolved = value;
+            if (resolved === undefined) {
+                // Only a secret earns the prompt: for anything else an
+                // omitted value is a mistake, not a request for privacy.
+                if (!key.endsWith('.apiKey')) {
+                    throw new Error(`${key} needs a value: modlens config set ${key} <value>`);
+                }
+                resolved = await readSecret(`${key} (input hidden): `);
+            }
+            setConfigValue(key, resolved);
             process.stdout.write(`Saved ${key} to ${CONFIG_PATH}\n`);
         } catch (error) {
             process.stderr.write(

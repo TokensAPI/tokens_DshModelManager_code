@@ -402,3 +402,57 @@ describe.skipIf(process.platform === 'win32')(
         });
     },
 );
+
+describe('config set without a value (secret entry)', () => {
+    // The chat path cannot be blocked, only not led to: most users will paste
+    // a key wherever is convenient. This is the clean path for the ones who
+    // care, so the key stays out of argv, shell history, and the transcript.
+    function runPiped(args: string[], input: string, home: string) {
+        const res = spawnSync(process.execPath, [cli, ...args], {
+            encoding: 'utf-8',
+            input,
+            env: baseEnv({ HOME: home, USERPROFILE: home }),
+        });
+        return { code: res.status, stdout: res.stdout, stderr: res.stderr };
+    }
+
+    it('reads an apiKey from piped stdin when the value is omitted', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-secret-'));
+        const out = runPiped(['config', 'set', 'gemini-api.apiKey'], 'sk-piped-secret\n', home);
+        expect(out.stderr).toBe('');
+        expect(out.code).toBe(0);
+        const saved = JSON.parse(
+            fs.readFileSync(path.join(home, '.modlens', 'config.json'), 'utf-8'),
+        );
+        expect(saved.providers['gemini-api'].apiKey).toBe('sk-piped-secret');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('takes only the first line, so a trailing newline or paste artifact is not part of the key', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-secret-'));
+        const out = runPiped(['config', 'set', 'openai.apiKey'], '  sk-x  \nleftover\n', home);
+        expect(out.code).toBe(0);
+        const saved = JSON.parse(
+            fs.readFileSync(path.join(home, '.modlens', 'config.json'), 'utf-8'),
+        );
+        expect(saved.providers.openai.apiKey).toBe('sk-x');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('refuses an empty stdin rather than storing an empty key', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-secret-'));
+        const out = runPiped(['config', 'set', 'gemini-api.apiKey'], '', home);
+        expect(out.code).toBe(1);
+        expect(out.stderr).toContain('no key');
+        expect(fs.existsSync(path.join(home, '.modlens', 'config.json'))).toBe(false);
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it('still requires a value for a field that is not a secret', () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-secret-'));
+        const out = runPiped(['config', 'set', 'gemini-api.model'], 'whatever\n', home);
+        expect(out.code).toBe(1);
+        expect(out.stderr).toContain('needs a value');
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+});
