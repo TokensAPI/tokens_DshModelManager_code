@@ -16,7 +16,6 @@ import { resolveProvider, type VisionProvider } from './index.ts';
 
 export interface RequiredSetting {
     field: ProviderStringField;
-    env?: string;
 }
 
 export interface ProviderDescriptor {
@@ -43,24 +42,21 @@ export const PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
     {
         name: 'gemini-api',
         kind: 'api',
-        required: [{ field: 'apiKey', env: 'GEMINI_API_KEY' }],
-        fix: 'modlens config set gemini-api.apiKey <key>   # free key: https://aistudio.google.com',
+        required: [{ field: 'apiKey' }],
+        fix: 'modlens config set gemini-api.apiKey   # hidden prompt; free key: https://aistudio.google.com',
     },
     {
         name: 'openai',
         kind: 'api',
-        required: [
-            { field: 'baseUrl', env: 'OPENAI_BASE_URL' },
-            { field: 'apiKey', env: 'OPENAI_API_KEY' },
-            { field: 'model' },
-        ],
-        fix: 'modlens config set openai.baseUrl <url> / openai.apiKey <key> / openai.model <name>',
+        // baseUrl has a built-in default now, so it is no longer required.
+        required: [{ field: 'apiKey' }, { field: 'model' }],
+        fix: 'modlens config set openai.apiKey (hidden prompt) / openai.model <name>; baseUrl only for a non-OpenAI endpoint',
     },
     {
         name: 'anthropic',
         kind: 'api',
-        required: [{ field: 'apiKey', env: 'ANTHROPIC_API_KEY' }],
-        fix: 'modlens config set anthropic.apiKey <key>',
+        required: [{ field: 'apiKey' }],
+        fix: 'modlens config set anthropic.apiKey   # hidden prompt',
     },
     {
         name: 'claude-cli',

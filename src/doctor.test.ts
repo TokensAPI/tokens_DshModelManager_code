@@ -73,16 +73,22 @@ describe('buildDoctorReport: provider readiness', () => {
         }
     });
 
-    it('reads an API key from env, overriding the config file, and tags the source', () => {
-        const config = { providers: { 'gemini-api': { apiKey: 'from-file-key' } } };
-        const report = buildDoctorReport({
-            config,
+    it('reports the file as the source, and an ambient key as no key at all (#42)', () => {
+        const configured = buildDoctorReport({
+            config: { providers: { 'gemini-api': { apiKey: 'from-file-key' } } },
             env: { GEMINI_API_KEY: 'from-env-key' },
         });
-        const gemini = providerNamed(report, 'gemini-api');
+        const gemini = providerNamed(configured, 'gemini-api');
         expect(gemini.ready).toBe(true);
-        expect(gemini.status).toBe('ready');
-        expect(gemini.settings?.[0]).toMatchObject({ field: 'apiKey', source: 'env' });
+        expect(gemini.settings?.[0]).toMatchObject({ field: 'apiKey', source: 'file' });
+
+        // Nothing in the file: the ambient variable does not make it ready,
+        // which is the point of the change, and doctor says what is missing.
+        const ambientOnly = buildDoctorReport({
+            config: {},
+            env: { GEMINI_API_KEY: 'from-env-key' },
+        });
+        expect(providerNamed(ambientOnly, 'gemini-api').ready).toBe(false);
     });
 
     it('tags a config-file-only key as file and flags a missing one', () => {

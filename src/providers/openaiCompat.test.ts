@@ -29,7 +29,9 @@ afterEach(() => {
 const settings = { apiKey: 'sk-x', baseUrl: 'https://gw.example.com/v1', model: 'qwen3.6-27b' };
 
 describe('executeOpenaiCompat', () => {
-    it('demands baseUrl, apiKey, and model up front', async () => {
+    it('demands an apiKey and a model, but defaults the endpoint', async () => {
+        // baseUrl stopped being required when the environment stopped
+        // supplying one (issue #42): official OpenAI is the default.
         await expect(
             executeOpenaiCompat({
                 imageSource: tmpImage,
@@ -37,7 +39,23 @@ describe('executeOpenaiCompat', () => {
                 timeoutMs: 5000,
                 settings: { apiKey: 'k' },
             }),
-        ).rejects.toThrow('baseUrl, apiKey, and model');
+        ).rejects.toThrow(/needs an apiKey and a model/);
+
+        const calls: Array<{ url: string }> = [];
+        vi.stubGlobal('fetch', async (url: string) => {
+            calls.push({ url });
+            return new Response(
+                JSON.stringify({ choices: [{ message: { content: JSON.stringify(structured) } }] }),
+                { status: 200 },
+            );
+        });
+        await executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings: { apiKey: 'k', model: 'gpt-x' },
+        });
+        expect(calls[0].url).toBe('https://api.openai.com/v1/chat/completions');
     });
 
     it('sends a template-instance prompt, not a raw json schema', async () => {

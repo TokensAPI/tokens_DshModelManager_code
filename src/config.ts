@@ -63,11 +63,16 @@ export interface ModlensConfig {
 export const CONFIG_DIR = path.join(os.homedir(), '.modlens');
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
-const ENV_BINDINGS: Record<string, Partial<Record<ProviderStringField, string>>> = {
-    'gemini-api': { apiKey: 'GEMINI_API_KEY' },
-    openai: { apiKey: 'OPENAI_API_KEY', baseUrl: 'OPENAI_BASE_URL' },
-    anthropic: { apiKey: 'ANTHROPIC_API_KEY', baseUrl: 'ANTHROPIC_BASE_URL' },
-};
+// Provider credentials used to be readable from GEMINI_API_KEY, OPENAI_API_KEY,
+// OPENAI_BASE_URL, ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL, and they are not
+// any more (issue #42). A baseUrl and an apiKey are one credential: taking one
+// from the file and the other from the environment built a pairing that
+// existed in neither, and ambient OPENAI_* variables are set for other tools
+// often enough that an explicitly configured engine would answer 401 with
+// nothing in the error naming where the key came from. The config file is the
+// only source now. modlens's own switches (MODLENS_MODEL, MODLENS_HARNESS)
+// and the proxy conventions (HTTPS_PROXY and friends) are unaffected: neither
+// is a credential, and neither can be split from a matching half.
 
 export function loadConfigFile(configPath = CONFIG_PATH): ModlensConfig {
     let raw: string;
@@ -116,20 +121,10 @@ export function resolveProviderSettings(
         ...Object.assign({}, ...aliasNames.map((alias) => config.providers?.[alias] ?? {})),
         ...(config.providers?.[providerName] ?? {}),
     };
-    const bindings = ENV_BINDINGS[providerName] ?? {};
-
     const settings: ProviderSettings = { ...fromFile };
     // The top-level proxy is the default; a provider-level one overrides it.
     if (!settings.proxy && config.proxy?.trim()) {
         settings.proxy = config.proxy.trim();
-    }
-    for (const [field, envName] of Object.entries(bindings) as Array<
-        [ProviderStringField, string]
-    >) {
-        const value = env[envName]?.trim();
-        if (value) {
-            settings[field] = value;
-        }
     }
     return settings;
 }
@@ -301,30 +296,22 @@ export function initConfigFile(configPath = CONFIG_PATH, force = false): void {
  * Render the effective config: the file merged with environment variables, with
  * API keys masked and every value tagged with where it came from (file or env).
  *
- * Reading only the file misled anyone who set a key through GEMINI_API_KEY (or
- * the other bound vars): the value modlens actually uses never showed up.
+ * The file is the whole story now: credentials no longer come from the
+ * environment (issue #42), so what this prints is what runs.
  */
 export function renderEffectiveConfig(
     config: ModlensConfig,
     env: NodeJS.ProcessEnv = process.env,
 ): string {
     const providerNames = new Set<string>(Object.keys(config.providers ?? {}));
-    for (const [providerName, bindings] of Object.entries(ENV_BINDINGS)) {
-        if (Object.values(bindings).some((envName) => env[envName]?.trim())) {
-            providerNames.add(providerName);
-        }
-    }
 
     const providers: Record<string, Record<string, string>> = {};
     for (const name of [...providerNames].sort()) {
         const fileSettings = config.providers?.[name] ?? {};
-        const bindings = ENV_BINDINGS[name] ?? {};
         const fields: Record<string, string> = {};
         for (const field of STRING_FIELDS) {
-            const envName = bindings[field];
-            const envValue = envName ? env[envName]?.trim() : undefined;
-            const value = envValue ?? fileSettings[field];
-            const source = envValue ? 'env' : fileSettings[field] !== undefined ? 'file' : null;
+            const value = fileSettings[field];
+            const source = value !== undefined ? 'file' : null;
             if (value !== undefined && source) {
                 // config show exists to be pasted into issues: keys are
                 // masked, and a proxy URL's userinfo is a credential too.

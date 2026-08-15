@@ -183,10 +183,10 @@ function inspectProvider(
 
     const settings = resolveProviderSettings(descriptor.name, config, env);
     const statuses: DoctorSettingStatus[] = (descriptor.required ?? []).map((req) => {
-        const envValue = req.env ? env[req.env]?.trim() : undefined;
+        // The config file is the only source of a credential now (issue #42),
+        // so there is nothing left to disambiguate: a value is there or not.
         const value = settings[req.field]?.trim();
-        const source: SettingSource = envValue ? 'env' : value ? 'file' : 'missing';
-        return { field: req.field, present: Boolean(value), source, env: req.env };
+        return { field: req.field, present: Boolean(value), source: value ? 'file' : 'missing' };
     });
     const missing = statuses.filter((s) => !s.present).map((s) => s.field);
     const ready = missing.length === 0;

@@ -268,7 +268,7 @@ describe('config show', () => {
         fs.rmSync(home, { recursive: true, force: true });
     });
 
-    it('merges a bound env var into the effective config, masked and tagged', () => {
+    it('shows nothing for an ambient credential variable (#42)', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
         const { code, stdout } = run(['config', 'show'], {
             HOME: home,
@@ -277,10 +277,10 @@ describe('config show', () => {
         });
         expect(code).toBe(0);
         const parsed = JSON.parse(stdout) as {
-            providers: Record<string, Record<string, string>>;
+            providers?: Record<string, Record<string, string>>;
         };
-        expect(parsed.providers['gemini-api'].apiKey).toMatch(/\(env\)$/);
-        expect(parsed.providers['gemini-api'].apiKey).not.toContain('SecretFromEnv');
+        expect(parsed.providers?.['gemini-api']).toBeUndefined();
+        expect(stdout).not.toContain('SecretFromEnv');
         fs.rmSync(home, { recursive: true, force: true });
     });
 });
