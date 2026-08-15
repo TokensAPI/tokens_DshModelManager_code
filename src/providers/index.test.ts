@@ -24,6 +24,7 @@ describe('resolveProvider', () => {
             'openai',
             'anthropic',
             'claude-cli',
+            'kimi-cli',
         ]);
     });
 });
