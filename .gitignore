@@ -48,3 +48,6 @@ docs/marketing/
 docs/marketing2/
 # local AI review transcripts
 .verify.txt
+
+# Browser-verification scratch (screenshots, snapshots, console logs)
+.playwright-cli/

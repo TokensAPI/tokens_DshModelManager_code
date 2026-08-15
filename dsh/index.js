@@ -11,7 +11,9 @@
 // package.json `dsh.bundle` manifest). Providers, reuse grants, and guard
 // rules keep living in ~/.modlens/config.json, shared with every harness.
 import { spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const CLI_PATH = fileURLToPath(new URL('../dist/main.js', import.meta.url))
@@ -65,6 +67,11 @@ export function apply(ctx, config = {}) {
         // scope carries webServer; the plugin's own ctx carries llm for the
         // takeover verdicts.
         registerPasteRoute(scope, ctx, ownProviders)
+        // Same web server, same loopback: the engine config gets a route so
+        // the browser half can offer a settings card (issue #39). dsh's own
+        // settings surface renders a hardcoded set of cards and does not
+        // enumerate namespaces, so registering one would show nothing.
+        registerConfigRoute(scope)
       } catch (error) {
         console.error(`[modlens] paste-to-path route skipped: ${error}`)
       }
@@ -849,4 +856,142 @@ function renderEvidence(value) {
     lines.push('', `Uncertain: ${uncertainty.join('; ')}`)
   }
   return lines.join('\n')
+}
+
+// The engines a user can pick in the settings card, in the order the docs
+// introduce them. Kept to the names modlens itself uses so the card and
+// `modlens doctor` say the same words.
+const ENGINES = ['antigravity-cli', 'gemini-api', 'openai', 'anthropic', 'claude-cli']
+
+/** ~/.modlens/config.json, the one file every harness shares. */
+function modlensConfigPath() {
+  return join(homedir(), '.modlens', 'config.json')
+}
+
+function readModlensConfig() {
+  try {
+    const parsed = JSON.parse(readFileSync(modlensConfigPath(), 'utf8'))
+    return parsed !== null && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    // A missing file is the normal state, and an unreadable or invalid one is
+    // not something a settings card should repair by overwriting it.
+    return {}
+  }
+}
+
+/**
+ * What the card is allowed to know. Every engine's endpoint and model, plus
+ * whether a key is stored, and never the key itself: a browser that cannot
+ * read a secret cannot leak one, and cannot write it back either.
+ */
+function engineSummary(config = readModlensConfig()) {
+  const engines = {}
+  for (const name of ENGINES) {
+    const settings = config.providers?.[name] ?? {}
+    engines[name] = {
+      baseUrl: typeof settings.baseUrl === 'string' ? settings.baseUrl : '',
+      model: typeof settings.model === 'string' ? settings.model : '',
+      hasKey: typeof settings.apiKey === 'string' && settings.apiKey !== '',
+    }
+  }
+  const provider = typeof config.provider === 'string' ? config.provider : ''
+  return { provider: ENGINES.includes(provider) ? provider : ENGINES[0], engines }
+}
+
+/**
+ * Apply one card submission to the shared file. Only the named engine's own
+ * three fields are touched, so switching engines in the card cannot copy one
+ * engine's endpoint onto another. An absent or empty `apiKey` leaves the
+ * stored one alone: the card never receives a key, so it must never be able
+ * to clear one by submitting the blank field it was shown.
+ */
+function applyEngineSettings(patch) {
+  if (!ENGINES.includes(patch?.provider)) {
+    throw new Error(`unknown engine: ${patch?.provider}`)
+  }
+  const config = readModlensConfig()
+  config.provider = patch.provider
+  config.providers = { ...config.providers }
+  const settings = { ...config.providers[patch.provider] }
+  for (const field of ['baseUrl', 'model']) {
+    const value = typeof patch[field] === 'string' ? patch[field].trim() : ''
+    if (value === '') {
+      delete settings[field]
+    } else {
+      settings[field] = value
+    }
+  }
+  const apiKey = typeof patch.apiKey === 'string' ? patch.apiKey.trim() : ''
+  if (apiKey !== '') {
+    settings.apiKey = apiKey
+  }
+  config.providers[patch.provider] = settings
+  const file = modlensConfigPath()
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 })
+  try {
+    chmodSync(file, 0o600)
+  } catch {
+    // Windows has no POSIX bits; the mode on the write above is all there is.
+  }
+}
+
+/**
+ * GET /modlens/config: the engine summary above. POST: one submission.
+ *
+ * The dsh web server listens on loopback, but a page in the same browser can
+ * still reach it, so a write requires a same-origin request: a cross-site POST
+ * could otherwise repoint someone's engine at an endpoint of its choosing.
+ * A read is refused the same way for symmetry, though it carries no secret.
+ */
+function registerConfigRoute(ctx) {
+  const sameOrigin = (req) => {
+    const origin = req.headers?.origin
+    if (origin === undefined) return true // same-origin fetches may omit it
+    try {
+      return new URL(origin).host === req.headers?.host
+    } catch {
+      return false
+    }
+  }
+  ctx.webServer.register({
+    name: 'modlens-config',
+    kind: 'exact',
+    path: '/modlens/config',
+    handler: async (req, res) => {
+      const send = (status, body) => {
+        res.writeHead(status, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(body))
+      }
+      if (!sameOrigin(req)) {
+        send(403, { error: 'cross-origin request refused' })
+        return
+      }
+      if (req.method === 'GET') {
+        send(200, engineSummary())
+        return
+      }
+      if (req.method !== 'POST') {
+        res.writeHead(405).end()
+        return
+      }
+      try {
+        const chunks = []
+        let total = 0
+        for await (const chunk of req) {
+          total += chunk.length
+          if (total > 64 * 1024) {
+            send(413, { error: 'config payload too large' })
+            req.destroy()
+            return
+          }
+          chunks.push(chunk)
+        }
+        applyEngineSettings(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        send(200, engineSummary())
+      } catch (error) {
+        send(400, { error: String(error?.message ?? error) })
+      }
+    },
+  })
 }

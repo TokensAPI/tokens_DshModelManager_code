@@ -15,7 +15,7 @@
 // host half.
 window.__ModuleLoader__.load({
   id: '@liustack/modlens',
-  factory: () => {
+  factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
 
@@ -172,7 +172,248 @@ window.__ModuleLoader__.load({
         })
     }
 
+    // The settings card (issue #39). dsh renders a fixed set of plugin cards
+    // and does not enumerate settings namespaces, so a card is contributed
+    // through the `settings.plugin.item` slot rather than by declaring a
+    // schema. It reads and writes the host route above, which owns
+    // ~/.modlens/config.json: the browser never sees an API key, and never
+    // sends a blank one back over a stored key.
+    var ENGINES = ['antigravity-cli', 'gemini-api', 'openai', 'anthropic', 'claude-cli']
+
+    // Two short label sets rather than a locale bundle: the card has a dozen
+    // strings, and a bundle would be more machinery than the thing it labels.
+    var TEXT = {
+      en: {
+        title: 'modlens vision engine',
+        subtitle: 'Shared with every harness through ~/.modlens/config.json.',
+        engine: 'Engine',
+        apiKey: 'API key',
+        baseUrl: 'Base URL',
+        model: 'Model',
+        stored: 'stored, leave empty to keep it',
+        unset: 'not set',
+        fallback: 'provider default',
+        save: 'Save',
+        saving: 'saving...',
+        saved: 'saved',
+        loading: 'loading...',
+      },
+      zh: {
+        title: 'modlens 视觉引擎',
+        subtitle: '通过 ~/.modlens/config.json 与所有 harness 共享。',
+        engine: '引擎',
+        apiKey: 'API 密钥',
+        baseUrl: '接口地址',
+        model: '模型',
+        stored: '已保存，留空即不改动',
+        unset: '未设置',
+        fallback: '使用该引擎默认值',
+        save: '保存',
+        saving: '保存中…',
+        saved: '已保存',
+        loading: '加载中…',
+      },
+    }
+
+    function labels() {
+      var lang = (document.documentElement.lang || navigator.language || 'en').toLowerCase()
+      return lang.indexOf('zh') === 0 ? TEXT.zh : TEXT.en
+    }
+
+    function ConfigCard(react) {
+      var h = react.createElement
+      return function ModlensCard() {
+        var t = labels()
+        var state = react.useState(null)
+        var summary = state[0]
+        var setSummary = state[1]
+        var draftState = react.useState({ apiKey: '', baseUrl: '', model: '' })
+        var draft = draftState[0]
+        var setDraft = draftState[1]
+        var noteState = react.useState('')
+        var note = noteState[0]
+        var setNote = noteState[1]
+
+        var load = react.useCallback(() => {
+          fetch('/modlens/config')
+            .then((r) => r.json())
+            .then((next) => {
+              setSummary(next)
+              var engine = next.engines[next.provider] || { baseUrl: '', model: '' }
+              setDraft({ apiKey: '', baseUrl: engine.baseUrl, model: engine.model })
+            })
+            .catch((error) => {
+              setNote(String(error))
+            })
+        }, [])
+
+        react.useEffect(() => {
+          load()
+        }, [load])
+
+        if (summary === null) {
+          return h('div', { style: { padding: '12px 0' } }, t.loading)
+        }
+
+        // Switching engine swaps in that engine's own values: the fields
+        // belong to the selected engine, never to the one before it.
+        var pick = (name) => {
+          var engine = summary.engines[name] || { baseUrl: '', model: '' }
+          setSummary(Object.assign({}, summary, { provider: name }))
+          setDraft({ apiKey: '', baseUrl: engine.baseUrl, model: engine.model })
+          setNote('')
+        }
+
+        var field = (label, key, type, placeholder) =>
+          h('label', { key: key, style: { display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 0' } }, [
+            h('span', { key: 'l', style: { fontSize: '12px', opacity: 0.75 } }, label),
+            h('input', {
+              key: 'i',
+              type: type,
+              value: draft[key],
+              placeholder: placeholder,
+              onChange: (event) => {
+                var next = {}
+                next[key] = event.target.value
+                setDraft(Object.assign({}, draft, next))
+              },
+              style: {
+                padding: '6px 8px',
+                borderRadius: '6px',
+                border: '1px solid rgba(127,127,127,0.4)',
+                background: 'transparent',
+                color: 'inherit',
+              },
+            }),
+          ])
+
+        var current = summary.engines[summary.provider] || { hasKey: false }
+        return h(
+          'div',
+          {
+            style: {
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '2px',
+              border: '1px solid var(--dsw-alpha-border, rgba(127,127,127,0.25))',
+              borderRadius: '10px',
+              padding: '14px 16px',
+            },
+          },
+          [
+            h('div', { key: 'title', style: { fontWeight: 600 } }, t.title),
+            h('div', { key: 'sub', style: { fontSize: '12px', opacity: 0.7, paddingBottom: '6px' } }, t.subtitle),
+            h(
+              'label',
+              { key: 'engine', style: { display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 0' } },
+              [
+                h('span', { key: 'l', style: { fontSize: '12px', opacity: 0.75 } }, t.engine),
+                h(
+                  'select',
+                  {
+                    key: 's',
+                    value: summary.provider,
+                    onChange: (event) => {
+                      pick(event.target.value)
+                    },
+                    style: {
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(127,127,127,0.4)',
+                      background: 'transparent',
+                      color: 'inherit',
+                    },
+                  },
+                  ENGINES.map((name) => h('option', { key: name, value: name }, name)),
+                ),
+              ],
+            ),
+            field(t.apiKey, 'apiKey', 'password', current.hasKey ? t.stored : t.unset),
+            field(t.baseUrl, 'baseUrl', 'text', t.fallback),
+            field(t.model, 'model', 'text', t.fallback),
+            h(
+              'div',
+              { key: 'actions', style: { display: 'flex', alignItems: 'center', gap: '8px', paddingTop: '8px' } },
+              [
+                h(
+                  'button',
+                  {
+                    key: 'save',
+                    type: 'button',
+                    onClick: () => {
+                      setNote(t.saving)
+                      fetch('/modlens/config', {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: JSON.stringify({
+                          provider: summary.provider,
+                          apiKey: draft.apiKey,
+                          baseUrl: draft.baseUrl,
+                          model: draft.model,
+                        }),
+                      })
+                        .then((r) => r.json().then((body) => ({ ok: r.ok, body: body })))
+                        .then((result) => {
+                          if (!result.ok) throw new Error(result.body.error || 'save failed')
+                          setSummary(result.body)
+                          var engine = result.body.engines[result.body.provider]
+                          setDraft({ apiKey: '', baseUrl: engine.baseUrl, model: engine.model })
+                          setNote(t.saved)
+                        })
+                        .catch((error) => {
+                          setNote(String(error.message ? error.message : error))
+                        })
+                    },
+                    style: {
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(127,127,127,0.4)',
+                      background: 'transparent',
+                      color: 'inherit',
+                      cursor: 'pointer',
+                    },
+                  },
+                  t.save,
+                ),
+                h('span', { key: 'note', style: { fontSize: '12px', opacity: 0.7 } }, note),
+              ],
+            ),
+          ],
+        )
+      }
+    }
+
+    function registerCard(ctx) {
+      // Reaching for an undeclared service throws in cordis, so the optional
+      // dependency rides a scoped ctx.inject: the closure runs where slots
+      // exists and never runs where it does not, exactly as the host half
+      // takes webServer.
+      if (typeof ctx.inject !== 'function') return
+      ctx.inject(['slots'], (scope) => {
+        try {
+          mountCard(scope)
+        } catch (error) {
+          console.error('[modlens] settings card skipped: ' + error)
+        }
+      })
+    }
+
+    function mountCard(ctx) {
+      var react
+      try {
+        react = require('react')
+      } catch (error) {
+        console.error('[modlens] settings card skipped: ' + error)
+        return
+      }
+      var Card = ConfigCard(react)
+      ctx.slots.inject('settings.plugin.item', function* () {
+        yield ctx.slots.register({ name: 'settings.plugin.item', id: 'modlens', order: 30 }, Card)
+      })
+    }
+
     function apply(ctx) {
+      registerCard(ctx)
       document.addEventListener('paste', onPaste, true)
       document.addEventListener('focusin', onFocusIn, true)
       // cordis effect: unregister on plugin disposal (HMR, profile reload).
@@ -188,6 +429,7 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply
+    // `slots` is optional, so it is not required here: registerCard checks.
     exports.inject = []
     return module.exports
   },

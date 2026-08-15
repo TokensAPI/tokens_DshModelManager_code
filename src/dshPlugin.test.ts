@@ -1484,8 +1484,10 @@ describe('paste takeover verdict (#36)', () => {
                 inject: (_deps: string[], run: (scope: unknown) => void) =>
                     run({
                         webServer: {
-                            register: (route: { handler: Handler }) => {
-                                handler = route.handler;
+                            // Two routes register now; this suite drives the
+                            // paste one.
+                            register: (route: { name: string; handler: Handler }) => {
+                                if (route.name === 'modlens-paste') handler = route.handler;
                             },
                         },
                     }),
@@ -1617,9 +1619,11 @@ describe('paste takeover verdict, second instance (#36)', () => {
                         ? run({
                               webServer: {
                                   register: (route: {
+                                      name: string;
                                       handler: (req: unknown, res: unknown) => Promise<void>;
                                   }) => {
-                                      captured.handler = route.handler;
+                                      if (route.name === 'modlens-paste')
+                                          captured.handler = route.handler;
                                   },
                               },
                           })
@@ -1696,9 +1700,11 @@ describe('paste takeover verdict, ownership proof (#36)', () => {
                     run({
                         webServer: {
                             register: (route: {
+                                name: string;
                                 handler: (req: unknown, res: unknown) => Promise<void>;
                             }) => {
-                                captured.handler = route.handler;
+                                if (route.name === 'modlens-paste')
+                                    captured.handler = route.handler;
                             },
                         },
                     }),
@@ -1839,9 +1845,11 @@ describe('paste takeover verdict, auto-discovered wrapper id (#36)', () => {
                         ? run({
                               webServer: {
                                   register: (route: {
+                                      name: string;
                                       handler: (req: unknown, res: unknown) => Promise<void>;
                                   }) => {
-                                      captured.handler = route.handler;
+                                      if (route.name === 'modlens-paste')
+                                          captured.handler = route.handler;
                                   },
                               },
                           })
@@ -1861,5 +1869,188 @@ describe('paste takeover verdict, auto-discovered wrapper id (#36)', () => {
             { writeHead: () => {}, end: (chunk: string) => (body = chunk) },
         );
         expect(JSON.parse(body).takeover).toBe(true);
+    });
+});
+
+describe('settings card route (#39)', () => {
+    // The card is the browser half; this covers the host half it talks to,
+    // where the API key lives. Every assertion here is about the key not
+    // leaving and not being lost.
+    const load = async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        return plugin;
+    };
+
+    type Handler = (req: unknown, res: unknown) => Promise<void>;
+
+    const house = () => {
+        const routes: Record<string, Handler> = {};
+        const ctx = {
+            llm: {
+                listProviders: () => [],
+                listModels: async () => [],
+                resolveModelInfo: async () => ({}),
+                stream: () => (async function* () {})(),
+                registerAdapter: () => {},
+            },
+            tools: { register: () => {} },
+            agents: {},
+            attachments: {},
+            on: () => {},
+            inject: (_deps: string[], run: (scope: unknown) => void) =>
+                run({
+                    webServer: {
+                        register: (route: { name: string; handler: Handler }) => {
+                            routes[route.name] = route.handler;
+                        },
+                    },
+                }),
+        } as never;
+        return { routes, ctx };
+    };
+
+    const call = async (
+        handler: Handler,
+        req: Record<string, unknown>,
+    ): Promise<{ status: number; body: Record<string, unknown> }> => {
+        let status = 0;
+        let body = '';
+        await handler(
+            { headers: { host: '127.0.0.1:3080' }, ...req },
+            {
+                writeHead: (code: number) => {
+                    status = code;
+                    return { end: () => {} };
+                },
+                end: (chunk: string) => {
+                    body = chunk ?? '';
+                },
+            },
+        );
+        return { status, body: body === '' ? {} : JSON.parse(body) };
+    };
+
+    const withConfig = async (
+        contents: Record<string, unknown>,
+        run: (handler: Handler, file: string) => Promise<void>,
+    ) => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
+        const file = path.join(home, '.modlens', 'config.json');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(contents));
+        // node's os.homedir() reads $HOME (POSIX) and %USERPROFILE% (Windows),
+        // which is the only seam here: the plugin imports homedir directly and
+        // an ESM binding cannot be reassigned from outside.
+        const realHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+        process.env.HOME = home;
+        process.env.USERPROFILE = home;
+        try {
+            const stage = house();
+            (await load()).apply(stage.ctx, {});
+            await run(stage.routes['modlens-config'], file);
+        } finally {
+            process.env.HOME = realHome.HOME;
+            process.env.USERPROFILE = realHome.USERPROFILE;
+            fs.rmSync(home, { recursive: true, force: true });
+        }
+    };
+
+    it('never puts an API key on the wire, only whether one is stored', async () => {
+        await withConfig(
+            { provider: 'openai', providers: { openai: { apiKey: 'sk-secret', model: 'm' } } },
+            async (handler) => {
+                const { status, body } = await call(handler, { method: 'GET', url: '/x' });
+                expect(status).toBe(200);
+                expect(JSON.stringify(body)).not.toContain('sk-secret');
+                const engines = body.engines as Record<string, { hasKey: boolean; model: string }>;
+                expect(engines.openai.hasKey).toBe(true);
+                expect(engines.openai.model).toBe('m');
+                expect(engines['gemini-api'].hasKey).toBe(false);
+            },
+        );
+    });
+
+    it('keeps the stored key when the card submits the blank field it was shown', async () => {
+        await withConfig(
+            { provider: 'openai', providers: { openai: { apiKey: 'sk-secret', model: 'old' } } },
+            async (handler, file) => {
+                const { status } = await call(handler, {
+                    method: 'POST',
+                    url: '/x',
+                    [Symbol.asyncIterator]: async function* () {
+                        yield Buffer.from(
+                            JSON.stringify({ provider: 'openai', apiKey: '', model: 'new' }),
+                        );
+                    },
+                });
+                expect(status).toBe(200);
+                const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+                expect(saved.providers.openai.apiKey).toBe('sk-secret');
+                expect(saved.providers.openai.model).toBe('new');
+            },
+        );
+    });
+
+    it('writes only the engine it was given, never the one before it', async () => {
+        // Switching engines in a flat card must not copy one engine's endpoint
+        // and model onto another.
+        await withConfig(
+            {
+                provider: 'openai',
+                providers: {
+                    openai: { apiKey: 'sk-a', baseUrl: 'https://a', model: 'a' },
+                    anthropic: { apiKey: 'sk-b' },
+                },
+            },
+            async (handler, file) => {
+                await call(handler, {
+                    method: 'POST',
+                    url: '/x',
+                    [Symbol.asyncIterator]: async function* () {
+                        yield Buffer.from(
+                            JSON.stringify({ provider: 'anthropic', model: 'claude' }),
+                        );
+                    },
+                });
+                const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+                expect(saved.provider).toBe('anthropic');
+                expect(saved.providers.anthropic).toEqual({ apiKey: 'sk-b', model: 'claude' });
+                expect(saved.providers.openai).toEqual({
+                    apiKey: 'sk-a',
+                    baseUrl: 'https://a',
+                    model: 'a',
+                });
+            },
+        );
+    });
+
+    it('refuses a cross-origin write, which could repoint the engine', async () => {
+        await withConfig({ provider: 'openai' }, async (handler, file) => {
+            const before = fs.readFileSync(file, 'utf-8');
+            const { status } = await call(handler, {
+                method: 'POST',
+                url: '/x',
+                headers: { host: '127.0.0.1:3080', origin: 'https://evil.example' },
+            });
+            expect(status).toBe(403);
+            expect(fs.readFileSync(file, 'utf-8')).toBe(before);
+        });
+    });
+
+    it('refuses an engine it does not know', async () => {
+        await withConfig({ provider: 'openai' }, async (handler) => {
+            const { status, body } = await call(handler, {
+                method: 'POST',
+                url: '/x',
+                [Symbol.asyncIterator]: async function* () {
+                    yield Buffer.from(JSON.stringify({ provider: 'not-an-engine' }));
+                },
+            });
+            expect(status).toBe(400);
+            expect(String(body.error)).toContain('unknown engine');
+        });
     });
 });
