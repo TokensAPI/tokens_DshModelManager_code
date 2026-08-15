@@ -185,8 +185,8 @@ window.__ModuleLoader__.load({
     // strings, and a bundle would be more machinery than the thing it labels.
     var TEXT = {
       en: {
-        title: 'ModLens vision engine',
-        subtitle: 'Shared with every harness through ~/.modlens/config.json.',
+        title: 'Vision engine (ModLens)',
+        subtitle: 'Open config file',
         engine: 'Engine',
         apiKey: 'API key',
         baseUrl: 'Base URL',
@@ -200,15 +200,15 @@ window.__ModuleLoader__.load({
         loading: 'loading...',
         discard: 'Discard',
         cliNote: 'This engine signs in through its own CLI: no key, no endpoint.',
-        autoTitle: 'Auto mode: reuse local sign-ins',
-        autoHint: 'Let a read borrow another harness on this machine when your own engine cannot answer.',
+        autoTitle: 'Auto mode',
+        autoHint: 'Reuse the vision engines already on this machine.',
         found: 'found',
         notLoggedIn: 'found, not signed in',
         notFound: 'not on this machine',
       },
       zh: {
-        title: 'ModLens 视觉引擎',
-        subtitle: '通过 ~/.modlens/config.json 与所有 harness 共享。',
+        title: '视觉引擎（ModLens）',
+        subtitle: '打开配置文件',
         engine: '引擎',
         apiKey: 'API 密钥',
         baseUrl: '接口地址',
@@ -222,8 +222,8 @@ window.__ModuleLoader__.load({
         loading: '加载中…',
         discard: '放弃修改',
         cliNote: '该引擎通过自己的 CLI 登录，无需密钥和接口地址。',
-        autoTitle: 'auto 模式：复用本机已有登录',
-        autoHint: '你自己的引擎答不了时，允许一次读取借用本机其他 harness 的登录。',
+        autoTitle: 'auto 模式',
+        autoHint: '自动复用本机已有视觉引擎。',
         found: '已找到',
         notLoggedIn: '已找到，未登录',
         notFound: '本机没有',
@@ -622,12 +622,27 @@ window.__ModuleLoader__.load({
               { style: { flex: 1, minWidth: 0 } },
               h('div', { style: { fontSize: '14px', fontWeight: 600 } }, t.title),
               h(
-                'div',
+                'span',
                 {
+                  role: 'link',
+                  tabIndex: 0,
+                  onClick: (event) => {
+                    // A link inside the header button: opening the file must
+                    // not also toggle the card.
+                    event.stopPropagation()
+                    fetch('/modlens/config', {
+                      method: 'POST',
+                      headers: { 'content-type': 'application/json' },
+                      body: JSON.stringify({ open: true }),
+                    }).catch(() => {})
+                  },
                   style: {
                     color: 'var(--dsw-alias-label-tertiary)',
                     fontSize: '13px',
                     lineHeight: 1.5,
+                    textDecoration: 'underline',
+                    textUnderlineOffset: '2px',
+                    cursor: 'pointer',
                   },
                 },
                 t.subtitle,

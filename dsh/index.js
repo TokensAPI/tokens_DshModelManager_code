@@ -1038,6 +1038,29 @@ async function discoverReuse() {
   }
 }
 
+/**
+ * Open the shared config file in whatever the OS considers its editor. The
+ * card's "open config file" link lands here: the path never has to be
+ * explained to the user, they just get the file. Created empty first when
+ * missing, so the editor has something to open.
+ */
+function openConfigFile() {
+  const file = modlensConfigPath()
+  try {
+    lstatSync(file)
+  } catch {
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, '{}\n', { mode: 0o600 })
+  }
+  const [command, args] =
+    process.platform === 'darwin'
+      ? ['open', [file]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', file]]
+        : ['xdg-open', [file]]
+  spawn(command, args, { detached: true, stdio: 'ignore' }).unref()
+}
+
 /** localhost, ::1, or anything in 127/8, matching dsh's own /api fence. */
 function isLoopbackHost(hostname) {
   if (hostname === 'localhost' || hostname === '[::1]') return true
@@ -1121,7 +1144,14 @@ function registerConfigRoute(ctx) {
           }
           chunks.push(chunk)
         }
-        applyEngineSettings(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        const patch = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        // The card's "open config file" link: an action, not a setting.
+        if (patch?.open === true) {
+          openConfigFile()
+          send(200, { opened: true })
+          return
+        }
+        applyEngineSettings(patch)
         send(200, engineSummary())
       } catch (error) {
         send(400, { error: String(error?.message ?? error) })
