@@ -11,7 +11,7 @@
 // package.json `dsh.bundle` manifest). Providers, reuse grants, and guard
 // rules keep living in ~/.modlens/config.json, shared with every harness.
 import { spawn } from 'node:child_process'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -61,19 +61,29 @@ export function apply(ctx, config = {}) {
   // optional-inject form, so the route rides a scoped ctx.inject: the closure
   // runs when the service appears and never runs where it does not (headless
   // stays untouched, and the plugin itself never waits on it).
-  if (config.pasteToPath !== false && typeof ctx.inject === 'function') {
+  if (typeof ctx.inject === 'function') {
     ctx.inject(['webServer'], (scope) => {
-      try {
-        // scope carries webServer; the plugin's own ctx carries llm for the
-        // takeover verdicts.
-        registerPasteRoute(scope, ctx, ownProviders)
-        // Same web server, same loopback: the engine config gets a route so
-        // the browser half can offer a settings card (issue #39). dsh's own
-        // settings surface renders a hardcoded set of cards and does not
-        // enumerate namespaces, so registering one would show nothing.
-        registerConfigRoute(scope)
-      } catch (error) {
-        console.error(`[modlens] paste-to-path route skipped: ${error}`)
+      if (config.pasteToPath !== false) {
+        try {
+          // scope carries webServer; the plugin's own ctx carries llm for the
+          // takeover verdicts.
+          registerPasteRoute(scope, ctx, ownProviders)
+        } catch (error) {
+          console.error(`[modlens] paste-to-path route skipped: ${error}`)
+        }
+      }
+      // Same web server, a separate switch: turning paste-to-path off is a
+      // statement about how images enter, not about whether the engine can
+      // be configured. dsh's own settings surface renders a hardcoded set of
+      // cards and does not enumerate namespaces, so the card the browser half
+      // contributes talks to this route rather than to a settings schema
+      // (issue #39).
+      if (config.settingsCard !== false) {
+        try {
+          registerConfigRoute(scope)
+        } catch (error) {
+          console.error(`[modlens] settings card route skipped: ${error}`)
+        }
       }
     })
   }
@@ -868,15 +878,30 @@ function modlensConfigPath() {
   return join(homedir(), '.modlens', 'config.json')
 }
 
+/**
+ * The shared config, or a thrown error. Only a missing file reads as empty:
+ * a file that exists but cannot be parsed or read is somebody's configuration,
+ * and a settings card that treated it as empty would overwrite it on the next
+ * save. The card shows the error instead.
+ */
 function readModlensConfig() {
+  let raw
   try {
-    const parsed = JSON.parse(readFileSync(modlensConfigPath(), 'utf8'))
-    return parsed !== null && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    // A missing file is the normal state, and an unreadable or invalid one is
-    // not something a settings card should repair by overwriting it.
-    return {}
+    raw = readFileSync(modlensConfigPath(), 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return {}
+    throw new Error(`cannot read ${modlensConfigPath()}: ${error?.message ?? error}`)
   }
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch (error) {
+    throw new Error(`${modlensConfigPath()} is not valid JSON: ${error?.message ?? error}`)
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${modlensConfigPath()} does not hold a JSON object`)
+  }
+  return parsed
 }
 
 /**
@@ -927,6 +952,16 @@ function applyEngineSettings(patch) {
   }
   config.providers[patch.provider] = settings
   const file = modlensConfigPath()
+  // A symlink here would write through to wherever it points, so it is
+  // refused rather than followed: the CLI writes a real file, and anything
+  // else is a setup this card should not silently honor.
+  try {
+    if (lstatSync(file).isSymbolicLink()) {
+      throw new Error(`${file} is a symlink; edit the file it points at instead`)
+    }
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
   mkdirSync(dirname(file), { recursive: true })
   writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 })
   try {
@@ -944,16 +979,45 @@ function applyEngineSettings(patch) {
  * could otherwise repoint someone's engine at an endpoint of its choosing.
  * A read is refused the same way for symmetry, though it carries no secret.
  */
-function registerConfigRoute(ctx) {
-  const sameOrigin = (req) => {
-    const origin = req.headers?.origin
-    if (origin === undefined) return true // same-origin fetches may omit it
-    try {
-      return new URL(origin).host === req.headers?.host
-    } catch {
-      return false
-    }
+/** localhost, ::1, or anything in 127/8, matching dsh's own /api fence. */
+function isLoopbackHost(hostname) {
+  if (hostname === 'localhost' || hostname === '[::1]') return true
+  const parts = hostname.split('.')
+  return (
+    parts.length === 4 && parts[0] === '127' && parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+  )
+}
+
+/**
+ * The same fence dsh puts in front of its own /api, for the same two
+ * confused-deputy paths. Host is the header DNS rebinding cannot forge, so it
+ * must name a loopback authority: a rebound page reaches this socket carrying
+ * its own domain there. Origin and Sec-Fetch-Site then rule out a cross-site
+ * page on the machine itself. A dsh serving a LAN address configures
+ * trustedHosts for /api; this route stays loopback-only, since nothing about
+ * editing an API key wants a wider door.
+ */
+function isTrustedRequest(req) {
+  const host = req.headers?.host
+  if (typeof host !== 'string' || host === '') return false
+  let hostUrl
+  try {
+    hostUrl = new URL(`http://${host}`)
+  } catch {
+    return false
   }
+  if (!isLoopbackHost(hostUrl.hostname)) return false
+  if (req.headers?.['sec-fetch-site'] === 'cross-site') return false
+  const origin = req.headers?.origin
+  if (origin === undefined) return true
+  try {
+    return new URL(origin).host === hostUrl.host
+  } catch {
+    return false
+  }
+}
+
+function registerConfigRoute(ctx) {
   ctx.webServer.register({
     name: 'modlens-config',
     kind: 'exact',
@@ -963,12 +1027,16 @@ function registerConfigRoute(ctx) {
         res.writeHead(status, { 'content-type': 'application/json' })
         res.end(JSON.stringify(body))
       }
-      if (!sameOrigin(req)) {
-        send(403, { error: 'cross-origin request refused' })
+      if (!isTrustedRequest(req)) {
+        send(403, { error: 'request refused: this route answers same-origin loopback only' })
         return
       }
       if (req.method === 'GET') {
-        send(200, engineSummary())
+        try {
+          send(200, engineSummary())
+        } catch (error) {
+          send(409, { error: String(error?.message ?? error) })
+        }
         return
       }
       if (req.method !== 'POST') {
