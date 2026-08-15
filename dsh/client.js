@@ -259,6 +259,31 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // What one save is actually about. The pin travels only when the select
+    // moved; the engine fields only when they were edited. A save that always
+    // carried both pinned an engine nobody chose and wrote the values the
+    // card loaded back over whatever the file holds now.
+    function savePayload(summary, draft) {
+      var payload = { reuse: {} }
+      REUSE.forEach((name) => {
+        if (draft.reuse[name] !== summary.reuse[name]) {
+          payload.reuse[name] = draft.reuse[name]
+        }
+      })
+      if (draft.provider !== summary.provider) {
+        payload.provider = draft.provider
+      }
+      var pristine = nextDraft(summary, draft.provider, draft.reuse)
+      var engineEdited = draft.apiKey !== '' || draft.baseUrl !== pristine.baseUrl || draft.model !== pristine.model
+      if (draft.provider !== '' && engineEdited) {
+        payload.engine = draft.provider
+        payload.apiKey = draft.apiKey
+        payload.baseUrl = draft.baseUrl
+        payload.model = draft.model
+      }
+      return payload
+    }
+
     function ConfigCard(react, ui) {
       var h = react.createElement
       var Input = ui.Input
@@ -610,30 +635,7 @@ window.__ModuleLoader__.load({
                     disabled: !dirty || note === t.saving,
                     onClick: () => {
                       noteState[1](t.saving)
-                      // Only the grants the user actually touched: writing
-                      // an untouched one turns "never asked" into an explicit
-                      // answer, and a recorded refusal is never asked again.
-                      var reuseChanges = {}
-                      REUSE.forEach((name) => {
-                        if (draft.reuse[name] !== summary.reuse[name]) {
-                          reuseChanges[name] = draft.reuse[name]
-                        }
-                      })
-                      // Only what this save is actually about. The pin
-                      // travels only when the select moved, and the engine
-                      // fields only when an engine is selected: a save that
-                      // always carried both pinned an engine nobody chose and
-                      // rewrote settings nobody edited.
-                      var payload = { reuse: reuseChanges }
-                      if (draft.provider !== summary.provider) {
-                        payload.provider = draft.provider
-                      }
-                      if (draft.provider !== '') {
-                        payload.engine = draft.provider
-                        payload.apiKey = draft.apiKey
-                        payload.baseUrl = draft.baseUrl
-                        payload.model = draft.model
-                      }
+                      var payload = savePayload(summary, draft)
                       fetch('/modlens/config', {
                         method: 'POST',
                         headers: { 'content-type': 'application/json' },
@@ -795,7 +797,7 @@ window.__ModuleLoader__.load({
 
     exports.apply = apply
     // Exposed for the repo's tests only; not part of the plugin contract.
-    exports.__card = { nextDraft: nextDraft }
+    exports.__card = { nextDraft: nextDraft, savePayload: savePayload }
     // `slots` is optional, so it is not required here: registerCard checks.
     exports.inject = []
     return module.exports

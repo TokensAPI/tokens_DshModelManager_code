@@ -2233,6 +2233,76 @@ describe('settings card route (#39)', () => {
         );
     });
 
+    it('writes where the read takes effect when an alias and its engine both exist', async () => {
+        // `config set gemini.apiKey` then `config set gemini-api.apiKey`
+        // leaves both. Reading merges canonical last, so writing under the
+        // alias saved a value that the canonical key then shadowed: the card
+        // said saved and the engine kept using the old key.
+        await withConfig(
+            {
+                provider: 'gemini',
+                providers: {
+                    gemini: { apiKey: 'alias-key', model: 'alias-model' },
+                    'gemini-api': { apiKey: 'canonical-key', model: 'canonical-model' },
+                },
+            },
+            async (handler, file) => {
+                await call(handler, {
+                    method: 'POST',
+                    url: '/x',
+                    [Symbol.asyncIterator]: async function* () {
+                        yield Buffer.from(
+                            JSON.stringify({
+                                engine: 'gemini-api',
+                                apiKey: 'fresh-key',
+                                model: 'fresh-model',
+                                baseUrl: '',
+                            }),
+                        );
+                    },
+                });
+                const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+                // The effective value is what the merge yields, alias first.
+                const effective = {
+                    ...saved.providers.gemini,
+                    ...saved.providers['gemini-api'],
+                };
+                expect(effective.apiKey).toBe('fresh-key');
+                expect(effective.model).toBe('fresh-model');
+                // And the summary the card reads back agrees.
+                const read = await call(handler, { method: 'GET', url: '/x' });
+                const engines = read.body.engines as Record<
+                    string,
+                    { hasKey: boolean; model: string }
+                >;
+                expect(engines['gemini-api'].model).toBe('fresh-model');
+            },
+        );
+    });
+
+    it('leaves engine settings alone when the save carries none', async () => {
+        // A reuse-only save must not write engine fields back: the values the
+        // card loaded could be older than what the file holds now.
+        await withConfig(
+            {
+                provider: 'openai',
+                providers: { openai: { apiKey: 'sk-a', model: 'kept' } },
+            },
+            async (handler, file) => {
+                await call(handler, {
+                    method: 'POST',
+                    url: '/x',
+                    [Symbol.asyncIterator]: async function* () {
+                        yield Buffer.from(JSON.stringify({ reuse: { pi: true } }));
+                    },
+                });
+                const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+                expect(saved.providers.openai).toEqual({ apiKey: 'sk-a', model: 'kept' });
+                expect(saved.reuse).toEqual({ pi: true });
+            },
+        );
+    });
+
     it('pins only when the card says the pin moved', async () => {
         await withConfig({ provider: 'openai' }, async (handler, file) => {
             await call(handler, {
