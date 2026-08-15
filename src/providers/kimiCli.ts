@@ -32,20 +32,31 @@ import type {
     VisionProvider,
 } from './index.ts';
 
+/** Set on the child so a modlens started by kimi can see it is a re-entry. */
+export const KIMI_REENTRY_ENV = 'MODLENS_INSIDE_KIMI_CLI';
+
 /**
- * An empty directory standing in for skill discovery. Created once per run and
- * left in the temp dir: it holds nothing, and creating it is what keeps kimi
- * from loading the modlens skill and calling modlens back.
+ * A fresh empty directory standing in for skill discovery, minted per call.
+ * A fixed path could be pre-created holding a skill, which would hand the
+ * guard's own name to whatever wanted to defeat it; mkdtemp gives a directory
+ * nobody else can have populated. It is left behind empty, which costs one
+ * inode and keeps the failure mode boring.
  */
-function emptySkillsDir(): string {
-    const dir = path.join(os.tmpdir(), 'modlens-kimi-no-skills');
-    fs.mkdirSync(dir, { recursive: true });
-    return dir;
+function freshEmptySkillsDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-kimi-skills-'));
 }
 
 export function buildKimiCliInvocation(
     options: BuildProviderInvocationOptions,
 ): ProviderInvocation {
+    // Belt to the --skills-dir brace: if this process was itself started by
+    // kimi, running kimi again is a loop with a longer period, not a read.
+    if (process.env[KIMI_REENTRY_ENV] === '1') {
+        throw new Error(
+            'kimi-cli refused: this modlens run was started by kimi itself, so calling kimi again would loop. Pick another provider for the nested read, or let the outer read answer.',
+        );
+    }
+
     if (options.imageKind === 'remote') {
         throw new Error(
             'kimi-cli provider reads local files only. Download the image first, or use -p gemini-api for remote URLs.',
@@ -70,7 +81,7 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
         // read the image by running modlens, which is this process calling
         // itself. Observed, and intermittent, which is the bad kind.
         '--skills-dir',
-        emptySkillsDir(),
+        freshEmptySkillsDir(),
         ...(model ? ['-m', model] : []),
     ];
 
@@ -78,6 +89,7 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
         command: options.providerBin || 'kimi',
         args,
         cwd: path.resolve(options.workdir || path.dirname(options.imageSource)),
+        env: { [KIMI_REENTRY_ENV]: '1' },
     };
 }
 
@@ -112,6 +124,8 @@ export function parseKimiCliOutput(stdout: string): ProviderParsedOutput {
         throw new Error(`Kimi CLI returned non-JSON output: ${truncate(answer)}`);
     }
 
+    // The ndjson carries no model or usage line, and inventing one would put
+    // a guess where callers read a fact. Absent says unknown, which is true.
     return { result, meta: { conversationId: null, durationSeconds: null, usage: null } };
 }
 

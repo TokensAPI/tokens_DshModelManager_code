@@ -480,6 +480,9 @@ export function runCommand(
         const child = spawn(plan.command, plan.args, {
             cwd: invocation.cwd,
             stdio: ['ignore', 'pipe', 'pipe'],
+            // A provider may mark its own child, which is how kimi-cli tells a
+            // modlens started by kimi that running kimi again would loop.
+            ...(invocation.env ? { env: { ...process.env, ...invocation.env } } : {}),
         });
 
         // Decoders keep state across chunks: a multi-byte character split down the

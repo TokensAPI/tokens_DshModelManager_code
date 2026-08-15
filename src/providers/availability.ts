@@ -48,9 +48,8 @@ export const PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
     {
         name: 'openai',
         kind: 'api',
-        // baseUrl has a built-in default now, so it is no longer required.
-        required: [{ field: 'apiKey' }, { field: 'model' }],
-        fix: 'modlens config set openai.apiKey (hidden prompt) / openai.model <name>; baseUrl only for a non-OpenAI endpoint',
+        required: [{ field: 'baseUrl' }, { field: 'apiKey' }, { field: 'model' }],
+        fix: 'modlens config set openai.baseUrl <url> / openai.apiKey (hidden prompt) / openai.model <name>',
     },
     {
         name: 'anthropic',
@@ -131,6 +130,9 @@ const LOCAL_FAILOVER_ORDER = [
     'anthropic',
     'antigravity-cli',
     'claude-cli',
+    // Local only, like claude-cli, and last for the same reason: it spends a
+    // subscription the user is already paying for elsewhere.
+    'kimi-cli',
 ] as const;
 const REMOTE_FAILOVER_ORDER = ['gemini-api', 'openai', 'anthropic', 'antigravity-cli'] as const;
 

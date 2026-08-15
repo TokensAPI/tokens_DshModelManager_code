@@ -1,5 +1,6 @@
+import * as fs from 'fs';
 import { describe, expect, it } from 'vitest';
-import { buildKimiCliInvocation, parseKimiCliOutput } from './kimiCli.ts';
+import { buildKimiCliInvocation, KIMI_REENTRY_ENV, parseKimiCliOutput } from './kimiCli.ts';
 
 const VALID = {
     summary: 'a red square',
@@ -53,6 +54,55 @@ describe('buildKimiCliInvocation', () => {
         expect(prompt).toContain('/tmp/red.png');
         expect(prompt).toContain('"summary"');
         expect(invocation.args).not.toContain('--json-schema');
+    });
+
+    it('mints a fresh skills directory, and an empty one, every call', () => {
+        // A fixed path is a name anything could pre-create holding a skill,
+        // which hands the guard's own address to whatever wants past it.
+        const first = buildKimiCliInvocation({
+            imageSource: '/tmp/red.png',
+            imageKind: 'local',
+            timeoutMs: 5000,
+        });
+        const second = buildKimiCliInvocation({
+            imageSource: '/tmp/red.png',
+            imageKind: 'local',
+            timeoutMs: 5000,
+        });
+        const dirOf = (invocation: { args: string[] }) =>
+            invocation.args[invocation.args.indexOf('--skills-dir') + 1];
+        expect(dirOf(first)).not.toBe(dirOf(second));
+        expect(fs.readdirSync(dirOf(first))).toEqual([]);
+        fs.rmSync(dirOf(first), { recursive: true, force: true });
+        fs.rmSync(dirOf(second), { recursive: true, force: true });
+    });
+
+    it('marks its child so a modlens kimi starts can refuse to loop', () => {
+        const invocation = buildKimiCliInvocation({
+            imageSource: '/tmp/red.png',
+            imageKind: 'local',
+            timeoutMs: 5000,
+        });
+        expect(invocation.env?.[KIMI_REENTRY_ENV]).toBe('1');
+    });
+
+    it('refuses outright when this run was started by kimi', () => {
+        // The skills directory closes the usual door; this closes the one a
+        // user opens themselves by running modlens from inside a kimi session.
+        const before = process.env[KIMI_REENTRY_ENV];
+        process.env[KIMI_REENTRY_ENV] = '1';
+        try {
+            expect(() =>
+                buildKimiCliInvocation({
+                    imageSource: '/tmp/red.png',
+                    imageKind: 'local',
+                    timeoutMs: 5000,
+                }),
+            ).toThrow(/started by kimi/);
+        } finally {
+            if (before === undefined) delete process.env[KIMI_REENTRY_ENV];
+            else process.env[KIMI_REENTRY_ENV] = before;
+        }
     });
 
     it('refuses a remote image, which this route cannot fetch', () => {

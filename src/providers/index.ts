@@ -10,6 +10,8 @@ export interface ProviderInvocation {
     command: string;
     args: string[];
     cwd: string;
+    /** Extra variables for the child, merged over the inherited environment. */
+    env?: Record<string, string>;
 }
 
 export interface BuildProviderInvocationOptions {

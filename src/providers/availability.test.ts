@@ -164,3 +164,38 @@ describe('providerChain', () => {
         expect(names(providerChain('local', broken, env))).toEqual(['gemini-api']);
     });
 });
+
+describe('kimi-cli in the chain (#44)', () => {
+    const withKimi = { providers: {} };
+
+    it('joins the local chain when kimi is installed, and never the remote one', () => {
+        // It reads a local file through the CLI's own tool, so a URL has
+        // nothing for it to open.
+        const local = providerChain('local', withKimi, { PATH: pathWith('kimi') }).map(
+            (provider) => provider.name,
+        );
+        expect(local).toContain('kimi-cli');
+        const remote = providerChain('remote', withKimi, { PATH: pathWith('kimi') }).map(
+            (provider) => provider.name,
+        );
+        expect(remote).not.toContain('kimi-cli');
+    });
+
+    it('stays out when kimi is not installed', () => {
+        const chain = providerChain('local', withKimi, { PATH: pathWith() }).map(
+            (provider) => provider.name,
+        );
+        expect(chain).not.toContain('kimi-cli');
+    });
+
+    it('moves to the front when it is the configured preference', () => {
+        const chain = providerChain(
+            'local',
+            { ...withKimi, provider: 'kimi-cli' },
+            {
+                PATH: pathWith('kimi'),
+            },
+        ).map((provider) => provider.name);
+        expect(chain[0]).toBe('kimi-cli');
+    });
+});
