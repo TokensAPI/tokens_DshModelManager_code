@@ -131,6 +131,19 @@ modlens config set anthropic.apiKey <sk-ant-key>
 
 **`ANTHROPIC_BASE_URL` 陷阱已经不存在了。**modlens 过去把这个变量绑定到 `anthropic.baseUrl`，于是一个为了把 Claude Code 路由到纯文本网关而设的变量，会让视觉请求也无声地发到那里。现在凭据只来自配置文件，为别的工具设的变量碰不到这条路线。确实想换端点时，在文件里设 `anthropic.baseUrl`。
 
+### kimi-cli（复用 Kimi Code 登录，无需密钥）
+
+搭在已有的 `kimi` 登录上，花的是用户的 Kimi Code 订阅而不是密钥。先从 https://moonshotai.github.io/kimi-code/ 安装，跑一次 `kimi` 并 `/login`，然后：
+
+```bash
+modlens config set provider kimi-cli
+modlens config set kimi-cli.model <alias>   # 可选，不设就用 kimi 自己的默认模型
+```
+
+模型别名用 kimi 自己的那套，形如 `<provider>/<model>`，`kimi provider list` 能看到，而且必须支持图片输入。这条路线没有服务端 schema 约束（该 CLI 没有 `--json-schema`），契约是以填好的 JSON 模板随提示词发过去的，能力弱的模型可能只答出一半，遇到就用 `-p gemini-api` 兜底。
+
+有一个实现细节，调试时值得知道：modlens 运行 `kimi` 时把 skill 发现指向了一个空目录。否则 kimi 可能在共享的 skill 目录里找到 modlens skill，然后通过调用 modlens 来读图，也就是 modlens 自己调自己。
+
 ### claude-cli（Claude Code 登录态，无需 key）
 
 借用已有的 `claude` 登录态，花的是用户的 Claude 订阅额度，不产生单独的 API 账单。需要装好并登录 Claude Code（用 `claude --version` 检查）。运行时只带 `--allowedTools Read`。只支持本地图片文件，远程 URL 请改用 gemini-api。默认模型别名 `haiku`。
