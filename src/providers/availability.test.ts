@@ -242,9 +242,12 @@ describe('PATH is read the way the platform reads it (#43)', () => {
     // The fold is Windows-only on purpose: POSIX names are case-sensitive,
     // and accepting `Path` there would run a program found through a variable
     // POSIX does not define as the search path.
-    it('does not accept a differently cased key on POSIX', () => {
-        const dir = pathWith('agy');
-        expect(findOnPath('agy', { Path: dir })).toBeNull();
-        expect(findOnPath('agy', { PATH: dir })).toBe(path.join(dir, 'agy'));
-    });
+    it.skipIf(process.platform === 'win32')(
+        'does not accept a differently cased key on POSIX',
+        () => {
+            const dir = pathWith('agy');
+            expect(findOnPath('agy', { Path: dir })).toBeNull();
+            expect(findOnPath('agy', { PATH: dir })).toBe(path.join(dir, 'agy'));
+        },
+    );
 });
