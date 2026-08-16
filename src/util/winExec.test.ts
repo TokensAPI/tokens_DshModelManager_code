@@ -531,19 +531,31 @@ describe('the bare node lookup is cmd lookup (#43)', () => {
     });
 
     it.skipIf(process.platform !== 'win32')(
-        'reproduces whatever real cmd chose between node and node.EXE',
+        'runs the same program cmd runs, for the same shim',
         () => {
+            // The one check neither reasoning nor a stubbed filesystem can
+            // make: hand a real shim to a real cmd.exe, hand the same shim to
+            // the planner, and require the two to end the same way. It
+            // reports what cmd does rather than encoding a guess about it,
+            // which is how the previous version of this test got the lookup
+            // order backwards.
             const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-winexec-'));
             try {
                 const work = path.join(root, 'work');
                 const toolsDir = path.join(work, 'tools');
                 const shimDir = path.join(root, 'shims');
+                const pkgDir = path.join(root, 'pkg');
                 fs.mkdirSync(toolsDir, { recursive: true });
                 fs.mkdirSync(shimDir, { recursive: true });
+                fs.mkdirSync(pkgDir, { recursive: true });
 
-                const exactNode = path.join(toolsDir, 'node');
-                fs.writeFileSync(exactNode, '@rem noop\r\n@exit /b 7\r\n');
-                fs.copyFileSync(process.execPath, `${exactNode}.EXE`);
+                // A distinctive exit code, so a run that merely starts
+                // something cannot be mistaken for a run of the right thing.
+                fs.writeFileSync(path.join(pkgDir, 'cli.js'), 'process.exit(7);\n');
+                // Both candidates present, which is the case that decides the
+                // order: an extensionless file and the real executable.
+                fs.writeFileSync(path.join(toolsDir, 'node'), '@rem noop\r\n@exit /b 9\r\n');
+                fs.copyFileSync(process.execPath, path.join(toolsDir, 'node.EXE'));
                 const shim = path.join(shimDir, 'thing.cmd');
                 fs.writeFileSync(shim, NPM_NODE_LEGACY);
 
@@ -556,14 +568,10 @@ describe('the bare node lookup is cmd lookup (#43)', () => {
                 const comspec =
                     process.env.ComSpec ??
                     path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe');
-                const actual = childProcess.spawnSync(comspec, ['/d', '/s', '/c', 'node'], {
+                const viaCmd = childProcess.spawnSync(comspec, ['/d', '/s', '/c', shim], {
                     cwd: work,
                     env,
                 });
-                // What cmd does here is the question, not the premise. The
-                // assertion below is that our plan reproduces whatever it
-                // chose, so this test tells us the rule instead of encoding
-                // a guess about it.
 
                 const plan = resolveSpawnPlan(shim, [], env, work, {
                     platform: 'win32',
@@ -580,14 +588,14 @@ describe('the bare node lookup is cmd lookup (#43)', () => {
                         }
                     },
                 });
-                expect(plan.command.toLowerCase().startsWith(toolsDir.toLowerCase())).toBe(true);
-
                 const direct = childProcess.spawnSync(plan.command, plan.args, {
                     cwd: work,
                     env: plan.env ?? env,
                 });
-                // The invariant: the same program, so the same outcome.
-                expect(direct.status).toBe(actual.status);
+
+                // The script ran, through whichever node cmd picked.
+                expect(viaCmd.status).toBe(7);
+                expect(direct.status).toBe(viaCmd.status);
             } finally {
                 fs.rmSync(root, { recursive: true, force: true });
             }
