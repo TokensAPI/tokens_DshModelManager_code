@@ -24,15 +24,14 @@ export async function executeOpenaiCompat(
     const apiKey = options.settings?.apiKey;
     // No default on purpose. Defaulting to official OpenAI would take a key
     // meant for another vendor, and the image beside it, and send both to
-    // OpenAI, which is the same fault issue #42 removed pointed the other way:
-    // a pairing the user never configured. Anyone whose endpoint used to come
-    // from OPENAI_BASE_URL gets an error naming the setting instead.
+    // OpenAI, which is the same fault issue #42 fixed pointed the other way:
+    // a pairing the user never configured.
     const baseUrl = options.settings?.baseUrl?.replace(/\/$/, '');
     const model = options.model || options.settings?.model;
 
     if (!apiKey || !baseUrl || !model) {
         throw new Error(
-            'openai provider needs baseUrl, apiKey, and model, all from the config file: modlens config set openai.baseUrl <url>, modlens config set openai.apiKey (a hidden prompt), modlens config set openai.model <name>. If your endpoint used to come from OPENAI_BASE_URL, that binding is gone since 3.17.0 and the value belongs in the config file now (official OpenAI is https://api.openai.com/v1).',
+            'openai provider needs baseUrl, apiKey, and model: modlens config set openai.baseUrl <url>, modlens config set openai.apiKey (a hidden prompt), modlens config set openai.model <name>. There is no default endpoint (official OpenAI is https://api.openai.com/v1). OPENAI_BASE_URL and OPENAI_API_KEY still supply this provider on their own, but only while the config file names no openai entry, since 3.17.0 takes a provider whole from one source; no variable carries the model, so an environment-only setup passes -m <name>.',
         );
     }
 

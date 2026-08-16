@@ -78,15 +78,31 @@ const ENV_BINDINGS: Record<string, Partial<Record<ProviderStringField, string>>>
     anthropic: { apiKey: 'ANTHROPIC_API_KEY', baseUrl: 'ANTHROPIC_BASE_URL' },
 };
 
+/**
+ * Every key under `providers` that names this one, its aliases included.
+ *
+ * Presence of the key is what counts, not whether it holds anything: clearing
+ * the last field of an entry leaves `{}` behind, and reading that as "the file
+ * says nothing" would hand the provider back to the environment variables the
+ * entry was there to displace.
+ */
+function fileKeysFor(providerName: string, config: ModlensConfig): string[] {
+    const aliases = providerAliases();
+    return Object.keys(config.providers ?? {}).filter(
+        (key) => (aliases[key] ?? key) === providerName,
+    );
+}
+
 /** Everything the file holds for one provider, its aliases included. */
 function fileSettingsFor(providerName: string, config: ModlensConfig): ProviderSettings {
-    const aliasNames = Object.entries(providerAliases())
-        .filter(([alias, canonical]) => canonical === providerName && alias !== providerName)
-        .map(([alias]) => alias);
-    return {
-        ...Object.assign({}, ...aliasNames.map((alias) => config.providers?.[alias] ?? {})),
-        ...(config.providers?.[providerName] ?? {}),
-    };
+    const keys = fileKeysFor(providerName, config);
+    // The canonical key is merged last so it wins over an alias holding the
+    // same field.
+    const ordered = [
+        ...keys.filter((key) => key !== providerName),
+        ...keys.filter((key) => key === providerName),
+    ];
+    return Object.assign({}, ...ordered.map((key) => config.providers?.[key] ?? {}));
 }
 
 /** What the environment holds for one provider, through its bound variables. */
@@ -112,9 +128,17 @@ function envSettingsFor(providerName: string, env: NodeJS.ProcessEnv): ProviderS
  * only in exactly that case: variable set, provider named by the file, no
  * baseUrl there.
  */
-const ENDPOINT_BINDINGS: Record<string, string> = {
-    openai: 'OPENAI_BASE_URL',
-    anthropic: 'ANTHROPIC_BASE_URL',
+const ENDPOINT_BINDINGS: Record<string, { variable: string; consequence: string }> = {
+    // No default endpoint, so the run cannot misroute: it simply has nowhere
+    // to go, and saying otherwise would invent a danger to justify the error.
+    openai: {
+        variable: 'OPENAI_BASE_URL',
+        consequence: 'this run has no endpoint left to send the image to',
+    },
+    anthropic: {
+        variable: 'ANTHROPIC_BASE_URL',
+        consequence: "this run would have sent your key and the image to Anthropic's own endpoint",
+    },
 };
 
 export function assertNoRetiredEndpointBinding(
@@ -122,7 +146,8 @@ export function assertNoRetiredEndpointBinding(
     settings: ProviderSettings,
     env: NodeJS.ProcessEnv = process.env,
 ): void {
-    const variable = ENDPOINT_BINDINGS[providerName];
+    const binding = ENDPOINT_BINDINGS[providerName];
+    const variable = binding?.variable;
     if (!variable || settings.baseUrl?.trim() || !env[variable]?.trim()) {
         return;
     }
@@ -135,7 +160,7 @@ export function assertNoRetiredEndpointBinding(
     const shown = maskUrlCredentials(env[variable]?.trim() ?? '');
     const reference = process.platform === 'win32' ? `$env:${variable}` : `"$${variable}"`;
     throw new Error(
-        `${variable} is set (${shown}), but the config file configures ${providerName}, and since 3.17.0 a provider takes its settings from one place: the file, whole. ${providerName}.baseUrl is not in it, so this run would have used the provider's own endpoint. To keep the endpoint you were using, run: modlens config set ${providerName}.baseUrl ${reference}`,
+        `${variable} is set (${shown}), but the config file configures ${providerName}, and since 3.17.0 a provider takes its settings from one place: the file, whole. ${providerName}.baseUrl is not in it, so ${binding.consequence}. To keep the endpoint you were using, run: modlens config set ${providerName}.baseUrl ${reference}`,
     );
 }
 
@@ -171,10 +196,12 @@ export function defaultProviderName(config: ModlensConfig): string {
     return config.provider?.trim() || 'antigravity-cli';
 }
 
-/** Resolve settings for one provider with env vars overriding the config file. */
-/** Whether the config file says anything about this provider, aliases included. */
+/**
+ * Whether the config file names this provider, aliases included. An entry
+ * holding nothing still counts: see fileKeysFor.
+ */
 export function providerConfiguredInFile(providerName: string, config: ModlensConfig): boolean {
-    return Object.keys(fileSettingsFor(providerName, config)).length > 0;
+    return fileKeysFor(providerName, config).length > 0;
 }
 
 export function resolveProviderSettings(
@@ -183,12 +210,11 @@ export function resolveProviderSettings(
     env: NodeJS.ProcessEnv = process.env,
 ): ProviderSettings {
     // Settings saved under an alias (config set gemini.apiKey) count as the
-    // file mentioning this provider: they were invisible once the name
-    // resolved to its canonical form.
-    const fromFile = fileSettingsFor(providerName, config);
-    const mentioned = Object.keys(fromFile).length > 0;
+    // file naming this provider: they were invisible once the name resolved to
+    // its canonical form.
+    const mentioned = providerConfiguredInFile(providerName, config);
     const settings: ProviderSettings = mentioned
-        ? { ...fromFile }
+        ? { ...fileSettingsFor(providerName, config) }
         : envSettingsFor(providerName, env);
     // The top-level proxy is the default; a provider-level one overrides it.
     if (!settings.proxy && config.proxy?.trim()) {
@@ -361,17 +387,22 @@ export function initConfigFile(configPath = CONFIG_PATH, force = false): void {
 }
 
 /**
- * Render the effective config: the file merged with environment variables, with
- * API keys masked and every value tagged with where it came from (file or env).
+ * Render the effective config, with API keys masked and every value tagged with
+ * the source it actually came from.
  *
- * The file is the whole story now: credentials no longer come from the
- * environment (issue #42), so what this prints is what runs.
+ * One row per provider under its canonical name, whichever key the file used:
+ * an entry saved as `gemini` and a `GEMINI_API_KEY` beside it are one provider,
+ * and printing them as two rows would show a value the run never reads (issue
+ * #42).
  */
 export function renderEffectiveConfig(
     config: ModlensConfig,
     env: NodeJS.ProcessEnv = process.env,
 ): string {
-    const providerNames = new Set<string>(Object.keys(config.providers ?? {}));
+    const aliases = providerAliases();
+    const providerNames = new Set<string>(
+        Object.keys(config.providers ?? {}).map((key) => aliases[key] ?? key),
+    );
     // A provider configured only through the environment is still in effect,
     // so it belongs in a view of what is in effect.
     for (const [providerName, bindings] of Object.entries(ENV_BINDINGS)) {
@@ -385,7 +416,7 @@ export function renderEffectiveConfig(
         const fileSettings = fileSettingsFor(name, config);
         // Whichever source is actually in effect for this provider, labelled
         // as such: the view has to agree with what a run would use.
-        const mentioned = Object.keys(fileSettings).length > 0;
+        const mentioned = providerConfiguredInFile(name, config);
         const effective = mentioned ? fileSettings : envSettingsFor(name, env);
         const source: 'file' | 'env' = mentioned ? 'file' : 'env';
         const fields: Record<string, string> = {};
@@ -411,7 +442,10 @@ export function renderEffectiveConfig(
         if (fileSettings.extraBody !== undefined) {
             fields.extraBody = `${JSON.stringify(fileSettings.extraBody)} (file)`;
         }
-        if (Object.keys(fields).length > 0) {
+        // An entry the file holds but has emptied still prints, as `{}`: it is
+        // why the environment is not supplying this provider, so a view that
+        // hid it would leave the silence unexplained.
+        if (Object.keys(fields).length > 0 || mentioned) {
             providers[name] = fields;
         }
     }

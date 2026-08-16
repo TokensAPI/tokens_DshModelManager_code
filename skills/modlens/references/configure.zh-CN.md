@@ -129,7 +129,7 @@ modlens config set anthropic.apiKey <sk-ant-key>
 
 默认模型是 Claude Haiku（`claude-haiku-4-5-20251001`）。schema 通过强制工具调用来约束。
 
-**`ANTHROPIC_BASE_URL` 陷阱已经不存在了。**modlens 过去把这个变量绑定到 `anthropic.baseUrl`，于是一个为了把 Claude Code 路由到纯文本网关而设的变量，会让视觉请求也无声地发到那里。现在凭据只来自配置文件，为别的工具设的变量碰不到这条路线。确实想换端点时，在文件里设 `anthropic.baseUrl`。
+**`ANTHROPIC_BASE_URL` 陷阱已经拆掉了。**modlens 过去把这个变量按字段绑到 `anthropic.baseUrl`，于是一个为了把 Claude Code 路由到纯文本网关而设的变量，会让视觉请求也无声地发到那里，哪怕密钥是在配置文件里设的。现在只要文件里出现 `anthropic`，文件就是这条路线的全部来源，那个变量再也够不着它，确实想换端点就设 `anthropic.baseUrl`。而在文件对 `anthropic` 只字未提时，`ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL` 仍然能独立配好这条路线，两半来自同一处。卡在中间的情况（变量设着、文件里有 `anthropic` 却没有 `baseUrl`）会直接报错，并给出保留原端点的那条命令。
 
 ### kimi-cli（复用 Kimi Code 登录，无需密钥）
 

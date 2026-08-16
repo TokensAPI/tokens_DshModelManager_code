@@ -905,6 +905,34 @@ function settingsKeysFor(engine) {
 // absent counts as granted, since claude-cli predates the grant model.
 const REUSE_HARNESSES = ['claude', 'codex', 'opencode', 'pi', 'grok']
 
+// The variables that supply an engine while the file names no entry for it,
+// mirroring ENV_BINDINGS in src/config.ts. An engine takes its settings from
+// one source whole, so the card has to read the same two places a read does or
+// it shows an empty form for an engine that works.
+const ENGINE_ENV_BINDINGS = {
+  'gemini-api': { apiKey: 'GEMINI_API_KEY' },
+  openai: { apiKey: 'OPENAI_API_KEY', baseUrl: 'OPENAI_BASE_URL' },
+  anthropic: { apiKey: 'ANTHROPIC_API_KEY', baseUrl: 'ANTHROPIC_BASE_URL' },
+}
+
+function engineEnvSettings(engine, env = process.env) {
+  const settings = {}
+  for (const [field, variable] of Object.entries(ENGINE_ENV_BINDINGS[engine] ?? {})) {
+    const value = typeof env[variable] === 'string' ? env[variable].trim() : ''
+    if (value !== '') settings[field] = value
+  }
+  return settings
+}
+
+/**
+ * Whether the file names this engine. The key existing is what counts, not
+ * what it holds: an entry emptied down to `{}` still takes the engine off its
+ * variables, the same rule fileKeysFor applies in src/config.ts.
+ */
+function engineConfiguredInFile(engine, config) {
+  return settingsKeysFor(engine).some((key) => config.providers?.[key] !== undefined)
+}
+
 /** ~/.modlens/config.json, the one file every harness shares. */
 function modlensConfigPath() {
   return join(homedir(), '.modlens', 'config.json')
@@ -944,13 +972,23 @@ function readModlensConfig() {
 function engineSummary(config = readModlensConfig()) {
   const engines = {}
   for (const name of ENGINES) {
+    // One source, whole. The file when it names the engine, its variables
+    // otherwise: reading only the file showed an empty form for a container
+    // that exports its key, and the first save then wrote a partial entry
+    // that took the working variables away.
+    const inFile = engineConfiguredInFile(name, config)
     // Alias first, canonical last: the canonical key wins on conflict, the
     // same order resolveProviderSettings uses.
-    const settings = Object.assign({}, ...settingsKeysFor(name).map((key) => config.providers?.[key] ?? {}))
+    const settings = inFile
+      ? Object.assign({}, ...settingsKeysFor(name).map((key) => config.providers?.[key] ?? {}))
+      : engineEnvSettings(name)
     engines[name] = {
       baseUrl: typeof settings.baseUrl === 'string' ? settings.baseUrl : '',
       model: typeof settings.model === 'string' ? settings.model : '',
       hasKey: typeof settings.apiKey === 'string' && settings.apiKey !== '',
+      // '' means neither source holds anything, which is not the same as the
+      // file holding an empty entry: that one is already off its variables.
+      source: inFile ? 'file' : Object.keys(settings).length > 0 ? 'env' : '',
     }
   }
   const reuse = {}
@@ -1011,7 +1049,13 @@ function applyEngineSettings(patch) {
     // then `config set gemini-api.apiKey` leaves exactly that.
     const holders = settingsKeysFor(engine).filter((key) => config.providers[key] !== undefined)
     const target = holders.length > 0 ? holders[holders.length - 1] : engine
-    const settings = { ...config.providers[target] }
+    // The first file entry for an engine the variables are supplying takes it
+    // off them whole, so their values move into the entry with it. Otherwise
+    // saving a model on a working environment-only engine deleted its key and
+    // endpoint from the run. Seeded here rather than in the browser because
+    // the key must never travel there.
+    const seed = holders.length > 0 ? {} : engineEnvSettings(engine)
+    const settings = { ...seed, ...config.providers[target] }
     for (const field of ['baseUrl', 'model']) {
       const value = typeof patch[field] === 'string' ? patch[field].trim() : ''
       if (value === '') {
@@ -1218,3 +1262,9 @@ function registerConfigRoute(ctx) {
     },
   })
 }
+
+// The two halves of the settings card that live on this side of the socket,
+// reachable from the test suite the way client.js exposes `__card`. They read
+// and write a real file and a real environment, so they are tested against
+// both rather than through the HTTP route.
+export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }

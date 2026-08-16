@@ -129,7 +129,7 @@ modlens config set anthropic.apiKey <sk-ant-key>
 
 Default model is Claude Haiku (`claude-haiku-4-5-20251001`). Schema is enforced through a forced tool call.
 
-**The `ANTHROPIC_BASE_URL` trap is gone.** modlens used to bind that variable to `anthropic.baseUrl`, so a shell that routed Claude Code through a text-only gateway silently sent vision requests there too. Credentials come from the config file now, so a variable set for another tool cannot reach this route. Set `anthropic.baseUrl` in the file when you do want a different endpoint.
+**The `ANTHROPIC_BASE_URL` trap is defused.** modlens used to bind that variable to `anthropic.baseUrl` field by field, so a shell that routed Claude Code through a text-only gateway silently sent vision requests there too, even beside a key set in the config file. The moment the file names `anthropic`, the file is this route's whole source and that variable no longer reaches it: set `anthropic.baseUrl` when you do want a different endpoint. `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` still configure this route on their own while the file says nothing about `anthropic`, both halves coming from the same place. A run caught between the two, with the variable set and the file naming `anthropic` without a `baseUrl`, refuses and prints the command that keeps the endpoint you were using.
 
 ### kimi-cli (Kimi Code login, no key)
 
