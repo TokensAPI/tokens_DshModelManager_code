@@ -120,11 +120,11 @@ function withPathextEdit(env: NodeJS.ProcessEnv, removed: string): NodeJS.Proces
 const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
 
 /**
- * Resolve a bare command the way cmd would, which is not what findOnPath
- * does. cmd tries the current directory before PATH unless
- * NoDefaultCurrentDirectoryInExePath is set. In each directory it tests the
- * exact name before appending PATHEXT entries. Searching PATH alone or
- * skipping that first candidate can choose a different file than the shell.
+ * Resolve a bare command the way cmd would. cmd tries the current directory
+ * before PATH unless NoDefaultCurrentDirectoryInExePath is set, and in each
+ * directory it tries the PATHEXT extensions before the bare name itself.
+ * Searching PATH alone, or preferring the bare name, can choose a different
+ * file than the shell.
  *
  * A hit that is itself a batch file is refused: spawning it directly is the
  * EINVAL this whole module exists to route around, and there is no second
@@ -158,7 +158,12 @@ function resolveLikeCmd(
             .map((dir) => path.win32.resolve(effectiveCwd, dir)),
     ];
     for (const dir of dirs) {
-        for (const suffix of ['', ...exts]) {
+        // Extensions first, the bare name last. Windows CI settled this: with
+        // PATHEXT=.EXE and both `node` and `node.EXE` present, real cmd runs
+        // node.EXE. It also matches what issue #30 found the hard way, since
+        // npm installs a bare-named POSIX shim beside the real executable and
+        // resolving that first hands spawn a file Windows cannot run.
+        for (const suffix of [...exts, '']) {
             const candidate = path.win32.join(dir, `${name}${suffix}`);
             const found = deps.existence(candidate);
             if (found === 'unknown') {

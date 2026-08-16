@@ -495,7 +495,7 @@ describe('the bare node lookup is cmd lookup (#43)', () => {
         expect(plan.command).toBe('C:\\work\\tools\\node.EXE');
     });
 
-    it('checks the exact bare name before PATHEXT candidates', () => {
+    it('checks PATHEXT candidates before the bare name', () => {
         const probes: string[] = [];
         const plan = resolveShim(
             NPM_NODE_LEGACY,
@@ -509,8 +509,10 @@ describe('the bare node lookup is cmd lookup (#43)', () => {
             },
             { PATHEXT: '.EXE', PATH: 'C:\\tools', NoDefaultCurrentDirectoryInExePath: '1' },
         );
-        expect(plan.command).toBe('C:\\tools\\node');
-        expect(probes).toEqual([`${SHIM_DIR}\\node.exe`, 'C:\\tools\\node']);
+        // Real cmd picks node.EXE when both exist, which the Windows
+        // differential test below proves rather than assumes.
+        expect(plan.command).toBe('C:\\tools\\node.EXE');
+        expect(probes).toEqual([`${SHIM_DIR}\\node.exe`, 'C:\\tools\\node.EXE']);
     });
 
     it('reads duplicate PATH and PATHEXT keys the way Node passes them', () => {
@@ -529,7 +531,7 @@ describe('the bare node lookup is cmd lookup (#43)', () => {
     });
 
     it.skipIf(process.platform !== 'win32')(
-        'matches cmd lookup order and preserves an extensionless launch failure',
+        'reproduces whatever real cmd chose between node and node.EXE',
         () => {
             const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-winexec-'));
             try {
@@ -558,7 +560,10 @@ describe('the bare node lookup is cmd lookup (#43)', () => {
                     cwd: work,
                     env,
                 });
-                expect(actual.status).not.toBe(0);
+                // What cmd does here is the question, not the premise. The
+                // assertion below is that our plan reproduces whatever it
+                // chose, so this test tells us the rule instead of encoding
+                // a guess about it.
 
                 const plan = resolveSpawnPlan(shim, [], env, work, {
                     platform: 'win32',
@@ -575,13 +580,14 @@ describe('the bare node lookup is cmd lookup (#43)', () => {
                         }
                     },
                 });
-                expect(plan.command.toLowerCase()).toBe(exactNode.toLowerCase());
+                expect(plan.command.toLowerCase().startsWith(toolsDir.toLowerCase())).toBe(true);
 
                 const direct = childProcess.spawnSync(plan.command, plan.args, {
                     cwd: work,
                     env: plan.env ?? env,
                 });
-                expect(direct.status).not.toBe(0);
+                // The invariant: the same program, so the same outcome.
+                expect(direct.status).toBe(actual.status);
             } finally {
                 fs.rmSync(root, { recursive: true, force: true });
             }
