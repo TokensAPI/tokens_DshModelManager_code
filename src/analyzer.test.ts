@@ -751,3 +751,63 @@ describe('the retired endpoint binding reaches the named provider (#42)', () => 
         }
     }, 30_000);
 });
+
+describe('a throwaway directory never costs the answer (#50)', () => {
+    // On Windows the isolated directory is the provider's cwd, and a cwd
+    // cannot be deleted while a process still holds it. kimi lingers there
+    // writing its session state, so rmSync threw EPERM out of the `finally`
+    // and replaced a successful 45-second read with a failed attempt. The
+    // reproduction here is the POSIX equivalent: the provider makes its own
+    // working directory unwritable on the way out, so the recursive remove
+    // genuinely fails instead of being mocked into failing.
+    const VALID = {
+        summary: 'ok',
+        ocr: { full_text: '', lines: [] },
+        layout: { regions: [] },
+        semantics: { scene: '', entities: [] },
+        visual: {},
+        uncertainty: [],
+    };
+
+    it.skipIf(process.platform === 'win32')(
+        'returns the result when the directory cannot be removed',
+        async () => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cleanup-'));
+            const bin = path.join(dir, 'fake-agy');
+            const envelope = JSON.stringify({ status: 'SUCCESS', structured_output: VALID });
+            fs.writeFileSync(bin, `#!/bin/sh\necho '${envelope}'\nchmod 500 .\nexit 0\n`, {
+                mode: 0o755,
+            });
+            const image = path.join(dir, 'x.png');
+            fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+            try {
+                const result = await analyzeImage({
+                    input: image,
+                    providerBin: bin,
+                    timeoutMs: 20_000,
+                    config: {},
+                });
+                // The read succeeded. A temp directory nobody can delete is
+                // not a reason to throw the answer away.
+                expect((result.result as { summary: string }).summary).toBe('ok');
+            } finally {
+                // The fake provider left its own cwd at 0500, which is the
+                // whole point, so this test cleans up what the runtime is now
+                // allowed to give up on.
+                for (const leftover of fs.readdirSync(os.tmpdir())) {
+                    if (!leftover.startsWith('modlens-work-')) continue;
+                    const full = path.join(os.tmpdir(), leftover);
+                    try {
+                        fs.chmodSync(full, 0o700);
+                        fs.rmSync(full, { recursive: true, force: true });
+                    } catch {
+                        // Another run's directory, or already gone.
+                    }
+                }
+                fs.rmSync(dir, { recursive: true, force: true });
+            }
+        },
+        30_000,
+    );
+});
