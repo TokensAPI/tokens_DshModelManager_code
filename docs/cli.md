@@ -93,7 +93,7 @@ The default `-m` model depends on the provider:
 | `--harness <name>` | Force storage scope: `claude-code`, `pi`, `opencode`, `none` | auto-detect |
 | `--cwd <path>` | Project directory the image was pasted in | current directory |
 
-Six providers: `antigravity-cli` (no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, and `claude-cli` (uses your existing Claude subscription). Without `-p`, a run tries every provider that is set up, inline API providers first (5-10s), then the agents; the first good result wins and `meta.attempts` records the rest. Harnesses granted via `reuse.<harness>` contribute reused engines to the same regions (pi credentials inline, agent CLIs behind), with no priority over the user's own; details and the `guards` deny/allow lists are in [Configuration](../skills/modlens/references/configure.md).
+Six providers: `antigravity-cli` (no key), `gemini-api` (fastest free route), `openai` (any OpenAI-compatible multimodal endpoint), `anthropic`, `claude-cli` (uses your existing Claude subscription), and `kimi-cli` (uses your existing Kimi Code subscription, and runs only when named, never as a failover peer). Without `-p`, a run tries every provider that is set up, inline API providers first (5-10s), then the agents; the first good result wins and `meta.attempts` records the rest. Harnesses granted via `reuse.<harness>` contribute reused engines to the same regions (pi credentials inline, agent CLIs behind), with no priority over the user's own; details and the `guards` deny/allow lists are in [Configuration](../skills/modlens/references/configure.md).
 
 Other subcommands:
 

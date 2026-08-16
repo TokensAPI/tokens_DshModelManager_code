@@ -261,7 +261,7 @@ describe('config show', () => {
         fs.rmSync(home, { recursive: true, force: true });
     });
 
-    it('shows nothing for an ambient credential variable (#42)', () => {
+    it('shows an environment-only provider, labelled env (#42)', () => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
         const { code, stdout } = run(['config', 'show'], {
             HOME: home,
@@ -272,7 +272,9 @@ describe('config show', () => {
         const parsed = JSON.parse(stdout) as {
             providers?: Record<string, Record<string, string>>;
         };
-        expect(parsed.providers?.['gemini-api']).toBeUndefined();
+        // In effect, so it is shown, labelled env, and the key still masked:
+        // config show exists to be pasted into issues.
+        expect(parsed.providers?.['gemini-api']?.apiKey).toMatch(/\(env\)$/);
         expect(stdout).not.toContain('SecretFromEnv');
         fs.rmSync(home, { recursive: true, force: true });
     });

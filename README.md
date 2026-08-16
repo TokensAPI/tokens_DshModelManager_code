@@ -66,9 +66,9 @@ The install also inventories vision reachable through your other local harness C
 
 Once installed, just chat. Paste an image or drop a path, ask anything, and the skill triggers on its own: the image goes to a vision engine and the answer comes back grounded in what it read.
 
-## Vision engines: five built-in providers, four reusable CLIs, one failover chain
+## Vision engines: six built-in providers, four reusable CLIs, one failover chain
 
-ModLens does not depend on any single vision service. Nine sources of vision in total: five built-in providers, any one of which is enough, plus four local agent CLIs whose logins can be reused. The built-ins:
+ModLens does not depend on any single vision service. Ten sources of vision in total: six built-in providers, any one of which is enough, plus four local agent CLIs whose logins can be reused. The built-ins:
 
 | Provider | What it needs | Speed per read | Good for |
 | :-- | :-- | :-- | :-- |

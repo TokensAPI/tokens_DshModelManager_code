@@ -5,7 +5,12 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { discoverAuto } from './auto/discover.ts';
 import { type AutoRouteOptions, reuseProviders } from './auto/routes.ts';
-import { loadConfigFile, type ModlensConfig, resolveProviderSettings } from './config.ts';
+import {
+    assertNoRetiredEndpointBinding,
+    loadConfigFile,
+    type ModlensConfig,
+    resolveProviderSettings,
+} from './config.ts';
 import { providerChain } from './providers/availability.ts';
 import {
     type ProviderFailureContext,
@@ -94,6 +99,28 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
         : options.providerBin
           ? [resolveProvider('antigravity-cli')]
           : composeChain(resolvedInput.kind, config, options.autoOptions);
+    // A provider the user named carries the retired-binding check before the
+    // chain is filtered. Otherwise the missing baseUrl reads as "not set up",
+    // that provider is quietly dropped, and the person who exported the
+    // variable never learns why their engine stopped being chosen. Only the
+    // named one: exporting ANTHROPIC_BASE_URL for Claude Code is common and
+    // has nothing to do with a run that never touches the anthropic route.
+    const named = options.provider ?? config.provider?.trim();
+    if (named) {
+        try {
+            const canonical = resolveProvider(named).name;
+            assertNoRetiredEndpointBinding(canonical, resolveProviderSettings(canonical, config));
+        } catch (error) {
+            if (
+                error instanceof Error &&
+                error.message.includes('takes its settings from one place')
+            ) {
+                throw error;
+            }
+            // An unknown name is not this check's business.
+        }
+    }
+
     if (chain.length === 0) {
         throw new Error(
             'No vision provider is set up on this machine. Install Antigravity CLI (curl -fsSL https://antigravity.google/cli/install.sh | bash, then run agy once to sign in), or configure a key: modlens config set gemini-api.apiKey <key>. Run modlens doctor for the full picture.' +

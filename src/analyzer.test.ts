@@ -699,3 +699,55 @@ describe.skipIf(onWindows)('provider failover', () => {
         );
     }, 20_000);
 });
+
+describe('the retired endpoint binding reaches the named provider (#42)', () => {
+    it('refuses instead of dropping that provider as unconfigured', async () => {
+        // Without this the missing baseUrl reads as "not set up", the named
+        // provider is filtered out of the chain, and the person who exported
+        // the variable never learns why their engine stopped being chosen.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-retired-'));
+        const image = path.join(dir, 'x.png');
+        fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+        const before = process.env.OPENAI_BASE_URL;
+        process.env.OPENAI_BASE_URL = 'https://gateway.example/v1';
+        try {
+            await expect(
+                analyzeImage({
+                    input: image,
+                    timeoutMs: 5000,
+                    config: { provider: 'openai', providers: { openai: { apiKey: 'k' } } },
+                }),
+            ).rejects.toThrow(/OPENAI_BASE_URL.*one place/s);
+        } finally {
+            if (before === undefined) delete process.env.OPENAI_BASE_URL;
+            else process.env.OPENAI_BASE_URL = before;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('says nothing when the variable belongs to a provider this run never names', async () => {
+        // Exporting ANTHROPIC_BASE_URL for Claude Code is ordinary and has
+        // nothing to do with a run that names another engine. The named
+        // provider is the only one checked, so this one gets past the guard
+        // and fails later for its own reason.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-retired-'));
+        const image = path.join(dir, 'x.png');
+        fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+        const before = process.env.ANTHROPIC_BASE_URL;
+        process.env.ANTHROPIC_BASE_URL = 'https://gateway.example/v1';
+        try {
+            await analyzeImage({
+                input: image,
+                timeoutMs: 1000,
+                config: { provider: 'gemini-api', providers: { 'gemini-api': { apiKey: 'k' } } },
+            });
+            throw new Error('expected the run to fail on its own terms');
+        } catch (error) {
+            expect((error as Error).message).not.toMatch(/one place/);
+        } finally {
+            if (before === undefined) delete process.env.ANTHROPIC_BASE_URL;
+            else process.env.ANTHROPIC_BASE_URL = before;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }, 30_000);
+});
