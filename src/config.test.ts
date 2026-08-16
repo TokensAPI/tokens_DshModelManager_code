@@ -8,6 +8,7 @@ import {
     defaultProviderName,
     initConfigFile,
     loadConfigFile,
+    providerConfiguredInFile,
     renderEffectiveConfig,
     resolveProviderSettings,
     setConfigValue,
@@ -328,6 +329,40 @@ describe('one provider, one source (#42)', () => {
         expect(settings.apiKey).toBeUndefined();
     });
 
+    // What makes the file the source is the key being there, not what is
+    // under it. Reading emptiness as silence let a provider slide back onto
+    // the variables its entry was written to displace, and clearing the last
+    // field is how an entry ends up empty in ordinary use.
+    it('counts an emptied entry as the file mentioning it', () => {
+        const config = { providers: { 'gemini-api': {} } };
+        expect(providerConfiguredInFile('gemini-api', config)).toBe(true);
+        expect(
+            resolveProviderSettings('gemini-api', config, { GEMINI_API_KEY: 'env-key' }),
+        ).toEqual({});
+    });
+
+    it('counts an emptied alias entry too', () => {
+        const config = { providers: { gemini: {} } };
+        expect(providerConfiguredInFile('gemini-api', config)).toBe(true);
+        expect(
+            resolveProviderSettings('gemini-api', config, { GEMINI_API_KEY: 'env-key' }),
+        ).toEqual({});
+    });
+
+    it('leaves an emptied entry behind when the last field is cleared', () => {
+        // The path that produces one without anybody hand-editing JSON.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-empty-'));
+        const configPath = path.join(dir, 'config.json');
+        setConfigValue('openai.structuredOutput', 'true', configPath);
+        setConfigValue('openai.structuredOutput', '', configPath);
+        const config = loadConfigFile(configPath);
+        expect(config.providers?.openai).toEqual({});
+        expect(resolveProviderSettings('openai', config, { OPENAI_API_KEY: 'env-key' })).toEqual(
+            {},
+        );
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
     it('labels the source it actually used', () => {
         const fromEnv = JSON.parse(
             renderEffectiveConfig({}, { OPENAI_API_KEY: 'k', OPENAI_BASE_URL: 'https://x/v1' }),
@@ -340,6 +375,27 @@ describe('one provider, one source (#42)', () => {
             ),
         ) as { providers: Record<string, Record<string, string>> };
         expect(fromFile.providers.openai.baseUrl).toBe('https://y/v1 (file)');
+    });
+
+    it('prints one row per provider, under its canonical name', () => {
+        // An alias entry and a bound variable are one provider. Two rows put
+        // a value on screen that no run reads, in a view whose whole job is
+        // to say what runs.
+        const shown = JSON.parse(
+            renderEffectiveConfig(
+                { providers: { gemini: { model: 'm' } } },
+                { GEMINI_API_KEY: 'env-key' },
+            ),
+        ) as { providers: Record<string, Record<string, string>> };
+        expect(Object.keys(shown.providers)).toEqual(['gemini-api']);
+        expect(shown.providers['gemini-api']).toEqual({ model: 'm (file)' });
+    });
+
+    it('shows an emptied entry rather than hiding why the variables went quiet', () => {
+        const shown = JSON.parse(
+            renderEffectiveConfig({ providers: { 'gemini-api': {} } }, { GEMINI_API_KEY: 'k' }),
+        ) as { providers: Record<string, Record<string, string>> };
+        expect(shown.providers['gemini-api']).toEqual({});
     });
 });
 

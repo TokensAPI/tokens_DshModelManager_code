@@ -138,6 +138,16 @@ describe('providerChain', () => {
         expect(names(providerChain('local', {}, env))).toEqual([]);
     });
 
+    it('admits a provider on its variables only while the file names none (#42)', () => {
+        const env = { PATH: pathWith(), GEMINI_API_KEY: 'env-key' };
+        expect(names(providerChain('local', {}, env))).toEqual(['gemini-api']);
+        // The entry is empty, so it holds no key. It still says the file owns
+        // this provider, and the chain has to agree with the resolver about
+        // that or it routes an image at a provider with nothing behind it.
+        expect(names(providerChain('local', { providers: { 'gemini-api': {} } }, env))).toEqual([]);
+        expect(names(providerChain('local', { providers: { gemini: {} } }, env))).toEqual([]);
+    });
+
     it('moves a configured default to the front of the local chain', () => {
         const env = { PATH: pathWith('agy') };
         const prefer = { ...allKeys, provider: 'anthropic' };

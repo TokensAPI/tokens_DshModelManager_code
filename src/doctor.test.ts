@@ -91,6 +91,17 @@ describe('buildDoctorReport: provider readiness', () => {
         const fromEnv = providerNamed(ambientOnly, 'gemini-api');
         expect(fromEnv.ready).toBe(true);
         expect(fromEnv.settings?.[0]).toMatchObject({ field: 'apiKey', source: 'env' });
+
+        // An entry the file has been emptied down to still names the
+        // provider, so the variable is not its source and doctor has to say
+        // the key is missing rather than counting one it will never read.
+        const emptied = buildDoctorReport({
+            config: { providers: { 'gemini-api': {} } },
+            env: { GEMINI_API_KEY: 'from-env-key' },
+        });
+        const fromEmpty = providerNamed(emptied, 'gemini-api');
+        expect(fromEmpty.ready).toBe(false);
+        expect(fromEmpty.settings?.[0]).toMatchObject({ field: 'apiKey', source: 'missing' });
     });
 
     it('tags a config-file-only key as file and flags a missing one', () => {

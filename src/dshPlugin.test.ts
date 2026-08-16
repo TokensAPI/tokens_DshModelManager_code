@@ -2339,3 +2339,132 @@ describe('settings card route (#39)', () => {
         });
     });
 });
+
+describe('settings card, host side: one source, whole (#42)', () => {
+    // engineSummary and applyEngineSettings read a real file and a real
+    // environment, so they run against both here. os.homedir() follows HOME on
+    // POSIX and USERPROFILE on Windows, which is how the shared config path is
+    // pointed at a scratch directory.
+    async function withHome<T>(
+        env: Record<string, string | undefined>,
+        body: (config: {
+            engineSummary: () => {
+                engines: Record<
+                    string,
+                    { baseUrl: string; model: string; hasKey: boolean; source: string }
+                >;
+            };
+            applyEngineSettings: (patch: Record<string, unknown>) => void;
+            modlensConfigPath: () => string;
+        }) => T,
+    ): Promise<T> {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-home-'));
+        const saved: Record<string, string | undefined> = {};
+        const overrides = { HOME: home, USERPROFILE: home, ...env };
+        for (const [key, value] of Object.entries(overrides)) {
+            saved[key] = process.env[key];
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+        }
+        try {
+            // The plugin is plain JS by design (no build step, no dsh type deps).
+            // @ts-expect-error untyped on purpose
+            const module = (await import('../dsh/index.js')) as unknown as {
+                __config: Parameters<typeof body>[0];
+            };
+            return body(module.__config);
+        } finally {
+            for (const [key, value] of Object.entries(saved)) {
+                if (value === undefined) delete process.env[key];
+                else process.env[key] = value;
+            }
+            fs.rmSync(home, { recursive: true, force: true });
+        }
+    }
+
+    it('shows the variables that are actually supplying an engine', async () => {
+        // Reading only the file showed an empty form for a machine whose
+        // container exports its key, which reads as "nothing is configured".
+        await withHome(
+            { OPENAI_API_KEY: 'env-key', OPENAI_BASE_URL: 'https://gw.example/v1' },
+            (config) => {
+                const openai = config.engineSummary().engines.openai;
+                expect(openai.source).toBe('env');
+                expect(openai.baseUrl).toBe('https://gw.example/v1');
+                expect(openai.hasKey).toBe(true);
+            },
+        );
+    });
+
+    it('reports the file as the source once the file names the engine, emptied or not', async () => {
+        await withHome(
+            { OPENAI_API_KEY: 'env-key', OPENAI_BASE_URL: 'https://gw/v1' },
+            (config) => {
+                const file = config.modlensConfigPath();
+                fs.mkdirSync(path.dirname(file), { recursive: true });
+                fs.writeFileSync(file, JSON.stringify({ providers: { openai: {} } }));
+                const openai = config.engineSummary().engines.openai;
+                expect(openai.source).toBe('file');
+                expect(openai.hasKey).toBe(false);
+                expect(openai.baseUrl).toBe('');
+            },
+        );
+    });
+
+    it('says nothing about an engine neither source configures', async () => {
+        await withHome({ OPENAI_API_KEY: undefined, OPENAI_BASE_URL: undefined }, (config) => {
+            expect(config.engineSummary().engines.openai.source).toBe('');
+        });
+    });
+
+    it('carries the variables into the file when a save creates the first entry', async () => {
+        // The whole hazard: saving a model on a working environment-only
+        // engine writes an entry, the entry takes the engine off its
+        // variables, and the key and endpoint vanish from the next read. They
+        // move with it instead, and the key is copied here rather than in the
+        // browser, which never receives one.
+        await withHome(
+            { OPENAI_API_KEY: 'env-key', OPENAI_BASE_URL: 'https://gw.example/v1' },
+            (config) => {
+                config.applyEngineSettings({
+                    engine: 'openai',
+                    apiKey: '',
+                    baseUrl: 'https://gw.example/v1',
+                    model: 'qwen3-vl-max',
+                });
+                const saved = JSON.parse(fs.readFileSync(config.modlensConfigPath(), 'utf-8')) as {
+                    providers: Record<string, Record<string, string>>;
+                };
+                expect(saved.providers.openai).toEqual({
+                    apiKey: 'env-key',
+                    baseUrl: 'https://gw.example/v1',
+                    model: 'qwen3-vl-max',
+                });
+            },
+        );
+    });
+
+    it('leaves a file-sourced engine alone, variables and all', async () => {
+        await withHome(
+            { OPENAI_API_KEY: 'env-key', OPENAI_BASE_URL: 'https://gw/v1' },
+            (config) => {
+                const file = config.modlensConfigPath();
+                fs.mkdirSync(path.dirname(file), { recursive: true });
+                fs.writeFileSync(
+                    file,
+                    JSON.stringify({ providers: { openai: { apiKey: 'file-key' } } }),
+                );
+                config.applyEngineSettings({
+                    engine: 'openai',
+                    apiKey: '',
+                    baseUrl: '',
+                    model: 'm',
+                });
+                const saved = JSON.parse(fs.readFileSync(file, 'utf-8')) as {
+                    providers: Record<string, Record<string, string>>;
+                };
+                expect(saved.providers.openai).toEqual({ apiKey: 'file-key', model: 'm' });
+            },
+        );
+    });
+});

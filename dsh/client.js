@@ -208,6 +208,8 @@ window.__ModuleLoader__.load({
         found: 'found',
         notLoggedIn: 'found, not signed in',
         notFound: 'not on this machine',
+        envSourced:
+          'These come from environment variables. Saving copies them into the config file, which then becomes this engine’s only source.',
       },
       zh: {
         title: '视觉引擎（ModLens）',
@@ -233,6 +235,7 @@ window.__ModuleLoader__.load({
         found: '已找到',
         notLoggedIn: '已找到，未登录',
         notFound: '本机没有',
+        envSourced: '这些值来自环境变量。保存会把它们写进配置文件，此后该引擎只认配置文件。',
       },
     }
 
@@ -531,6 +534,25 @@ window.__ModuleLoader__.load({
                   : textField(t.apiKey, 'apiKey', 'password', current.hasKey ? t.stored : t.unset),
               draft.provider === '' || keyless ? null : textField(t.baseUrl, 'baseUrl', 'text', t.fallback),
               draft.provider === '' ? null : textField(t.model, 'model', 'text', t.fallback),
+              // Where these values are coming from, said once, because the
+              // first save moves them: an engine the file names takes its
+              // settings from the file alone.
+              draft.provider === '' || current.source !== 'env'
+                ? null
+                : fieldRow(
+                    '',
+                    h(
+                      'div',
+                      {
+                        style: {
+                          fontSize: '13px',
+                          color: 'var(--dsw-alias-label-tertiary, rgba(127,127,127,0.8))',
+                        },
+                      },
+                      t.envSourced,
+                    ),
+                    'envsourced',
+                  ),
               fieldRow(
                 h(
                   'span',
