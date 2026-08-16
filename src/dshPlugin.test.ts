@@ -2468,3 +2468,223 @@ describe('settings card, host side: one source, whole (#42)', () => {
         );
     });
 });
+
+describe('the wrapper keeps upstream replay state reachable (#49)', () => {
+    // dsh drops an assistant message's adapter-private replayState when the
+    // provider recorded on it belongs to a different adapter instance than
+    // the one about to run. The wrapper is a different instance, so every
+    // turn it produced arrived upstream stripped of the state carrying
+    // reasoning continuity, and the model stopped emitting reasoning blocks.
+    async function wrapperStream(
+        messages: unknown[],
+        wiring: { upstream?: string; providerId?: string } = {},
+    ) {
+        let adapter: Record<string, CallableFunction> | undefined;
+        const seen: Array<Record<string, unknown>> = [];
+        const llm = {
+            registerAdapter: (_p: string[], a: Record<string, CallableFunction>) => {
+                adapter = a;
+            },
+            listProviders: () => ['deepseek-official'],
+            listModels: async () => [{ provider: 'deepseek-official', id: 'deepseek-v4-flash' }],
+            resolveModelInfo: async (_p: string, model: string) => ({
+                provider: 'deepseek-official',
+                id: model,
+            }),
+            stream: (options: Record<string, unknown>) => {
+                seen.push(options);
+                return (async function* () {
+                    yield { type: 'finish' };
+                })();
+            },
+        };
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        plugin.apply(
+            { tools: { register: () => {} }, attachments: {}, on: () => {}, llm } as never,
+            {
+                upstream: wiring.upstream ?? 'deepseek-official',
+                providerId: wiring.providerId ?? 'deepseek-modlens',
+                pasteToPath: false,
+            },
+        );
+        const iterator = (adapter as Record<string, CallableFunction>).stream({
+            provider: wiring.providerId ?? 'deepseek-modlens',
+            model: 'deepseek-v4-flash',
+            messages,
+        }) as AsyncIterable<unknown>;
+        for await (const _chunk of iterator) {
+            // drain
+        }
+        return seen[0];
+    }
+
+    it('relabels its own turns as upstream so the state survives delegation', async () => {
+        const sent = await wrapperStream([
+            { role: 'user', source: { kind: 'user' }, content: [] },
+            {
+                role: 'assistant',
+                source: {
+                    kind: 'model',
+                    provider: 'deepseek-modlens',
+                    model: 'deepseek-v4-flash',
+                    replayState: { thinking: 'opaque-upstream-blob' },
+                },
+                content: [],
+            },
+        ]);
+        const history = sent.messages as Array<{ source: Record<string, unknown> }>;
+        expect(history[1].source.provider).toBe('deepseek-official');
+        // The point of the rename: the state rides along.
+        expect(history[1].source.replayState).toEqual({ thinking: 'opaque-upstream-blob' });
+    });
+
+    it('leaves turns from other providers alone', async () => {
+        const sent = await wrapperStream([
+            {
+                role: 'assistant',
+                source: {
+                    kind: 'model',
+                    provider: 'some-other',
+                    model: 'x',
+                    replayState: { a: 1 },
+                },
+                content: [],
+            },
+        ]);
+        const history = sent.messages as Array<{ source: Record<string, unknown> }>;
+        expect(history[0].source.provider).toBe('some-other');
+    });
+
+    it('leaves user turns alone', async () => {
+        const sent = await wrapperStream([{ role: 'user', source: { kind: 'user' }, content: [] }]);
+        const history = sent.messages as Array<{ source: Record<string, unknown> }>;
+        expect(history[0].source.kind).toBe('user');
+    });
+});
+
+async function wrapperStreamFor(
+    messages: unknown[],
+    wiring: { upstream?: string; providerId?: string },
+): Promise<Record<string, unknown>> {
+    let adapter: Record<string, CallableFunction> | undefined;
+    const seen: Array<Record<string, unknown>> = [];
+    const llm = {
+        registerAdapter: (_p: string[], a: Record<string, CallableFunction>) => {
+            adapter = a;
+        },
+        listProviders: () => ['deepseek-official'],
+        listModels: async () => [{ provider: 'deepseek-official', id: 'deepseek-v4-flash' }],
+        resolveModelInfo: async (_p: string, model: string) => ({
+            provider: 'deepseek-official',
+            id: model,
+        }),
+        stream: (options: Record<string, unknown>) => {
+            seen.push(options);
+            return (async function* () {
+                yield { type: 'finish' };
+            })();
+        },
+    };
+    // @ts-expect-error untyped on purpose
+    const plugin = (await import('../dsh/index.js')) as {
+        apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+    };
+    plugin.apply({ tools: { register: () => {} }, attachments: {}, on: () => {}, llm } as never, {
+        upstream: wiring.upstream ?? 'deepseek-official',
+        providerId: wiring.providerId ?? 'deepseek-modlens',
+        pasteToPath: false,
+    });
+    const iterator = (adapter as Record<string, CallableFunction>).stream({
+        provider: wiring.providerId ?? 'deepseek-modlens',
+        model: 'deepseek-v4-flash',
+        messages,
+    }) as AsyncIterable<unknown>;
+    for await (const _chunk of iterator) {
+        // drain
+    }
+    return seen[0];
+}
+
+describe('replay state never crosses to an adapter that did not produce it (#49)', () => {
+    /**
+     * LlmService.forAdapter, as dsh implements it: an assistant message keeps
+     * its adapter-private replayState only when the provider recorded on it
+     * resolves to the very adapter about to run. Reproduced here so the two
+     * layers can be exercised together without importing the host.
+     */
+    function forAdapter(
+        messages: Array<Record<string, never>>,
+        owners: Record<string, string>,
+        adapter: string,
+    ) {
+        return messages.map((message) => {
+            const source = message.source as unknown as Record<string, unknown> | undefined;
+            if (
+                (message as { role?: string }).role !== 'assistant' ||
+                source?.kind !== 'model' ||
+                source.replayState === undefined
+            ) {
+                return message;
+            }
+            if (owners[source.provider as string] === adapter) return message;
+            const { replayState: _dropped, ...rest } = source;
+            return { ...message, source: rest };
+        });
+    }
+
+    const turn = (provider: string) =>
+        Object.freeze({
+            role: 'assistant',
+            source: Object.freeze({
+                kind: 'model',
+                provider,
+                model: 'deepseek-v4-flash',
+                replayState: { thinking: 'opaque' },
+            }),
+            content: [],
+        });
+
+    it('survives the boundary when the id encodes its upstream', async () => {
+        const sent = await wrapperStreamFor([turn('modlens-opencode-go')], {
+            upstream: 'opencode-go',
+            providerId: 'modlens-opencode-go',
+        });
+        const afterHost = forAdapter(
+            sent.messages as Array<Record<string, never>>,
+            { 'opencode-go': 'upstreamAdapter', 'modlens-opencode-go': 'wrapperAdapter' },
+            'upstreamAdapter',
+        );
+        expect((afterHost[0].source as Record<string, unknown>).replayState).toEqual({
+            thinking: 'opaque',
+        });
+    });
+
+    it('is not relabelled, and so is dropped, when the id was repointed', async () => {
+        // deepseek-modlens hand-configured onto some other upstream: history
+        // under that id was produced by whatever it pointed at before, and
+        // handing this adapter that state is worse than losing it.
+        const sent = await wrapperStreamFor([turn('deepseek-modlens')], {
+            upstream: 'some-other-provider',
+            providerId: 'deepseek-modlens',
+        });
+        const history = sent.messages as Array<{ source: Record<string, unknown> }>;
+        expect(history[0].source.provider).toBe('deepseek-modlens');
+        const afterHost = forAdapter(
+            sent.messages as Array<Record<string, never>>,
+            { 'some-other-provider': 'otherAdapter', 'deepseek-modlens': 'wrapperAdapter' },
+            'otherAdapter',
+        );
+        expect((afterHost[0].source as Record<string, unknown>).replayState).toBeUndefined();
+    });
+
+    it('never mutates the durable message it was handed', async () => {
+        const original = turn('deepseek-modlens');
+        const sent = await wrapperStreamFor([original], {});
+        const history = sent.messages as Array<{ source: Record<string, unknown> }>;
+        expect(history[0]).not.toBe(original);
+        expect(original.source.provider).toBe('deepseek-modlens');
+    });
+});

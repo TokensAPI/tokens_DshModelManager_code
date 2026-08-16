@@ -452,6 +452,58 @@ function registerPasteRoute(ctx, host, ownProviders) {
  *   deepseek-official wrap keeps its historical `deepseek-modlens` id, so a
  *   selector remembering that provider survives the upgrade.
  */
+/**
+ * Whether this wrapper id proves, by itself, which upstream produced the
+ * turns recorded under it.
+ *
+ * Auto-discovery mints `modlens-<upstream>` (and `deepseek-modlens` for
+ * `deepseek-official`), so the id carries its own provenance and cannot drift.
+ * A hand-configured `upstream` under some other id can be repointed between
+ * runs, and then history recorded under that id was produced by a provider
+ * that is no longer the one behind it. Relabelling there would hand one
+ * adapter another adapter's private replay state, which at best fails the
+ * request. Unprovable means no relabelling, so those setups keep exactly the
+ * behaviour they have today rather than gaining a worse one.
+ */
+function wrapperIdEncodes(wrapperId, upstream) {
+  return wrapperId === `modlens-${upstream}` || (wrapperId === 'deepseek-modlens' && upstream === 'deepseek-official')
+}
+
+/**
+ * Re-label our own turns as the upstream provider's before delegating.
+ *
+ * dsh drops an assistant message's adapter-private replayState whenever the
+ * provider recorded on that message belongs to a different adapter instance
+ * than the one about to run (LlmService.forAdapter, an identity comparison).
+ * This wrapper is a different instance by construction, so every turn it
+ * produced reached upstream stripped of the state that carries reasoning
+ * continuity, and the model answered without engaging thinking mode:
+ * reasoning blocks went missing and the chain of thought landed inline in the
+ * text (issue #49). Nothing about the message content differed, which is why
+ * passing messages through unchanged looked correct.
+ *
+ * Renaming is the truth rather than a trick, but only where the id proves it
+ * (see wrapperIdEncodes): these turns are upstream's own work, produced by
+ * upstream's adapter, and the replayState in them is upstream's to read. Only
+ * the copy going over the wire is relabelled. The durable session log keeps
+ * the wrapper id, so the UI and the model selector still show the chosen route.
+ */
+function restoreUpstreamSource(messages, wrapperId, upstream) {
+  if (!wrapperIdEncodes(wrapperId, upstream)) {
+    return messages
+  }
+  let changed = false
+  const out = messages.map((message) => {
+    const source = message?.source
+    if (message?.role !== 'assistant' || source?.kind !== 'model' || source.provider !== wrapperId) {
+      return message
+    }
+    changed = true
+    return { ...message, source: { ...source, provider: upstream } }
+  })
+  return changed ? out : messages
+}
+
 function registerVisionProvider(ctx, config, ownProviders) {
   // Wrap only the text-only members of these families. Their own vision
   // models (present or future: deepseek-vl/ocr/janus, glm-4.5v, glm-5v-...)
@@ -512,7 +564,8 @@ function registerVisionProvider(ctx, config, ownProviders) {
           // Cached per attachment, since the same history rides every step.
           const self = this
           return (async function* () {
-            const messages = await convertImagesToEvidence(ctx, options.messages, options.signal, self)
+            const converted = await convertImagesToEvidence(ctx, options.messages, options.signal, self)
+            const messages = restoreUpstreamSource(converted, providerId, upstream)
             yield* ctx.llm.stream({ ...options, provider: upstream, messages })
           })()
         },
