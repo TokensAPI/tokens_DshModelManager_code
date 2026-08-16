@@ -102,6 +102,10 @@ function defaultRunCli(bin: string, args: string[], timeoutMs: number): string {
         encoding: 'utf-8',
         timeout: timeoutMs,
         stdio: 'pipe',
+        // A recognised shim hands back the whole environment its child would
+        // have got, so the probe runs under what the shell would have given
+        // it rather than under ours (issue #43).
+        ...(plan.env ? { env: plan.env } : {}),
     });
 }
 

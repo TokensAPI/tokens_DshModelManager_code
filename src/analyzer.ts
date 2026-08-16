@@ -538,16 +538,31 @@ export function runCommand(
 ): Promise<CommandResult> {
     const runStartedAt = Date.now();
     return new Promise((resolve, reject) => {
+        // A provider may mark its own child, which is how kimi-cli tells a
+        // modlens started by kimi that running kimi again would loop.
+        const childEnv = invocation.env ? { ...process.env, ...invocation.env } : undefined;
         // On Windows the bare CLI name resolves to the real file and a .cmd
         // shim is rewritten to a direct `node <entry>` spawn (issue #31);
         // POSIX passes through.
-        const plan = resolveSpawnPlan(invocation.command, invocation.args);
+        // Built before planning, not after: on Windows the plan can depend on
+        // the environment and the working directory (which `node` a shim's
+        // branch resolves), and a planner reading one environment while the
+        // child receives another is its own way for the plan and the shell to
+        // disagree (issue #43).
+        const plan = resolveSpawnPlan(
+            invocation.command,
+            invocation.args,
+            childEnv ?? process.env,
+            invocation.cwd,
+        );
+        // A shim that edits the environment hands back the whole thing.
+        const spawnEnv = plan.env ?? childEnv;
         const child = spawn(plan.command, plan.args, {
             cwd: invocation.cwd,
             stdio: ['ignore', 'pipe', 'pipe'],
             // A provider may mark its own child, which is how kimi-cli tells a
             // modlens started by kimi that running kimi again would loop.
-            ...(invocation.env ? { env: { ...process.env, ...invocation.env } } : {}),
+            ...(spawnEnv ? { env: spawnEnv } : {}),
         });
 
         // Decoders keep state across chunks: a multi-byte character split down the

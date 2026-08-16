@@ -234,3 +234,17 @@ describe('kimi-cli only when chosen (#44)', () => {
         expect(chain).not.toContain('kimi-cli');
     });
 });
+
+describe('PATH is read the way the platform reads it (#43)', () => {
+    // process.env is case-insensitive on Windows, but a plain object built by
+    // spreading it is not, and Windows usually spells the key `Path`. Reading
+    // env.PATH off that object found nothing, so every CLI read as missing.
+    // The fold is Windows-only on purpose: POSIX names are case-sensitive,
+    // and accepting `Path` there would run a program found through a variable
+    // POSIX does not define as the search path.
+    it('does not accept a differently cased key on POSIX', () => {
+        const dir = pathWith('agy');
+        expect(findOnPath('agy', { Path: dir })).toBeNull();
+        expect(findOnPath('agy', { PATH: dir })).toBe(path.join(dir, 'agy'));
+    });
+});

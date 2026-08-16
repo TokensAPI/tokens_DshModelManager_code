@@ -1,13 +1,24 @@
+import * as childProcess from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { parseCmdShimTarget, resolveSpawnPlan } from './winExec.ts';
+import { type Existence, recognizeShim, resolveSpawnPlan } from './winExec.ts';
 
-// Every fixture below is the verbatim output of a real shim generator, run
-// against a real file: npm's cmd-shim@9 and pnpm's @zkochan/cmd-shim@9. The
-// interpreter must be read out of the shim, never guessed from the entry's
-// extension — cmd-shim happily generates a python shim for a file named .js.
+// Every fixture here is verbatim output from a real generator, each version
+// installed in its own directory so one cannot quietly overwrite another:
+// `cmd-shim` 4.1.0, 9.0.1 and 9.0.2 run directly, and `@zkochan/cmd-shim`
+// 9.0.7 read out of its own generateCmdShim source, because that one only
+// writes the .cmd on win32. Hand-written fixtures are what let six rounds of
+// defects hide: they agreed with the parser because the same head wrote both.
 
-/** npm, `#!/usr/bin/env node`. */
-const NPM_NODE = `@ECHO off
+/**
+ * npm 4.1.0 and 9.0.1, byte-identical. The PATHEXT edit is inside the ELSE
+ * block, which is inside SETLOCAL, and the execution line begins with
+ * `endLocal`: the edit is undone before the lookup and before the child
+ * starts. npm fixed that in 9.0.2 (npm/cmd-shim#64).
+ */
+const NPM_NODE_LEGACY = `@ECHO off
 GOTO start
 :find_dp0
 SET dp0=%~dp0
@@ -23,394 +34,635 @@ IF EXIST "%dp0%\\node.exe" (
   SET PATHEXT=%PATHEXT:;.JS;=;%
 )
 
-endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\..\\cli.js" %*`;
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\..\\pkg\\cli.js" %*`;
 
-/** npm, `#!/usr/bin/env node --max-old-space-size=4096 --no-warnings`. */
-const NPM_NODE_FLAGS = NPM_NODE.replace(
-    '"%_prog%"  "%dp0%\\..\\cli.js" %*',
-    '"%_prog%" --max-old-space-size=4096 --no-warnings "%dp0%\\..\\cli-flags.js" %*',
-);
+/**
+ * npm 9.0.2: no PATHEXT inside the block, and the edit moved onto the
+ * execution line after `endLocal`, where it does reach the child, on either
+ * arm, because the line is shared.
+ */
+const NPM_NODE_CURRENT = `@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
 
-/** npm, `#!/usr/bin/env python`, entry named .js — the trap. */
-const NPM_PYTHON_JS = NPM_NODE.replaceAll('node.exe', 'python.exe')
-    .replace('SET "_prog=node"', 'SET "_prog=python"')
-    .replace('"%dp0%\\..\\cli.js"', '"%dp0%\\..\\python-named.js"');
+IF EXIST "%dp0%\\node.exe" (
+  SET "_prog=%dp0%\\node.exe"
+) ELSE (
+  SET "_prog=node"
+)
 
-/** npm, a Node bin with no file extension at all. */
-const NPM_NODE_NOEXT = NPM_NODE.replace('"%dp0%\\..\\cli.js"', '"%dp0%\\..\\entry-noext"');
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & set PATHEXT=%PATHEXT:;.JS;=;% & "%_prog%"  "%dp0%\\..\\pkg\\cli.js" %*`;
 
-/** npm, `#!/usr/bin/env FOO=bar node`: carries an env assignment. */
-const NPM_NODE_ENV_KV = NPM_NODE.replace('CALL :find_dp0\n', 'CALL :find_dp0\n@SET FOO=bar\n');
+/** npm, a compiled binary. Identical in 4.1.0 and 9.0.2. */
+const NPM_NATIVE = `@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+"%dp0%\\..\\pkg\\prog.exe"   %*`;
 
-/** pnpm, standard. */
+/** pnpm, a Node entry. */
 const PNPM_NODE = `@SETLOCAL
 @IF EXIST "%~dp0\\node.exe" (
-  "%~dp0\\node.exe"  "%~dp0\\..\\cli.js" %*
+  "%~dp0\\node.exe"  "%~dp0\\..\\pkg\\cli.js" %*
 ) ELSE (
   @SET PATHEXT=%PATHEXT:;.JS;=;%
-  node  "%~dp0\\..\\cli.js" %*
+  node  "%~dp0\\..\\pkg\\cli.js" %*
 )`;
 
-/** pnpm with nodePath: prepends NODE_PATH, which a direct spawn would drop. */
-const PNPM_NODEPATH = `@SETLOCAL
-@IF NOT DEFINED NODE_PATH (
-  @SET "NODE_PATH=C;\\extra modules"
-) ELSE (
-  @SET "NODE_PATH=C;\\extra modules;%NODE_PATH%"
-)
-@IF EXIST "%~dp0\\node.exe" (
-  "%~dp0\\node.exe"  "%~dp0\\..\\cli.js" %*
-) ELSE (
-  @SET PATHEXT=%PATHEXT:;.JS;=;%
-  node  "%~dp0\\..\\cli.js" %*
-)`;
+/** pnpm, a compiled binary. */
+const PNPM_NATIVE = `@SETLOCAL
+@"%~dp0\\..\\pkg\\prog.exe"  %*`;
 
-/** pnpm with nodeExecPath: pins one Node binary. */
-const PNPM_NODEEXEC = `@SETLOCAL
-@"C:\\runtimes\\node20\\node.exe"  "%~dp0\\..\\cli.js" %*`;
+/** pnpm with nodeExecPath: one pinned absolute Node, no branch. */
+const PNPM_PINNED = `@SETLOCAL
+@"C:\\runtimes\\node20\\node.exe"  "%~dp0\\..\\pkg\\cli.js" %*`;
 
-/** npm, a shebang whose flag value is itself a shim-relative path. */
-const NPM_DP0_FLAG = NPM_NODE.replace(
-    '"%_prog%"  "%dp0%\\..\\cli.js" %*',
-    '"%_prog%" --require "%dp0%\\..\\preload.cjs" "%dp0%\\..\\cli.js" %*',
-);
+const SHIM = 'C:\\proj\\node_modules\\.bin\\thing.CMD';
+const SHIM_DIR = 'C:\\proj\\node_modules\\.bin';
 
-/** pnpm progArgs holding a shim-relative path, which cmd would expand. */
-const PNPM_DP0_PROGARG = PNPM_NODE.replaceAll(
-    '"%~dp0\\..\\cli.js" %*',
-    '"%~dp0\\..\\cli.js" --config "%~dp0\\..\\config.json" %*',
-);
+interface DepOverrides {
+    existence?: (p: string) => Existence;
+    resolveOnPath?: (bin: string) => string | null;
+    readFileSync?: () => string;
+}
 
-/** pnpm across drives: path.relative gives an absolute entry, no %dp0% at all. */
-const PNPM_CROSS_DRIVE = '@SETLOCAL\r\n@node  "D:\\provider\\cli.js" %*\r\n';
+function deps(overrides: DepOverrides = {}) {
+    return {
+        platform: 'win32' as NodeJS.Platform,
+        readFileSync: overrides.readFileSync ?? (() => ''),
+        resolveOnPath: overrides.resolveOnPath ?? ((bin: string) => `C:\\path\\${bin}.exe`),
+        existence: overrides.existence ?? ((): Existence => 'absent'),
+    };
+}
 
-/** npm, `#!/usr/bin/env node --require ./preload.cjs`: a flag with a separate value. */
-const NPM_SPACED_FLAG = NPM_NODE.replace(
-    '"%_prog%"  "%dp0%\\..\\cli.js" %*',
-    '"%_prog%" --require ./preload.cjs "%dp0%\\..\\spaced.js" %*',
-);
+/** An existence stub where exactly one path is there. */
+const onlyPresent =
+    (target: string) =>
+    (probe: string): Existence =>
+        probe.toLowerCase() === target.toLowerCase() ? 'present' : 'absent';
 
-/** pnpm with progArgs: fixed program arguments, after the entry. */
-const PNPM_PROGARGS = PNPM_NODE.replaceAll(
-    '"%~dp0\\..\\cli.js" %*',
-    '"%~dp0\\..\\cli.js" --fixed-one fixed-value %*',
-);
+const recognize = (
+    content: string,
+    overrides: DepOverrides = {},
+    env: NodeJS.ProcessEnv = {},
+    cwd?: string,
+) => recognizeShim(SHIM, content, env, cwd, deps(overrides));
 
-describe('parseCmdShimTarget', () => {
-    it('reads npm Node shims, resolving the entry against the shim directory', () => {
-        const target = parseCmdShimTarget('C:\\npm\\bin\\claude.cmd', NPM_NODE);
-        expect(target?.args).toEqual(['C:\\npm\\cli.js']);
-        expect(target?.nodeExec).toBeUndefined();
+const resolveShim = (
+    content: string,
+    overrides: DepOverrides = {},
+    env: NodeJS.ProcessEnv = {},
+    cwd?: string,
+    args: string[] = [],
+) =>
+    resolveSpawnPlan('thing', args, env, cwd, {
+        ...deps(overrides),
+        readFileSync: () => content,
+        resolveOnPath: () => SHIM,
     });
 
-    it('keeps the interpreter flags a shebang injected, in order', () => {
-        const target = parseCmdShimTarget('C:\\npm\\bin\\x.cmd', NPM_NODE_FLAGS);
-        expect(target?.args).toEqual([
+describe('the four real generator templates', () => {
+    it('npm Node, with the Node beside the shim present', () => {
+        const recipe = resolveShim(NPM_NODE_LEGACY, { existence: () => 'present' });
+        expect(recipe).toEqual({
+            command: `${SHIM_DIR}\\node.exe`,
+            args: ['C:\\proj\\node_modules\\pkg\\cli.js'],
+        });
+    });
+
+    it('npm 4.1.0 and 9.0.1 fall back without the PATHEXT edit', () => {
+        // The edit sits inside SETLOCAL and endLocal runs first, so cmd looks
+        // node up under the ORIGINAL environment and the child gets it
+        // unchanged. Honouring the edit would reproduce the bug npm fixed.
+        const recipe = resolveShim(
+            NPM_NODE_LEGACY,
+            { existence: onlyPresent('C:\\nodejs\\node.EXE') },
+            { PATHEXT: '.COM;.EXE;.JS;.VBS', PATH: 'C:\\nodejs' },
+        );
+        expect(recipe?.command).toBe('C:\\nodejs\\node.EXE');
+        expect(recipe?.args).toEqual(['C:\\proj\\node_modules\\pkg\\cli.js']);
+        expect(recipe?.env).toBeUndefined();
+    });
+
+    it('npm 9.0.2 carries the edit, on whichever arm ran', () => {
+        // Moved after endLocal and onto the shared line, so it survives and
+        // is not branch-local.
+        const env = { PATHEXT: '.COM;.EXE;.JS;.VBS', PATH: 'C:\\nodejs' };
+        const present = resolveShim(NPM_NODE_CURRENT, { existence: () => 'present' }, env);
+        expect(present?.command).toBe(`${SHIM_DIR}\\node.exe`);
+        expect(present?.env?.PATHEXT).toBe('.COM;.EXE;.VBS');
+
+        const absent = resolveShim(
+            NPM_NODE_CURRENT,
+            { existence: onlyPresent('C:\\nodejs\\node.EXE') },
+            env,
+        );
+        expect(absent?.command).toBe('C:\\nodejs\\node.EXE');
+        expect(absent?.env?.PATHEXT).toBe('.COM;.EXE;.VBS');
+    });
+
+    it('npm native', () => {
+        expect(resolveShim(NPM_NATIVE)).toEqual({
+            command: 'C:\\proj\\node_modules\\pkg\\prog.exe',
+            args: [],
+            env: { dp0: `${SHIM_DIR}\\` },
+        });
+    });
+
+    it('pnpm Node, both arms', () => {
+        expect(resolveShim(PNPM_NODE, { existence: () => 'present' })).toEqual({
+            command: `${SHIM_DIR}\\node.exe`,
+            args: ['C:\\proj\\node_modules\\pkg\\cli.js'],
+        });
+        const onPath = resolveShim(
+            PNPM_NODE,
+            { existence: onlyPresent('C:\\nodejs\\node.EXE') },
+            { PATHEXT: '.COM;.EXE;.JS;.VBS', PATH: 'C:\\nodejs' },
+        );
+        expect(onPath?.command).toBe('C:\\nodejs\\node.EXE');
+        // pnpm never calls endlocal, so its edit does reach the child, but
+        // only on this arm.
+        expect(onPath?.env?.PATHEXT).toBe('.COM;.EXE;.VBS');
+    });
+
+    it('pnpm native', () => {
+        expect(resolveShim(PNPM_NATIVE)).toEqual({
+            command: 'C:\\proj\\node_modules\\pkg\\prog.exe',
+            args: [],
+        });
+    });
+
+    it('pnpm with a pinned Node runtime', () => {
+        expect(resolveShim(PNPM_PINNED)).toEqual({
+            command: 'C:\\runtimes\\node20\\node.exe',
+            args: ['C:\\proj\\node_modules\\pkg\\cli.js'],
+        });
+    });
+
+    it('carries shebang flags through in order', () => {
+        const withFlags = NPM_NODE_LEGACY.replace(
+            '"%_prog%"  "%dp0%\\..\\pkg\\cli.js" %*',
+            '"%_prog%" --max-old-space-size=4096 --no-warnings "%dp0%\\..\\pkg\\cli.js" %*',
+        );
+        expect(recognize(withFlags, { existence: () => 'present' })?.args).toEqual([
             '--max-old-space-size=4096',
             '--no-warnings',
-            'C:\\npm\\cli-flags.js',
+            'C:\\proj\\node_modules\\pkg\\cli.js',
         ]);
     });
+});
 
-    it('declines a python shim whose entry is named .js', () => {
-        // The extension is not evidence of the interpreter: running this
-        // under Node would execute a Python program as JavaScript.
-        expect(parseCmdShimTarget('C:\\npm\\bin\\tool.cmd', NPM_PYTHON_JS)).toBeNull();
+describe('reachability decides, not line shape (#43)', () => {
+    // The defect that withdrew this work from 3.17.1: cmd runs nothing when
+    // the condition is false, and the old reader still produced a plan that
+    // spawned the provider. A loud failure became a silent wrong action.
+    it('does not treat a lone false branch as if it ran', () => {
+        const singleBranch = `@IF EXIST "Z:\\not-here" (
+  @node "C:\\pkg\\cli.js" %*
+)`;
+        expect(recognize(singleBranch)).toBeNull();
     });
 
-    it('accepts a Node bin with no file extension', () => {
-        const target = parseCmdShimTarget('C:\\npm\\bin\\tool.cmd', NPM_NODE_NOEXT);
-        expect(target?.args).toEqual(['C:\\npm\\entry-noext']);
+    it('does not treat a nested false branch as if it ran', () => {
+        const nested = `@IF EXIST "Z:\\not-here" (
+  @IF EXIST "C:\\pkg\\cli.js" (
+    @node "C:\\pkg\\cli.js" %*
+  )
+)`;
+        expect(recognize(nested)).toBeNull();
     });
 
-    it('declines a shim carrying an environment assignment', () => {
-        // `env FOO=bar node` renders as @SET FOO=bar; a direct spawn would
-        // silently drop it, so the shim is left to the fallback instead.
-        expect(parseCmdShimTarget('C:\\npm\\bin\\kv.cmd', NPM_NODE_ENV_KV)).toBeNull();
+    it('does not accept a jump over the execution line', () => {
+        const jumped = `GOTO done
+@node "C:\\pkg\\cli.js" %*
+:done`;
+        expect(recognize(jumped)).toBeNull();
     });
 
-    it('reads pnpm shims, and declines the NODE_PATH variant', () => {
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODE)?.args).toEqual([
-            'C:\\pnpm\\cli.js',
-        ]);
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODEPATH)).toBeNull();
+    it('declines a template with an extra command spliced in', () => {
+        const spliced = NPM_NODE_LEGACY.replace(
+            'title %COMSPEC% & "%_prog%"',
+            'title %COMSPEC% & whoami & "%_prog%"',
+        );
+        expect(recognize(spliced, { existence: () => 'present' })).toBeNull();
     });
 
-    it('honours a pinned Node binary instead of the running one', () => {
-        const target = parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_NODEEXEC);
-        expect(target?.args).toEqual(['C:\\pnpm\\cli.js']);
-        expect(target?.nodeExec).toBe('C:\\runtimes\\node20\\node.exe');
+    it('declines a template with an extra line added anywhere', () => {
+        expect(recognize(`${NPM_NATIVE}\n@whoami`)).toBeNull();
+        expect(recognize(`@whoami\n${PNPM_NATIVE}`)).toBeNull();
+    });
+});
+
+describe('the existence test is narrow on purpose', () => {
+    it('only ever tests the Node beside the shim', () => {
+        const tested: string[] = [];
+        recognize(NPM_NODE_LEGACY, {
+            existence: (p) => {
+                tested.push(p);
+                return 'present';
+            },
+        });
+        expect(tested).toEqual([`${SHIM_DIR}\\node.exe`]);
     });
 
-    it('keeps a flag value that sits in its own token', () => {
-        // `--require ./preload.cjs` is two tokens: dropping the value and
-        // sliding the entry into its place ran the wrong file.
-        const target = parseCmdShimTarget('C:\\npm\\bin\\x.cmd', NPM_SPACED_FLAG);
-        expect(target?.args).toEqual(['--require', './preload.cjs', 'C:\\npm\\spaced.js']);
+    it('declines when the condition names anything else', () => {
+        // The operand comes out of an untrusted file. Testing what it asks
+        // for makes it a file-existence oracle, and a UNC or device path
+        // makes a "check" reach the network.
+        const elsewhere = PNPM_NODE.replace('"%~dp0\\node.exe" (', '"\\\\server\\share\\probe" (');
+        expect(recognize(elsewhere, { existence: () => 'present' })).toBeNull();
     });
 
-    it('keeps fixed program arguments that sit after the entry', () => {
-        // cmd-shim's progArgs land behind the entry, and they belong ahead of
-        // whatever the caller passes.
-        const target = parseCmdShimTarget('C:\\pnpm\\bin\\tool.cmd', PNPM_PROGARGS);
-        expect(target?.args).toEqual(['C:\\pnpm\\cli.js', '--fixed-one', 'fixed-value']);
-    });
-
-    it('expands the shim-directory variable wherever it appears, not just on the entry', () => {
-        // cmd substitutes %dp0% in every token it passes. A flag value and a
-        // fixed argument can both be shim-relative paths, and handing Node a
-        // literal %dp0% would point it at nothing.
-        expect(parseCmdShimTarget('C:\\npm\\bin\\x.cmd', NPM_DP0_FLAG)?.args).toEqual([
-            '--require',
-            'C:\\npm\\preload.cjs',
-            'C:\\npm\\cli.js',
-        ]);
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', PNPM_DP0_PROGARG)?.args).toEqual([
-            'C:\\pnpm\\cli.js',
-            '--config',
-            'C:\\pnpm\\config.json',
-        ]);
-    });
-
-    it('handles an absolute entry with no shim-directory reference at all', () => {
-        // pnpm writes one when the shim and the package sit on different
-        // drives, since path.relative cannot bridge them.
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', PNPM_CROSS_DRIVE)?.args).toEqual([
-            'D:\\provider\\cli.js',
-        ]);
-    });
-
-    it('declines tokens wearing cmd syntax whose meaning it cannot prove', () => {
-        // Reproducing cmd's parser is not on the table, so quoting inside a
-        // token, a caret escape, and batch's positional parameters each make
-        // the shim undecidable. Declining sends the caller to a nameable
-        // spawn error instead of an argv that might differ from the real one.
-        const withFixed = (fixed: string) =>
-            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
-        for (const fixed of [
-            '--label="two words"',
-            '--json="{\\"k\\":1}"',
-            '--config="%~dp0\\..\\c.json"',
-            'fixed^&value',
-            '%1',
-            '%~1',
-            '--home %dp0x%\\x',
-        ]) {
-            expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed(fixed)), fixed).toBeNull();
-        }
-    });
-
-    it('declines unquoted cmd control characters, keeps them literal inside quotes', () => {
-        // Unquoted, `&` ends the command: the text after it never reaches the
-        // program as an argument. Inside quotes it is an ordinary character,
-        // which is how any generator writes a path holding one.
-        const withFixed = (fixed: string) =>
-            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
-        for (const fixed of [
-            'fixed&value',
-            'fixed&&value',
-            'fixed|value',
-            'fixed>capture.txt',
-            'fixed<input.txt',
-        ]) {
-            expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed(fixed)), fixed).toBeNull();
-        }
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('"R&D value"'))?.args).toEqual([
-            'C:\\pnpm\\cli.js',
-            'R&D value',
-        ]);
-    });
-
-    it('keeps a quoted run glued to the text touching it, and declines the pair', () => {
-        // `"quoted"suffix` is ONE argument to Windows. Pulling the quoted half
-        // out would hand the program two, so the whole argument is refused.
-        const withFixed = (fixed: string) =>
-            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('"quoted"suffix'))).toBeNull();
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('prefix"quoted"'))).toBeNull();
-        // A flag whose value is quoted is one argument too, and equally
-        // unprovable, rather than two half-tokens.
+    it('declines a shim living on a UNC path outright', () => {
         expect(
-            parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('--label="two words"')),
+            recognizeShim('\\\\server\\share\\bin\\thing.CMD', PNPM_NATIVE, {}, undefined, deps()),
         ).toBeNull();
     });
 
-    it('requires the forwarder to be the last thing on the line', () => {
-        // A token after `%*` is passed AFTER the caller's arguments, which
-        // appending them at the end cannot reproduce.
-        for (const line of [
-            '@node "%~dp0\\..\\cli.js" %* trailing',
-            '@node "%~dp0\\..\\cli.js" %* "%*"',
-        ]) {
-            expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', `${line}\r\n`), line).toBeNull();
-        }
+    it('declines when existence cannot be determined', () => {
+        // A permission error is not an answer, and existsSync would call it
+        // absent, which silently changes which Node runs.
+        expect(recognize(NPM_NODE_LEGACY, { existence: () => 'unknown' })).toBeNull();
     });
 
-    it('declines a line it could not read end to end', () => {
-        // An unpaired quote makes the argument pattern skip past it, and the
-        // text after would be read as separate arguments while cmd keeps them
-        // in one quoted run. Leftover characters mean the line was not
-        // understood.
-        const withFixed = (fixed: string) =>
-            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('"two words'))).toBeNull();
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('"'))).toBeNull();
+    it('declines when the bare node it would fall back to is not findable', () => {
+        // cmd would fail here too. Reaching for our own binary instead would
+        // run a different Node than the shell.
+        expect(
+            recognize(NPM_NODE_LEGACY, { existence: () => 'absent', resolveOnPath: () => null }),
+        ).toBeNull();
+    });
+});
+
+describe('tokens must be provably literal', () => {
+    it('declines an entry cmd would expand from the environment', () => {
+        expect(
+            recognize(NPM_NODE_LEGACY.replace('%dp0%\\..\\pkg\\cli.js', '%TARGET%\\cli.js'), {
+                existence: () => 'present',
+            }),
+        ).toBeNull();
     });
 
-    it('declines unquoted parentheses, which open and close the template blocks', () => {
-        const withFixed = (fixed: string) =>
-            PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', `"%~dp0\\..\\cli.js" ${fixed} %*`);
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('fixed)value'))).toBeNull();
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withFixed('fixed(value'))).toBeNull();
+    it('declines an entry named by a positional parameter', () => {
+        expect(
+            recognize(NPM_NODE_LEGACY.replace('%dp0%\\..\\pkg\\cli.js', '%1\\cli.js'), {
+                existence: () => 'present',
+            }),
+        ).toBeNull();
     });
 
-    it('declines a branch that runs the program without forwarding at all', () => {
-        // Reading only the lines that forward arguments would approve this
-        // shim for something the other branch does not do.
-        const branches = [
-            '@IF EXIST "%~dp0\\node.exe" (',
-            '  "%~dp0\\node.exe" "%~dp0\\..\\cli.js" %*',
-            ') ELSE (',
-            '  node "%~dp0\\..\\cli.js" fixed-only',
-            ')',
-        ].join('\r\n');
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', branches)).toBeNull();
+    it('declines a PATHEXT edit carrying anything but an extension removal', () => {
+        expect(
+            recognize(NPM_NODE_LEGACY.replace(';.JS;=;%', ';.JS;=;anything at all %'), {
+                existence: () => 'absent',
+            }),
+        ).toBeNull();
     });
 
-    it('declines a file carrying a line it does not recognize at all', () => {
-        const extra = `${PNPM_NODE}\r\n@del /q "%~dp0\\..\\cli.js"`;
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', extra)).toBeNull();
-    });
-
-    it('declines when one execution branch is unprovable, even if another is fine', () => {
-        // The machine picks the branch, not the parser: proving the ELSE while
-        // the IF forwards twice would leave the taken path unchecked.
-        const branches = [
-            '@IF EXIST "%~dp0\\node.exe" (',
-            '  "%~dp0\\node.exe" "%~dp0\\..\\cli.js" %* %*',
-            ') ELSE (',
-            '  node "%~dp0\\..\\cli.js" %*',
-            ')',
-        ].join('\r\n');
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', branches)).toBeNull();
-    });
-
-    it('declines a line that forwards the caller arguments more than once', () => {
-        // `node <entry> %* %*` passes each caller argument twice; appending
-        // them once is a different argv, so the shim is not reproducible.
-        const twice = PNPM_NODE.replaceAll('"%~dp0\\..\\cli.js" %*', '"%~dp0\\..\\cli.js" %* %*');
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', twice)).toBeNull();
-    });
-
-    it('declines a token carrying an environment variable it cannot expand', () => {
-        const withEnvVar = PNPM_NODE.replaceAll(
-            '"%~dp0\\..\\cli.js" %*',
-            '"%~dp0\\..\\cli.js" --home "%USERPROFILE%\\x" %*',
+    it('declines when the two pnpm arms launch different scripts', () => {
+        const mismatched = PNPM_NODE.replace(
+            '  node  "%~dp0\\..\\pkg\\cli.js" %*',
+            '  node  "%~dp0\\..\\pkg\\other.js" %*',
         );
-        expect(parseCmdShimTarget('C:\\pnpm\\bin\\t.cmd', withEnvVar)).toBeNull();
-    });
-
-    it('declines content with no forwarded arguments', () => {
-        expect(parseCmdShimTarget('C:\\npm\\x.cmd', '@echo off\nnode cli.js')).toBeNull();
+        expect(recognize(mismatched, { existence: () => 'absent' })).toBeNull();
     });
 });
 
 describe('resolveSpawnPlan', () => {
-    it('passes through untouched off Windows', () => {
-        const plan = resolveSpawnPlan('claude', ['-p', 'hello'], { PATH: '/usr/bin' });
-        expect(plan).toEqual({ command: 'claude', args: ['-p', 'hello'] });
+    it('passes everything through on POSIX', () => {
+        const plan = resolveSpawnPlan('claude', ['-p', 'x'], {}, undefined, {
+            ...deps(),
+            platform: 'darwin' as NodeJS.Platform,
+        });
+        expect(plan).toEqual({ command: 'claude', args: ['-p', 'x'] });
     });
 
-    // The win32 branch is driven with injected deps so it runs on every
-    // platform: a real spawn is not needed to prove the plan is correct.
-    const winDeps = (files: Record<string, string>, onPath: Record<string, string>) => ({
-        platform: 'win32' as NodeJS.Platform,
-        readFileSync: (p: string) => {
-            const found = files[p];
-            if (found === undefined) throw new Error(`ENOENT ${p}`);
-            return found;
-        },
-        resolveOnPath: (bin: string) => onPath[bin] ?? null,
-        execPath: 'C:\\Program Files\\nodejs\\node.exe',
-    });
-
-    it('rewrites a bare-name shim to a direct node spawn, multi-line prompt intact', () => {
-        const shimPath = 'C:\\npm\\bin\\claude.cmd';
-        const prompt = 'line one\nline two & echo not-a-command';
-        const plan = resolveSpawnPlan(
-            'claude',
-            ['-p', prompt],
-            { PATH: 'C:\\npm\\bin' },
-            winDeps({ [shimPath]: NPM_NODE }, { claude: shimPath }),
-        );
-        expect(plan.command).toBe('C:\\Program Files\\nodejs\\node.exe');
-        expect(plan.args[0]).toBe('C:\\npm\\cli.js');
-        // The prompt rides as one argv element: newlines and & survive,
-        // because no cmd.exe parses this line.
-        expect(plan.args[plan.args.length - 1]).toBe(prompt);
-    });
-
-    it('rewrites an absolute --provider-bin .cmd path too', () => {
-        const shimPath = 'C:\\tools\\claude.CMD';
-        const plan = resolveSpawnPlan(
-            shimPath,
-            ['-p', 'x'],
-            {},
-            winDeps({ [shimPath]: NPM_NODE }, {}),
-        );
-        expect(plan.command).toBe('C:\\Program Files\\nodejs\\node.exe');
-        expect(plan.args[0]).toBe('C:\\cli.js');
-    });
-
-    it('orders the spawn as node flags, entry, shim args, then the user args', () => {
-        const shimPath = 'C:\\pnpm\\bin\\tool.cmd';
-        const plan = resolveSpawnPlan(
-            'tool',
-            ['-p', 'prompt'],
-            {},
-            winDeps({ [shimPath]: PNPM_PROGARGS }, { tool: shimPath }),
-        );
+    it('appends the caller arguments after the template ones, unescaped', () => {
+        const plan = resolveSpawnPlan('thing', ['-p', 'read this\nand this'], {}, undefined, {
+            ...deps({ readFileSync: () => NPM_NODE_LEGACY, existence: () => 'present' }),
+            resolveOnPath: () => SHIM,
+        });
+        expect(plan.command).toBe(`${SHIM_DIR}\\node.exe`);
+        // Nothing goes through a shell, so a multi-line prompt stays one argv
+        // entry rather than being cut at its first newline.
         expect(plan.args).toEqual([
-            'C:\\pnpm\\cli.js',
-            '--fixed-one',
-            'fixed-value',
+            'C:\\proj\\node_modules\\pkg\\cli.js',
             '-p',
-            'prompt',
+            'read this\nand this',
         ]);
     });
 
-    it('spawns the pinned Node when the shim names one', () => {
-        const shimPath = 'C:\\pnpm\\bin\\tool.cmd';
-        const plan = resolveSpawnPlan(
-            'tool',
-            ['x'],
-            {},
-            winDeps({ [shimPath]: PNPM_NODEEXEC }, { tool: shimPath }),
+    it('leaves an unrecognised shim to the caller own spawn error', () => {
+        const plan = resolveSpawnPlan('thing', ['-p', 'x'], {}, undefined, {
+            ...deps({ readFileSync: () => '@whoami %*' }),
+            resolveOnPath: () => SHIM,
+        });
+        expect(plan.command).toBe(SHIM);
+        expect(plan.args).toEqual(['-p', 'x']);
+        expect(plan.env).toBeUndefined();
+    });
+
+    it('is unchanged for a plain executable', () => {
+        const plan = resolveSpawnPlan('C:\\tools\\agy.exe', ['-p'], {}, undefined, deps());
+        expect(plan).toEqual({ command: 'C:\\tools\\agy.exe', args: ['-p'] });
+    });
+
+    it.each([
+        'bin\\thing.cmd',
+        'C:bin\\thing.cmd',
+        '\\bin\\thing.cmd',
+        '\\\\server\\share\\thing.cmd',
+        '\\\\?\\C:\\bin\\thing.cmd',
+        '\\\\.\\PIPE\\thing.cmd',
+    ])('refuses %s before reading it', (command) => {
+        const reads: string[] = [];
+        const probes: string[] = [];
+        const plan = resolveSpawnPlan(command, ['rem noop'], {}, undefined, {
+            ...deps(),
+            readFileSync: (target) => {
+                reads.push(target);
+                return PNPM_NATIVE;
+            },
+            existence: (target) => {
+                probes.push(target);
+                return 'present';
+            },
+        });
+        expect(reads, command).toEqual([]);
+        expect(probes, command).toEqual([]);
+        expect(plan, command).toEqual({ command, args: ['rem noop'] });
+    });
+
+    it('declines a false branch through the stable planner entry point', () => {
+        const singleBranch = `@IF EXIST "Z:\\not-here" (
+  @node "C:\\pkg\\cli.js" %*
+)`;
+        expect(resolveShim(singleBranch, {}, {}, undefined, ['placeholder'])).toEqual({
+            command: SHIM,
+            args: ['placeholder'],
+        });
+    });
+});
+
+describe('the bare node lookup is cmd lookup (#43)', () => {
+    const env = { PATHEXT: '.COM;.EXE;.JS;.VBS', PATH: 'C:\\nodejs' };
+
+    it('tries the working directory before PATH, the way cmd does', () => {
+        const recipe = recognize(
+            NPM_NODE_LEGACY,
+            { existence: onlyPresent('C:\\work\\node.EXE') },
+            env,
+            'C:\\work',
         );
-        expect(plan.command).toBe('C:\\runtimes\\node20\\node.exe');
+        expect(recipe?.command).toBe('C:\\work\\node.EXE');
     });
 
-    it('leaves a declined shim alone so the spawn error names the command', () => {
-        const shimPath = 'C:\\npm\\bin\\tool.cmd';
-        for (const content of [NPM_PYTHON_JS, NPM_NODE_ENV_KV, '@echo off\nunrecognized']) {
-            const plan = resolveSpawnPlan(
-                'tool',
-                ['x'],
-                {},
-                winDeps({ [shimPath]: content }, { tool: shimPath }),
-            );
-            expect(plan).toEqual({ command: shimPath, args: ['x'] });
-        }
+    it('skips the working directory when Windows is told to', () => {
+        // NoDefaultCurrentDirectoryInExePath is the documented opt-out, and
+        // ignoring it would run a node the shell would not have.
+        const recipe = recognize(
+            NPM_NODE_LEGACY,
+            { existence: onlyPresent('C:\\work\\node.EXE') },
+            { ...env, NoDefaultCurrentDirectoryInExePath: '1' },
+            'C:\\work',
+        );
+        expect(recipe).toBeNull();
     });
 
-    it('passes an unresolvable bare name through so ENOENT still names the CLI', () => {
-        const plan = resolveSpawnPlan('missing-cli', ['x'], {}, winDeps({}, {}));
-        expect(plan).toEqual({ command: 'missing-cli', args: ['x'] });
+    it('declines a hit that is itself a batch file', () => {
+        // Spawning that directly is the EINVAL this module exists to avoid,
+        // and there is no second shim to read.
+        const recipe = recognize(
+            NPM_NODE_LEGACY,
+            { existence: onlyPresent('C:\\nodejs\\node.CMD') },
+            { PATHEXT: '.CMD', PATH: 'C:\\nodejs' },
+        );
+        expect(recipe).toBeNull();
     });
 
-    it('passes an .exe straight through', () => {
-        const exe = 'C:\\tools\\agy.exe';
-        const plan = resolveSpawnPlan(exe, ['-i', 'a.png'], {}, winDeps({}, {}));
-        expect(plan).toEqual({ command: exe, args: ['-i', 'a.png'] });
+    it('declines when a probe cannot be answered', () => {
+        expect(recognize(NPM_NODE_LEGACY, { existence: () => 'unknown' }, env)).toBeNull();
+    });
+
+    it('leaves one PATHEXT key behind, whatever case it arrived in', () => {
+        const recipe = recognize(
+            NPM_NODE_CURRENT,
+            { existence: () => 'present' },
+            { PathExt: '.COM;.EXE;.JS;.VBS', PATH: 'C:\\nodejs' },
+        );
+        const keys = Object.keys(recipe?.env ?? {}).filter(
+            (key) => key.toLowerCase() === 'pathext',
+        );
+        expect(keys).toEqual(['PathExt']);
+        expect(recipe?.env?.PathExt).toBe('.COM;.EXE;.VBS');
+    });
+
+    it('declines a shim path that is not absolute', () => {
+        expect(recognizeShim('bin\\thing.CMD', PNPM_NATIVE, {}, undefined, deps())).toBeNull();
+    });
+
+    it('uses process.cwd when the child cwd is omitted', () => {
+        const inheritedCwdNode = path.win32.join(process.cwd(), 'node.EXE');
+        const plan = resolveShim(
+            NPM_NODE_LEGACY,
+            { existence: onlyPresent(inheritedCwdNode) },
+            env,
+        );
+        expect(plan.command).toBe(inheritedCwdNode);
+    });
+
+    it('anchors a relative PATH entry to the child cwd', () => {
+        const plan = resolveShim(
+            NPM_NODE_LEGACY,
+            {
+                existence: (candidate) =>
+                    ['C:\\work\\tools\\node.EXE', 'C:\\fallback\\node.EXE'].includes(candidate)
+                        ? 'present'
+                        : 'absent',
+            },
+            { PATHEXT: '.EXE', PATH: 'tools;C:\\fallback' },
+            'C:\\work',
+        );
+        expect(plan.command).toBe('C:\\work\\tools\\node.EXE');
+    });
+
+    it('checks the exact bare name before PATHEXT candidates', () => {
+        const probes: string[] = [];
+        const plan = resolveShim(
+            NPM_NODE_LEGACY,
+            {
+                existence: (candidate) => {
+                    probes.push(candidate);
+                    return candidate === 'C:\\tools\\node' || candidate === 'C:\\tools\\node.EXE'
+                        ? 'present'
+                        : 'absent';
+                },
+            },
+            { PATHEXT: '.EXE', PATH: 'C:\\tools', NoDefaultCurrentDirectoryInExePath: '1' },
+        );
+        expect(plan.command).toBe('C:\\tools\\node');
+        expect(probes).toEqual([`${SHIM_DIR}\\node.exe`, 'C:\\tools\\node']);
+    });
+
+    it('reads duplicate PATH and PATHEXT keys the way Node passes them', () => {
+        const plan = resolveShim(
+            NPM_NODE_LEGACY,
+            { existence: onlyPresent('C:\\right\\node.EXE') },
+            {
+                Path: 'C:\\wrong',
+                PATH: 'C:\\right',
+                PathExt: '.CMD',
+                PATHEXT: '.EXE',
+                NoDefaultCurrentDirectoryInExePath: '1',
+            },
+        );
+        expect(plan.command).toBe('C:\\right\\node.EXE');
+    });
+
+    it.skipIf(process.platform !== 'win32')(
+        'matches cmd lookup order and preserves an extensionless launch failure',
+        () => {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-winexec-'));
+            try {
+                const work = path.join(root, 'work');
+                const toolsDir = path.join(work, 'tools');
+                const shimDir = path.join(root, 'shims');
+                fs.mkdirSync(toolsDir, { recursive: true });
+                fs.mkdirSync(shimDir, { recursive: true });
+
+                const exactNode = path.join(toolsDir, 'node');
+                fs.writeFileSync(exactNode, '@rem noop\r\n@exit /b 7\r\n');
+                fs.copyFileSync(process.execPath, `${exactNode}.EXE`);
+                const shim = path.join(shimDir, 'thing.cmd');
+                fs.writeFileSync(shim, NPM_NODE_LEGACY);
+
+                const env = {
+                    ...process.env,
+                    PATH: 'tools',
+                    PATHEXT: '.EXE',
+                    NoDefaultCurrentDirectoryInExePath: '1',
+                };
+                const comspec =
+                    process.env.ComSpec ??
+                    path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe');
+                const actual = childProcess.spawnSync(comspec, ['/d', '/s', '/c', 'node'], {
+                    cwd: work,
+                    env,
+                });
+                expect(actual.status).not.toBe(0);
+
+                const plan = resolveSpawnPlan(shim, [], env, work, {
+                    platform: 'win32',
+                    readFileSync: (target) => fs.readFileSync(target, 'utf-8'),
+                    resolveOnPath: () => shim,
+                    existence: (target) => {
+                        try {
+                            fs.statSync(target);
+                            return 'present';
+                        } catch (error) {
+                            return (error as NodeJS.ErrnoException).code === 'ENOENT'
+                                ? 'absent'
+                                : 'unknown';
+                        }
+                    },
+                });
+                expect(plan.command.toLowerCase()).toBe(exactNode.toLowerCase());
+
+                const direct = childProcess.spawnSync(plan.command, plan.args, {
+                    cwd: work,
+                    env: plan.env ?? env,
+                });
+                expect(direct.status).not.toBe(0);
+            } finally {
+                fs.rmSync(root, { recursive: true, force: true });
+            }
+        },
+    );
+});
+
+describe('PATHEXT assignment semantics', () => {
+    it('performs cmd string substitution case-insensitively', () => {
+        const plan = resolveShim(
+            NPM_NODE_CURRENT,
+            { existence: () => 'present' },
+            { PATHEXT: '.COM;.EXE;.js;.VBS' },
+        );
+        expect(plan.env?.PATHEXT).toBe('.COM;.EXE;.VBS');
+    });
+
+    it('edits the duplicate-key value Node would pass to cmd', () => {
+        const plan = resolveShim(
+            NPM_NODE_CURRENT,
+            { existence: () => 'present' },
+            {
+                PathExt: '.COM;.js',
+                PATHEXT: '.COM;.EXE;.JS;.VBS',
+            },
+        );
+        const keys = Object.keys(plan.env ?? {}).filter((key) => key.toLowerCase() === 'pathext');
+        expect(keys).toEqual(['PATHEXT']);
+        expect(plan.env?.PATHEXT).toBe('.COM;.EXE;.VBS');
+    });
+});
+
+describe('child environment fidelity', () => {
+    it('carries npm native dp0 into the child environment', () => {
+        const plan = resolveShim(NPM_NATIVE, {}, { EXISTING: 'kept' });
+        expect(plan.env).toEqual({ EXISTING: 'kept', dp0: `${SHIM_DIR}\\` });
+    });
+});
+
+describe('directly spawnable pinned programs', () => {
+    it.each(['cmd', 'BAT'])('declines a pnpm pinned .%s program', (extension) => {
+        const batchPinned = PNPM_PINNED.replace('node.exe', `node.${extension}`);
+        expect(resolveShim(batchPinned, {}, {}, undefined, ['placeholder'])).toEqual({
+            command: SHIM,
+            args: ['placeholder'],
+        });
+    });
+});
+
+describe('an emptied PATHEXT is deleted, not blanked (#43)', () => {
+    // cmd's `SET NAME=` removes the variable rather than leaving it empty.
+    // The case that reaches it here is an environment with no PATHEXT at all:
+    // the substitution has nothing to work on, and writing an empty key back
+    // gave the bare lookup zero extension candidates, so it tested only an
+    // extensionless `node` and declined, while cmd falls back to its own
+    // default list and runs node.exe. The child also saw a variable cmd's
+    // child does not have.
+    const noPathext = { PATH: 'C:\\nodejs' };
+
+    it('writes no PATHEXT when there was none to edit', () => {
+        const plan = resolveShim(NPM_NODE_CURRENT, { existence: () => 'present' }, noPathext);
+        expect(Object.keys(plan.env ?? {}).some((k) => k.toUpperCase() === 'PATHEXT')).toBe(false);
+    });
+
+    it('still finds node.exe on the fallback arm, through the default list', () => {
+        const plan = resolveShim(
+            NPM_NODE_CURRENT,
+            { existence: onlyPresent('C:\\nodejs\\node.EXE') },
+            noPathext,
+        );
+        expect(plan.command).toBe('C:\\nodejs\\node.EXE');
+    });
+
+    it('keeps a PATHEXT that the edit merely shortened', () => {
+        // Only a genuinely empty result is a deletion. `.COM;.EXE;.JS;.VBS`
+        // still has entries after `.JS` goes, so the variable stays.
+        const plan = resolveShim(
+            NPM_NODE_CURRENT,
+            { existence: () => 'present' },
+            { PATHEXT: '.COM;.EXE;.JS;.VBS', PATH: 'C:\\nodejs' },
+        );
+        expect(plan.env?.PATHEXT).toBe('.COM;.EXE;.VBS');
     });
 });
