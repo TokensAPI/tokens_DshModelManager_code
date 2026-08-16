@@ -328,7 +328,7 @@ describe('the retired endpoint bindings tell their users (#42)', () => {
                     ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
                 },
             ),
-        ).toThrow(/ANTHROPIC_BASE_URL.*anthropic\.baseUrl.*gateway\.example/s);
+        ).toThrow(/ANTHROPIC_BASE_URL.*anthropic\.baseUrl.*\$ANTHROPIC_BASE_URL/s);
     });
 
     it('masks credentials the endpoint URL carries, since errors travel', () => {
@@ -347,6 +347,10 @@ describe('the retired endpoint bindings tell their users (#42)', () => {
         }
         expect(message).toContain('gw.example');
         expect(message).not.toContain('hunter2');
+        // The command is runnable because the shell expands the variable, so
+        // nobody is asked to paste a masked value back into their config.
+        expect(message).toContain('openai.baseUrl "$OPENAI_BASE_URL"');
+        expect(message).not.toMatch(/baseUrl \S*\*\*\*/);
     });
 
     it('says nothing to anyone the change did not affect', () => {

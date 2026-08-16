@@ -20,7 +20,7 @@ Recovery is also scoped to one project: the working directory recorded inside th
 
 ModLens invokes `agy` with `--dangerously-skip-permissions` because prompt mode fails in some environments without it. The prompt restricts the agent to reading the one image it was given, and instructs it to treat image content strictly as data.
 
-The `claude-cli` provider runs with `--allowedTools Read` only, so it can read local files and nothing else.
+The `claude-cli` provider runs with `--allowedTools Read` only, so it can read local files and nothing else. The `kimi-cli` provider cannot be narrowed that way (its CLI has no equivalent flag), so it is treated differently in two respects: it runs only when named, never as a failover peer, since it spends a subscription; and it runs with skill discovery pointed at an empty directory, because otherwise kimi can find the modlens skill and read the image by running modlens, which is modlens calling itself. Its child also carries a marker that makes a nested modlens refuse to spawn kimi again.
 
 Both subprocess providers also run in a throwaway directory created fresh per call and removed afterward. For a local image it holds a private copy of that one image and nothing else, and it is a real copy, never a hardlink, so a provider writing to its temp path cannot touch the original. For a remote image the directory is empty and the agent downloads into it. Without this, text inside an image could steer a broadly-permissioned agent into reading files next to the original, or whatever project the caller happened to be in. Passing `--workdir` opts out and runs where you point it.
 

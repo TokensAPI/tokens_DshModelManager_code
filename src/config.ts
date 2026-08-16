@@ -99,11 +99,13 @@ export function assertNoRetiredEndpointBinding(
     if (!env[variable]?.trim()) {
         return;
     }
-    // The value is echoed so the migration is one copy away, but a URL can
-    // carry userinfo, and an error goes to logs, issues and screenshots.
+    // The command names the variable rather than its value: the shell
+    // expands it, so the migration stays one paste away without the message
+    // carrying an endpoint that may hold userinfo. A masked copy identifies
+    // which one is meant, since errors travel into logs and screenshots.
     const shown = maskUrlCredentials(env[variable]?.trim() ?? '');
     throw new Error(
-        `${variable} is set, but modlens stopped reading it in 3.17.0, and ${providerName}.baseUrl is not in the config file. Refusing rather than sending this key to the provider's own endpoint: run modlens config set ${providerName}.baseUrl ${shown} to keep the endpoint you were using.`,
+        `${variable} is set (${shown}), but modlens stopped reading it in 3.17.0, and ${providerName}.baseUrl is not in the config file. Refusing rather than sending this key to the provider's own endpoint. To keep the endpoint you were using, run: modlens config set ${providerName}.baseUrl "$${variable}"`,
     );
 }
 

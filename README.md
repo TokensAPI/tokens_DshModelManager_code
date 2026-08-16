@@ -77,6 +77,7 @@ ModLens does not depend on any single vision service. Nine sources of vision in 
 | `anthropic` | an Anthropic API key | 5-10s | machines already holding one |
 | `antigravity-cli` | the free `agy` CLI, one browser sign-in, no key | 15-45s | zero-signup starts |
 | `claude-cli` | a signed-in Claude Code | 20-45s | riding your existing Claude subscription |
+| `kimi-cli` | a signed-in Kimi Code | 20-45s | riding your existing Kimi subscription, named explicitly |
 
 Without a pinned provider, every configured engine forms one failover chain: the fast API providers try first, the agent CLIs back them up, the first good result wins, and `meta.attempts` records every attempt so a fallback is never silent.
 

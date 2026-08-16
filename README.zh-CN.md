@@ -89,6 +89,7 @@ ModLens 不绑定任何单一视觉服务。视觉来源一共九个：五个内
 | `anthropic`       | Anthropic API key                                                        | 5-10 秒      | 手上已有 key 的机器    |
 | `antigravity-cli` | 免费的 `agy` CLI，浏览器登录一次，无需 key                               | 15-45 秒     | 完全免注册起步         |
 | `claude-cli`      | 已登录的 Claude Code                                                     | 20-45 秒     | 复用现有 Claude 订阅   |
+| `kimi-cli`        | 已登录的 Kimi Code                                                       | 20-45 秒     | 复用现有 Kimi 订阅，需显式点名 |
 
 不钉死 provider 时，所有配好的引擎组成一条故障转移链：API 快车道先试，agent CLI 兜底，第一个可用结果胜出，`meta.attempts` 记录每次尝试，回退永远不是无声的。
 
