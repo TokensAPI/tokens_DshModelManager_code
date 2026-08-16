@@ -67,7 +67,7 @@ export function apply(ctx, config = {}) {
         try {
           // scope carries webServer; the plugin's own ctx carries llm for the
           // takeover verdicts.
-          registerPasteRoute(scope, ctx, ownProviders)
+          registerPasteRoute(scope, ctx, ownProviders, config)
         } catch (error) {
           console.error(`[modlens] paste-to-path route skipped: ${error}`)
         }
@@ -326,7 +326,7 @@ const PASTE_VERDICT_CAP = 32
  * stands down instead of swallowing pastes into a 404. Bound to the dsh web
  * server, which listens on loopback by default.
  */
-function registerPasteRoute(ctx, host, ownProviders) {
+function registerPasteRoute(ctx, host, ownProviders, config = {}) {
   const verdicts = new Map()
   // The cache key is only the selector label, which cannot tell two
   // same-named models on different routes apart. A route mounting mid-TTL
@@ -415,9 +415,20 @@ function registerPasteRoute(ctx, host, ownProviders) {
         const { mkdtemp, writeFile } = await import('node:fs/promises')
         const { tmpdir } = await import('node:os')
         const { join } = await import('node:path')
-        const dir = await mkdtemp(join(tmpdir(), 'modlens-dsh-paste-'))
+        const root = pasteRoot(config.pasteDir)
+        const { mkdir } = await import('node:fs/promises')
+        await mkdir(root, { recursive: true, mode: 0o700 })
+        const dir = await mkdtemp(join(root, 'p-'))
         const file = join(dir, `paste${sniff.ext}`)
         await writeFile(file, buffer, { mode: 0o600 })
+        // This one cannot be deleted when the request ends: its path is what
+        // goes into the composer, so the file has to outlive the response and
+        // survive until the model reads it. Nothing was ever collecting them
+        // afterwards though, so they accumulated for as long as dsh was
+        // installed (issue #51). Sweeping the expired ones here keeps it to
+        // the moment a paste already costs a disk write, with no timer to
+        // own and nothing running when nobody is pasting.
+        void sweepExpiredPastes(Date.now(), pasteRoot(config.pasteDir))
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ path: file }))
       } catch (error) {
@@ -1255,6 +1266,103 @@ function isTrustedRequest(req) {
   }
 }
 
+/**
+ * How long a pasted file stays reachable.
+ *
+ * This is a proxy for "nobody needs it any more", and a proxy is all that is
+ * available: the path leaves through the composer as plain text, so nothing
+ * here observes whether the draft holding it was sent, cleared, or abandoned.
+ * A week errs the way that asymmetry asks for. Deleting too early breaks a
+ * draft somebody is still writing and reads as a bug in the paste; deleting
+ * too late costs a few kilobytes in a directory the OS already collects.
+ */
+const PASTE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * A ceiling on what unread pastes may hold, independent of age. One image may
+ * be 25 MB, so a week is long enough for a burst to reach tens of gigabytes
+ * before any of it expires. This only engages far past ordinary use, and it
+ * removes oldest first, which is a worse rule than liveness but the only one
+ * available; running a disk out of space is worse than either.
+ */
+const PASTE_STORE_MAX_BYTES = 1024 * 1024 * 1024
+
+/** Everything this plugin writes for pastes lives under one directory. */
+function pasteRoot(base = null) {
+  return base ?? join(tmpdirPath(), 'modlens-dsh-paste')
+}
+
+function tmpdirPath() {
+  // Resolved lazily so a test can point HOME/TMPDIR elsewhere first.
+  return process.env.TMPDIR || process.env.TEMP || process.env.TMP || '/tmp'
+}
+
+/**
+ * Remove pastes that have expired, then, if what remains is still too large,
+ * the oldest until it is not.
+ *
+ * The sweep only ever looks inside our own directory. An earlier version
+ * scanned the whole system temp directory, which made every paste pay for
+ * every unrelated entry there and put the blast radius of a bug in somebody
+ * else's files. Entries are read with withFileTypes so a symlink reads as a
+ * link and never as the directory it points at, because a cleanup that
+ * follows a link is how it becomes somebody else's deleted files.
+ *
+ * The root is a parameter so tests never run this against the real one, where
+ * they would delete a developer's own live pastes. That matters more than it
+ * sounds: the route calls this on every successful paste, so any test that
+ * exercises the route runs it too.
+ */
+async function sweepExpiredPastes(now = Date.now(), base = null, maxBytes = PASTE_STORE_MAX_BYTES) {
+  try {
+    const { readdir, stat, rm } = await import('node:fs/promises')
+    const root = pasteRoot(base)
+    const kept = []
+    for (const entry of await readdir(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const full = join(root, entry.name)
+      try {
+        const info = await stat(full)
+        if (now - info.mtimeMs >= PASTE_TTL_MS) {
+          await rm(full, { recursive: true, force: true })
+          continue
+        }
+        kept.push({ full, mtimeMs: info.mtimeMs, bytes: await directorySize(full) })
+      } catch {
+        // Vanished, held open by another process, or not ours to remove.
+        // A paste must never fail over housekeeping.
+      }
+    }
+    let total = kept.reduce((sum, item) => sum + item.bytes, 0)
+    if (total <= maxBytes) return
+    for (const item of kept.sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+      if (total <= maxBytes) break
+      try {
+        await rm(item.full, { recursive: true, force: true })
+        total -= item.bytes
+      } catch {
+        // Still held. Move on rather than spin.
+      }
+    }
+  } catch {
+    // No directory yet, or no listing available. The paste itself worked.
+  }
+}
+
+async function directorySize(dir) {
+  const { readdir, stat } = await import('node:fs/promises')
+  let bytes = 0
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue
+    try {
+      bytes += (await stat(join(dir, entry.name))).size
+    } catch {
+      // Gone between listing and measuring.
+    }
+  }
+  return bytes
+}
+
 function registerConfigRoute(ctx) {
   ctx.webServer.register({
     name: 'modlens-config',
@@ -1321,3 +1429,6 @@ function registerConfigRoute(ctx) {
 // and write a real file and a real environment, so they are tested against
 // both rather than through the HTTP route.
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
+
+// The paste sweeper, reachable from the test suite the way __config is.
+export const __paste = { sweepExpiredPastes, ttlMs: PASTE_TTL_MS, maxBytes: PASTE_STORE_MAX_BYTES }
