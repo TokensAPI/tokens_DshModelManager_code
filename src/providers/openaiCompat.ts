@@ -9,7 +9,7 @@ import { apiFetch } from '../net/proxy.ts';
 import { buildVisionPrompt, JSON_TEMPLATE_INSTRUCTION } from '../prompt.ts';
 import { missingSchemaFields, normalizeVisionResult, visionResponseFormat } from '../schema.ts';
 import { mergeExtraBody } from '../util/extraBody.ts';
-import { extractJson, truncate } from '../util/json.ts';
+import { extractJson, tail, truncate } from '../util/json.ts';
 import { redactSecrets } from '../util/redact.ts';
 import type {
     BuildProviderInvocationOptions,
@@ -91,15 +91,26 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
         options.settings?.proxy,
     );
 
+    // Everything the gateway wrote goes through here before it is quoted into
+    // an error. Errors travel into terminals, CI logs, agent transcripts and
+    // failover warnings, and the gateway controls its own response, so a
+    // private endpoint is as quotable back at us as the key is. One helper
+    // rather than a call at each site: the leak that reached review was one
+    // path fixed and another missed.
+    // Redact first, clip second. Clipping first leaves a half-written endpoint
+    // that exact matching can no longer find, and a plain https URL carries
+    // nothing for the shape rules to catch, so a boundary landing inside the
+    // hostname published it.
+    const quote = (shown: string, clip: (text: string) => string = truncate): string =>
+        clip(redactSecrets(shown, [apiKey, baseUrl]));
+
     if (!response.ok) {
         const body = await response.text();
-        throw new Error(
-            `OpenAI-compatible API error ${response.status}: ${truncate(redactSecrets(body, [apiKey]))}`,
-        );
+        throw new Error(`OpenAI-compatible API error ${response.status}: ${quote(body)}`);
     }
 
     const payload = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
         usage?: unknown;
     };
 
@@ -110,7 +121,22 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
 
     const rawResult = extractJson(text);
     if (rawResult === null) {
-        throw new Error(`OpenAI-compatible API returned non-JSON output: ${truncate(text)}`);
+        // Why it failed decides what the user should do, and the causes used
+        // to look identical (issue #45). Only `stop` is evidence the answer
+        // is complete: `content_filter` and a gateway's own private reasons
+        // are not, and calling them normal sends people to tune the wrong
+        // knob. The tail is where the damage is, so the message ends with it
+        // rather than with the opening summary.
+        const finishReason = payload.choices?.[0]?.finish_reason;
+        const advice =
+            finishReason === 'length'
+                ? 'The answer was cut off (finish_reason=length). Raise the limit, e.g. modlens config set openai.extraBody \'{"max_tokens":4096}\'.'
+                : finishReason === undefined || finishReason === 'stop'
+                  ? 'The answer ended normally but no complete JSON object could be read from it. Ask the gateway to enforce the shape: modlens config set openai.structuredOutput true.'
+                  : `The gateway ended the answer with finish_reason=${quote(finishReason, (t) => truncate(t, 80))}, so it may be incomplete for a reason of its own. Check what that reason means for this endpoint before changing the request.`;
+        throw new Error(
+            `OpenAI-compatible API returned non-JSON output. ${advice} Output ended with: ${quote(text, tail)}`,
+        );
     }
     // No portable server-side schema enforcement on this route, so verify the
     // shape instead of silently returning something that only looks right.
@@ -122,7 +148,7 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
     const missing = missingSchemaFields(result);
     if (missing.length > 0) {
         throw new Error(
-            `OpenAI-compatible API returned JSON that does not match the vision schema (wrong or missing: ${missing.join(', ')}). Retry, or switch to gemini-api / anthropic for enforced schemas. Got: ${truncate(text)}`,
+            `OpenAI-compatible API returned JSON that does not match the vision schema (wrong or missing: ${missing.join(', ')}). Retry, or switch to gemini-api / anthropic for enforced schemas. Got: ${quote(text)}`,
         );
     }
 
