@@ -486,6 +486,7 @@ function fetchPiKey(piPath: string, modelId: string, provider: string, timeoutMs
             encoding: 'utf-8',
             stdio: ['ignore', 'pipe', 'pipe'],
             timeout: timeoutMs,
+            ...(plan.env ? { env: plan.env } : {}),
         }).trim();
         if (!key) {
             throw new Error('empty');

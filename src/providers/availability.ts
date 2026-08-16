@@ -12,6 +12,7 @@ import {
     type ProviderStringField,
     resolveProviderSettings,
 } from '../config.ts';
+import { envValue } from '../util/winEnv.ts';
 import { resolveProvider, type VisionProvider } from './index.ts';
 
 export interface RequiredSetting {
@@ -72,7 +73,7 @@ export const PROVIDER_DESCRIPTORS: ProviderDescriptor[] = [
 ];
 
 export function findOnPath(bin: string, env: NodeJS.ProcessEnv): string | null {
-    const dirs = (env.PATH ?? '').split(path.delimiter).filter(Boolean);
+    const dirs = (envValue(env, 'PATH') ?? '').split(path.delimiter).filter(Boolean);
     // Windows CLIs live as agy.exe / agy.cmd / agy.bat, so the bare name is
     // only a candidate of last resort there: npm installs a POSIX sh shim
     // under the bare name right next to the .cmd/.ps1 ones (issue #30), and
@@ -83,7 +84,10 @@ export function findOnPath(bin: string, env: NodeJS.ProcessEnv): string | null {
     // filesystems Windows uses, so candidates need no case fanout.
     const suffixes =
         process.platform === 'win32'
-            ? [...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean), '']
+            ? [
+                  ...(envValue(env, 'PATHEXT') ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean),
+                  '',
+              ]
             : [''];
     for (const dir of dirs) {
         for (const suffix of suffixes) {
