@@ -468,6 +468,40 @@ interface IsolatedImage {
  * inside the image could otherwise point them at neighbouring files; a directory
  * of one removes that reach.
  */
+/**
+ * Remove a throwaway directory without ever failing the run over it.
+ *
+ * On Windows a directory that is a live process's current directory cannot be
+ * deleted, and this directory IS the provider's cwd. A child that lingers for
+ * a moment after its output arrives, as kimi does while it writes its session
+ * state, leaves that handle held, `rmSync` throws EPERM, and because cleanup
+ * runs in a `finally` the error replaced a perfectly good result: the read
+ * succeeded, took its full 45 seconds, and was then reported as a failed
+ * attempt (issue #50). `force` suppresses ENOENT, never EPERM.
+ *
+ * So removal is best effort. One retry covers the ordinary case of a handle
+ * released a moment later, and if that fails too the directory is left in the
+ * system temp directory, which is where a leftover belongs and what the OS
+ * already cleans. Losing a temp directory is not worth losing the answer.
+ */
+function removeWorkdir(workdir: string): void {
+    try {
+        fs.rmSync(workdir, { recursive: true, force: true });
+        return;
+    } catch {
+        // Held open for now; try again once the child is fully gone.
+    }
+    const retry = setTimeout(() => {
+        try {
+            fs.rmSync(workdir, { recursive: true, force: true });
+        } catch {
+            // Still held. A temp directory is the right thing to leak here.
+        }
+    }, 500);
+    // Never hold the process open for a directory removal.
+    retry.unref();
+}
+
 function isolateImage(source: string): IsolatedImage {
     const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-work-'));
     const imageSource = path.join(workdir, path.basename(source));
@@ -478,7 +512,7 @@ function isolateImage(source: string): IsolatedImage {
     return {
         imageSource,
         workdir,
-        cleanup: () => fs.rmSync(workdir, { recursive: true, force: true }),
+        cleanup: () => removeWorkdir(workdir),
     };
 }
 
@@ -491,7 +525,7 @@ function emptyWorkdir(): IsolatedImage {
     const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-work-'));
     return {
         workdir,
-        cleanup: () => fs.rmSync(workdir, { recursive: true, force: true }),
+        cleanup: () => removeWorkdir(workdir),
     };
 }
 
