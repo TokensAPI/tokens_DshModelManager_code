@@ -173,8 +173,6 @@ The projects worth recommending in the DeepSeek Harness ecosystem.
   为 DeepSeek Harness 生态打造的现代化桌面端。不用配置 Node.js，也不用敲命令，就能启动和管理本机的 Harness 服务。后续还会支持插件市场、移动端远程控制和 IM Channels。[官网](https://www.dshdesktop.cn)
 - 🛒 **[dsh-market](https://github.com/dsh-market/dsh-market)** — The plugin market inside DeepSeek Harness. Browse 800+ community plugins with category filters and screenshot previews, one-click install and update, and live theme switching. Most need no restart.
   DeepSeek Harness 的可视化插件市场。设置页里直接逛社区全部 800+ 插件：分类筛选、截图预览、一键安装与更新、主题即点即换，装完多数免重启。
-- 🔎 **[ModSearch](https://github.com/liustack/modsearch)** — the same approach applied to the web. A plug-in that gives a text-only model web search, X search, and single-page fetch, shipped as a native dsh plugin and installed with one command. From the author of this project.
-  同一套做法用在联网上：纯文本模型没有联网能力或联网能力羸弱，ModSearch 以外挂方式补上网页搜索、X 搜索和单页抓取，同样是原生 dsh 插件，同样一条命令装完即用。本项目作者出品。
 
 ## Star History
 
