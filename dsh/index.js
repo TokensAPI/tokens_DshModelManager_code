@@ -12,7 +12,7 @@
 // rules keep living in ~/.modlens/config.json, shared with every harness.
 import { spawn } from 'node:child_process'
 import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -413,7 +413,6 @@ function registerPasteRoute(ctx, host, ownProviders, config = {}) {
           return
         }
         const { mkdtemp, writeFile } = await import('node:fs/promises')
-        const { tmpdir } = await import('node:os')
         const { join } = await import('node:path')
         const root = await openPasteRoot(config.pasteDir)
         const dir = await mkdtemp(join(root, 'p-'))
@@ -426,7 +425,7 @@ function registerPasteRoute(ctx, host, ownProviders, config = {}) {
         // installed (issue #51). Sweeping the expired ones here keeps it to
         // the moment a paste already costs a disk write, with no timer to
         // own and nothing running when nobody is pasting.
-        void sweepExpiredPastes(Date.now(), pasteRoot(config.pasteDir))
+        void sweepExpiredPastes(Date.now(), root)
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ path: file }))
       } catch (error) {
@@ -1287,7 +1286,7 @@ const PASTE_STORE_MAX_BYTES = 1024 * 1024 * 1024
 
 /** Everything this plugin writes for pastes lives under one directory. */
 function pasteRoot(base = null) {
-  return base ?? join(tmpdirPath(), 'modlens-dsh-paste')
+  return base ?? join(tmpdir(), 'modlens-dsh-paste')
 }
 
 /**
@@ -1338,26 +1337,28 @@ async function openPasteRoot(base = null) {
   if (!info.isDirectory()) {
     throw new Error(`${target} exists and is not a directory`)
   }
-  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
-    throw new Error(`${target} belongs to another user`)
-  }
-  // Narrow it even if it was created wider, so a later paste is not readable
-  // by everyone on the machine. A failure here is not cosmetic: it means the
-  // directory stays readable by others and this cannot fix it, so the paste
-  // is refused rather than written where it can be read.
-  if ((info.mode & 0o777) !== 0o700) {
-    await chmod(target, 0o700)
-    const after = await lstat(target)
-    if ((after.mode & 0o777) !== 0o700) {
-      throw new Error(`${target} could not be made private`)
+  // POSIX ownership and mode bits are one capability boundary. Windows has
+  // neither getuid nor owner/group/other mode distinctions, and reports a
+  // directory as 0777 even when its ACL is private. Applying this verdict
+  // there would reject every paste without proving anything about its ACL.
+  const uid = typeof process.getuid === 'function' ? process.getuid() : undefined
+  if (uid !== undefined) {
+    if (info.uid !== uid) {
+      throw new Error(`${target} belongs to another user`)
+    }
+    // Narrow it even if it was created wider, so a later paste is not readable
+    // by everyone on the machine. A failure here is not cosmetic: it means the
+    // directory stays readable by others and this cannot fix it, so the paste
+    // is refused rather than written where it can be read.
+    if ((info.mode & 0o777) !== 0o700) {
+      await chmod(target, 0o700)
+      const after = await lstat(target)
+      if ((after.mode & 0o777) !== 0o700) {
+        throw new Error(`${target} could not be made private`)
+      }
     }
   }
   return target
-}
-
-function tmpdirPath() {
-  // Resolved lazily so a test can point HOME/TMPDIR elsewhere first.
-  return process.env.TMPDIR || process.env.TEMP || process.env.TMP || '/tmp'
 }
 
 /**

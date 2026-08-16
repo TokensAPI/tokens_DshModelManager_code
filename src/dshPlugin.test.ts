@@ -1,8 +1,13 @@
+import { execFile } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { VISION_RESULT_SCHEMA } from './schema.ts';
+
+const execFileAsync = promisify(execFile);
 
 /** Isolated paste directories handed to every route under test. */
 const routePasteDirs: string[] = [];
@@ -874,6 +879,55 @@ describe('dsh paste-to-path host route', () => {
             expect(fs.statSync(written).mode & 0o777).toBe(0o600);
         }
         fs.rmSync(path.dirname(written), { recursive: true, force: true });
+    });
+
+    it('sweeps the canonical store it wrote when a linked parent moves', async () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-route-root-'));
+        const writtenParent = path.join(scratch, 'written-parent');
+        const otherParent = path.join(scratch, 'other-parent');
+        const linkedParent = path.join(scratch, 'linked-parent');
+        const writtenStore = path.join(writtenParent, 'store');
+        const otherStore = path.join(otherParent, 'store');
+        const expiredInWritten = path.join(writtenStore, 'p-expired-written');
+        const expiredElsewhere = path.join(otherStore, 'p-expired-elsewhere');
+        try {
+            fs.mkdirSync(expiredInWritten, { recursive: true, mode: 0o700 });
+            fs.mkdirSync(expiredElsewhere, { recursive: true, mode: 0o700 });
+            fs.writeFileSync(path.join(expiredInWritten, 'paste.png'), 'old');
+            fs.writeFileSync(path.join(expiredElsewhere, 'precious.png'), 'keep');
+            const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+            fs.utimesSync(expiredInWritten, expired, expired);
+            fs.utimesSync(expiredElsewhere, expired, expired);
+            fs.symlinkSync(writtenParent, linkedParent, 'dir');
+
+            const routes = await routeOf({ pasteDir: path.join(linkedParent, 'store') });
+            const out = { code: 0, body: '' };
+            let moved = false;
+            const res = {
+                writeHead(code: number) {
+                    out.code = code;
+                },
+                end(body?: string) {
+                    out.body = body ?? '';
+                    if (moved) return;
+                    moved = true;
+                    fs.unlinkSync(linkedParent);
+                    fs.symlinkSync(otherParent, linkedParent, 'dir');
+                },
+            };
+            const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 5]);
+            await routes[0].handler(fakeReq('POST', png) as never, res as never);
+
+            for (let attempt = 0; attempt < 100; attempt++) {
+                if (!fs.existsSync(expiredInWritten) || !fs.existsSync(expiredElsewhere)) break;
+                await new Promise<void>((resolve) => setImmediate(resolve));
+            }
+            expect(out.code).toBe(200);
+            expect(fs.existsSync(expiredInWritten)).toBe(false);
+            expect(fs.existsSync(expiredElsewhere)).toBe(true);
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+        }
     });
 
     it('refuses non-GET/POST, non-image bytes, and honors the off switch', async () => {
@@ -2851,6 +2905,42 @@ describe('the paste store has a ceiling as well as a clock (#51)', () => {
             fs.rmSync(root, { recursive: true, force: true });
         }
     });
+
+    it('keeps the same newest survivors when separate processes sweep together', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-process-sweep-'));
+        try {
+            const bytes = Buffer.alloc(64 * 1024, 1);
+            const made: string[] = [];
+            for (let index = 0; index < 4; index++) {
+                const dir = path.join(root, `p-process-${index}`);
+                fs.mkdirSync(dir);
+                fs.writeFileSync(path.join(dir, 'paste.png'), bytes);
+                const when = new Date(Date.now() - (4 - index) * 60_000);
+                fs.utimesSync(dir, when, when);
+                made.push(dir);
+            }
+            const moduleUrl = pathToFileURL(path.join(__dirname, '..', 'dsh', 'index.js')).href;
+            const script =
+                'const { __paste } = await import(process.argv[1]); await new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(process.argv[4]) - Date.now()))); await __paste.sweepExpiredPastes(Date.now(), process.argv[2], Number(process.argv[3]));';
+            const startAt = Date.now() + 250;
+            await Promise.all(
+                Array.from({ length: 4 }, () =>
+                    execFileAsync(process.execPath, [
+                        '--input-type=module',
+                        '--eval',
+                        script,
+                        moduleUrl,
+                        root,
+                        String(bytes.length * 2),
+                        String(startAt),
+                    ]),
+                ),
+            );
+            expect(made.filter((dir) => fs.existsSync(dir))).toEqual(made.slice(-2));
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
 });
 
 describe('the suite never touches the real paste store (#51)', () => {
@@ -2883,6 +2973,36 @@ describe('the suite never touches the real paste store (#51)', () => {
         const after = fs.existsSync(real) ? fs.readdirSync(real).sort().join('|') : '<absent>';
         expect(after).toBe(before);
     });
+});
+
+describe("the paste store uses Node's platform temp directory (#51)", () => {
+    it.skipIf(process.platform === 'win32')(
+        'honors the POSIX TMP before TEMP precedence',
+        async () => {
+            // @ts-expect-error untyped on purpose
+            const plugin = (await import('../dsh/index.js')) as {
+                __paste: { pasteRoot: (base?: string | null) => string };
+            };
+            const before = {
+                TMPDIR: process.env.TMPDIR,
+                TMP: process.env.TMP,
+                TEMP: process.env.TEMP,
+            };
+            try {
+                delete process.env.TMPDIR;
+                process.env.TMP = '/tmp/modlens-node-tmp';
+                process.env.TEMP = '/tmp/modlens-node-temp';
+                expect(plugin.__paste.pasteRoot()).toBe(
+                    path.join(os.tmpdir(), 'modlens-dsh-paste'),
+                );
+            } finally {
+                for (const [key, value] of Object.entries(before)) {
+                    if (value === undefined) delete process.env[key];
+                    else process.env[key] = value;
+                }
+            }
+        },
+    );
 });
 
 describe('the paste store refuses a directory that is not ours (#51)', () => {
@@ -2923,19 +3043,55 @@ describe('the paste store refuses a directory that is not ours (#51)', () => {
         }
     });
 
-    it('creates a private store and narrows an over-permissive one', async () => {
-        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-mode-'));
-        const store = path.join(scratch, 'store');
-        try {
-            await open(store);
-            expect(fs.statSync(store).mode & 0o777).toBe(0o700);
+    it.skipIf(process.platform === 'win32')(
+        'creates a private store and narrows an over-permissive one',
+        async () => {
+            const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-mode-'));
+            const store = path.join(scratch, 'store');
+            try {
+                await open(store);
+                expect(fs.statSync(store).mode & 0o777).toBe(0o700);
+                fs.chmodSync(store, 0o777);
+                await open(store);
+                expect(fs.statSync(store).mode & 0o777).toBe(0o700);
+            } finally {
+                fs.rmSync(scratch, { recursive: true, force: true });
+            }
+        },
+    );
+
+    it.skipIf(process.platform !== 'win32')(
+        'accepts an ACL-backed Windows directory without judging POSIX mode bits',
+        async () => {
+            const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-windows-mode-'));
+            const store = path.join(scratch, 'store');
+            const expected = path.join(fs.realpathSync(scratch), 'store');
+            try {
+                await expect(open(store)).resolves.toBe(expected);
+                await expect(open(store)).resolves.toBe(expected);
+            } finally {
+                fs.rmSync(scratch, { recursive: true, force: true });
+            }
+        },
+    );
+
+    it.skipIf(process.platform !== 'darwin' || process.getuid?.() === 0)(
+        'refuses an existing store when the filesystem rejects chmod',
+        async () => {
+            const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-chmod-'));
+            const store = path.join(scratch, 'store');
+            fs.mkdirSync(store, { mode: 0o777 });
             fs.chmodSync(store, 0o777);
-            await open(store);
-            expect(fs.statSync(store).mode & 0o777).toBe(0o700);
-        } finally {
-            fs.rmSync(scratch, { recursive: true, force: true });
-        }
-    });
+            await execFileAsync('/usr/bin/chflags', ['uchg', store]);
+            try {
+                await expect(open(store)).rejects.toThrow();
+                expect(fs.statSync(store).mode & 0o777).toBe(0o777);
+            } finally {
+                await execFileAsync('/usr/bin/chflags', ['nouchg', store]);
+                fs.rmSync(scratch, { recursive: true, force: true });
+            }
+        },
+    );
 });
 
 describe('the paste store is created before it is trusted (#51)', () => {
@@ -2956,7 +3112,9 @@ describe('the paste store is created before it is trusted (#51)', () => {
             const nested = path.join(scratch, 'a', 'b', 'store');
             await open(nested);
             expect(fs.statSync(nested).isDirectory()).toBe(true);
-            expect(fs.statSync(nested).mode & 0o777).toBe(0o700);
+            if (process.platform !== 'win32') {
+                expect(fs.statSync(nested).mode & 0o777).toBe(0o700);
+            }
         } finally {
             fs.rmSync(scratch, { recursive: true, force: true });
         }
@@ -2984,6 +3142,36 @@ describe('the paste store is created before it is trusted (#51)', () => {
             const store = path.join(scratch, 'store');
             const real = path.join(fs.realpathSync(scratch), 'store');
             await expect(Promise.all([open(store), open(store)])).resolves.toEqual([real, real]);
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+        }
+    });
+
+    it('is safe when separate processes create the same store together', async () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-process-open-'));
+        try {
+            const store = path.join(scratch, 'store');
+            const moduleUrl = pathToFileURL(path.join(__dirname, '..', 'dsh', 'index.js')).href;
+            const script =
+                'const { __paste } = await import(process.argv[1]); process.stdout.write(await __paste.openPasteRoot(process.argv[2]));';
+            const opened = await Promise.all(
+                Array.from({ length: 8 }, async () => {
+                    const result = await execFileAsync(process.execPath, [
+                        '--input-type=module',
+                        '--eval',
+                        script,
+                        moduleUrl,
+                        store,
+                    ]);
+                    return result.stdout;
+                }),
+            );
+            expect(new Set(opened)).toEqual(
+                new Set([path.join(fs.realpathSync(scratch), 'store')]),
+            );
+            if (process.platform !== 'win32') {
+                expect(fs.statSync(store).mode & 0o777).toBe(0o700);
+            }
         } finally {
             fs.rmSync(scratch, { recursive: true, force: true });
         }
@@ -3030,31 +3218,37 @@ describe('the paste store checks the whole path, not just the leaf (#51)', () =>
 describe('an unmeasurable paste is not counted as empty (#51)', () => {
     // A quietly low number is worse than no number: the store passes a
     // ceiling it has already exceeded, and keeps growing.
-    it('treats a directory it cannot measure as a full-size paste', async () => {
-        // @ts-expect-error untyped on purpose
-        const plugin = (await import('../dsh/index.js')) as {
-            __paste: {
-                sweepExpiredPastes: (n?: number, r?: string, max?: number) => Promise<void>;
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+        'treats a directory it cannot measure as a full-size paste',
+        async () => {
+            // @ts-expect-error untyped on purpose
+            const plugin = (await import('../dsh/index.js')) as {
+                __paste: {
+                    sweepExpiredPastes: (n?: number, r?: string, max?: number) => Promise<void>;
+                };
             };
-        };
-        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-unmeasured-'));
-        try {
+            const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-unmeasured-'));
             const opaque = path.join(root, 'p-opaqu1');
-            fs.mkdirSync(opaque);
-            fs.writeFileSync(path.join(opaque, 'paste.png'), Buffer.alloc(900, 1));
             const fresh = path.join(root, 'p-fresh1');
-            fs.mkdirSync(fresh);
-            fs.writeFileSync(path.join(fresh, 'paste.png'), Buffer.alloc(900, 1));
-            // Older, so it is the first to go once the ceiling engages.
-            const old = new Date(Date.now() - 60_000);
-            fs.utimesSync(opaque, old, old);
+            try {
+                fs.mkdirSync(opaque);
+                fs.writeFileSync(path.join(opaque, 'paste.png'), Buffer.alloc(1, 1));
+                fs.mkdirSync(fresh);
+                fs.writeFileSync(path.join(fresh, 'paste.png'), Buffer.alloc(900, 1));
+                // A real permission failure, not a readable directory named
+                // "opaque". Without conservative booking the measured total
+                // is only 900 bytes and the fresh paste incorrectly survives.
+                fs.chmodSync(opaque, 0o000);
+                const old = new Date(Date.now() - 60_000);
+                fs.utimesSync(opaque, old, old);
 
-            await plugin.__paste.sweepExpiredPastes(Date.now(), root, 1000);
-            // 1800 bytes against a 1000 byte ceiling: something must go.
-            const left = fs.readdirSync(root);
-            expect(left.length).toBeLessThan(2);
-        } finally {
-            fs.rmSync(root, { recursive: true, force: true });
-        }
-    });
+                await plugin.__paste.sweepExpiredPastes(Date.now(), root, 1000);
+                expect(fs.existsSync(opaque)).toBe(true);
+                expect(fs.existsSync(fresh)).toBe(false);
+            } finally {
+                if (fs.existsSync(opaque)) fs.chmodSync(opaque, 0o700);
+                fs.rmSync(root, { recursive: true, force: true });
+            }
+        },
+    );
 });
