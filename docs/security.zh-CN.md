@@ -20,7 +20,7 @@ read_when:
 
 ModLens 调用 `agy` 时带上 `--dangerously-skip-permissions`，因为某些环境下 prompt 模式不带它就会失败。prompt 把 agent 限制为只读交给它的那一张图片，并指示它把图片内容严格当作数据。
 
-`claude-cli` provider 只带 `--allowedTools Read` 运行，因此它能读本地文件，别的什么都做不了。
+`claude-cli` provider 只带 `--allowedTools Read` 运行，因此它能读本地文件，别的什么都做不了。`kimi-cli` 没法这样收窄（它的 CLI 没有对应参数），所以在两处区别对待：它只在被点名时运行，绝不作为故障转移的备选，因为它花的是订阅；运行时把 skill 发现指向空目录，否则 kimi 会找到 modlens skill、通过运行 modlens 来读图，也就是 modlens 自己调自己。它的子进程还带一个标记，让嵌套的 modlens 拒绝再次启动 kimi。
 
 两个子进程 provider 还都运行在一个用完即弃的目录里，每次调用新建，结束后删除。本地图片时，目录里只有那张图片的一份私有副本，别无他物，而且是真实拷贝，绝不用硬链接，provider 往自己的临时路径写东西也碰不到原文件。远程图片时目录是空的，agent 把文件下载进去。没有这层隔离，图片里的文字就可能引导一个权限宽泛的 agent 去读原图旁边的文件，或读调用者恰好所在的项目。传 `--workdir` 即放弃这层隔离，在你指定的位置运行。
 

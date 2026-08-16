@@ -76,6 +76,7 @@ modlens recover-paste                           # pull a pasted image into a fil
 | `gemini-api` | `gemini-3.6-flash` |
 | `anthropic` | `claude-haiku-4-5-20251001` |
 | `claude-cli` | `haiku` |
+| `kimi-cli` | 用 kimi 自己配好的模型 |
 | `openai` | 无，必须传 `-m` |
 
 `modlens recover-paste`：
@@ -89,7 +90,7 @@ modlens recover-paste                           # pull a pasted image into a fil
 | `--harness <name>` | 强制指定存储范围：`claude-code`、`pi`、`opencode`、`none` | 自动检测 |
 | `--cwd <path>` | 粘贴图片时所在的项目目录 | 当前目录 |
 
-共五个 provider：`antigravity-cli`（免 key）、`gemini-api`（最快的免费通道）、`openai`（任意 OpenAI 兼容的多模态端点）、`anthropic`，以及 `claude-cli`（复用你现有的 Claude 订阅）。不带 `-p` 时，一次运行会依次尝试每个已配好的 provider：API 快车道（inline API provider，不启动 agent、直接调 API 的引擎）先试（5-10 秒），agent 类兜底，第一个可用结果胜出，其余尝试记录在 `meta.attempts` 里。通过 `reuse.<harness>` 授权的 harness 会把复用来的引擎补进相同的区段（pi 的凭据算快车道，agent CLI 排在后面），不会插到你自己引擎的前面。细节和 `guards` 的 deny/allow 名单见[配置手册](../skills/modlens/references/configure.zh-CN.md)。
+共六个 provider：`antigravity-cli`（免 key）、`gemini-api`（最快的免费通道）、`openai`（任意 OpenAI 兼容的多模态端点）、`anthropic`，以及 `claude-cli`（复用你现有的 Claude 订阅）。不带 `-p` 时，一次运行会依次尝试每个已配好的 provider：API 快车道（inline API provider，不启动 agent、直接调 API 的引擎）先试（5-10 秒），agent 类兜底，第一个可用结果胜出，其余尝试记录在 `meta.attempts` 里。通过 `reuse.<harness>` 授权的 harness 会把复用来的引擎补进相同的区段（pi 的凭据算快车道，agent CLI 排在后面），不会插到你自己引擎的前面。细节和 `guards` 的 deny/allow 名单见[配置手册](../skills/modlens/references/configure.zh-CN.md)。
 
 其他子命令：
 
