@@ -61,7 +61,77 @@ function parseBraceSlice(trimmed: string): unknown | null {
     const first = trimmed.indexOf('{');
     const last = trimmed.lastIndexOf('}');
     if (first >= 0 && last > first) {
-        return tryParseJson(trimmed.slice(first, last + 1));
+        const whole = tryParseJson(trimmed.slice(first, last + 1));
+        if (whole !== null) {
+            return whole;
+        }
+    }
+    return parseLongestBalancedObject(trimmed);
+}
+
+/**
+ * The largest `{...}` in the text that is balanced on its own and parses.
+ *
+ * The first-brace-to-last-brace slice above cannot survive a model that closes
+ * the object early and keeps writing, which is what qwen3-vl does intermittently
+ * on the openai route (issue #45): `{"summary":...,"semantics":{...}},"visual":
+ * {...}}` has a real object in front of a stray fragment, and slicing to the
+ * last brace swallows the fragment and fails. Reading the braces with the string
+ * literals accounted for finds the object instead. It is the recoverable prefix,
+ * so the schema check gets to name the fields that are actually missing rather
+ * than the read dying as "non-JSON output", which is indistinguishable from a
+ * truncation.
+ *
+ * Largest rather than first, because chatty output can put a small envelope in
+ * front of the answer, and the answer is the bigger of the two.
+ */
+function parseLongestBalancedObject(text: string): unknown | null {
+    const spans: Array<[number, number]> = [];
+    let depth = 0;
+    let start = -1;
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (inString) {
+            // An escape consumes whatever follows, so a `\"` does not close the
+            // string and a `\\` does not escape the quote after it.
+            if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+        } else if (char === '{') {
+            if (depth === 0) {
+                start = i;
+            }
+            depth++;
+        } else if (char === '}') {
+            if (depth > 0) {
+                depth--;
+                if (depth === 0 && start >= 0) {
+                    spans.push([start, i + 1]);
+                    start = -1;
+                }
+            }
+            // A close with nothing open is the stray one. Ignoring it rather
+            // than resetting keeps the objects found so far.
+        }
+    }
+    // Longest first: the first one that parses is the best candidate, and a
+    // balanced span can still fail on its contents (a trailing comma, a
+    // half-written number), so parsing is what decides.
+    for (const [from, to] of spans.sort((a, b) => b[1] - b[0] - (a[1] - a[0]))) {
+        const parsed = tryParseJson(text.slice(from, to));
+        if (parsed !== null) {
+            return parsed;
+        }
     }
     return null;
 }
@@ -69,4 +139,13 @@ function parseBraceSlice(trimmed: string): unknown | null {
 /** Shorten a blob for an error message, appending an ellipsis when clipped. */
 export function truncate(text: string, max = 300): string {
     return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+/**
+ * The END of a blob, for errors about how output finished. `truncate` shows the
+ * opening, which for a malformed answer is the part that was fine: whether it
+ * was cut off mid-token or closed early and rambled shows up at the tail.
+ */
+export function tail(text: string, max = 300): string {
+    return text.length > max ? `...${text.slice(-max)}` : text;
 }

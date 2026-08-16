@@ -306,3 +306,281 @@ describe('schema shape enforcement', () => {
         ).rejects.toThrow(/does not match the vision schema \(wrong or missing: ocr, layout/);
     });
 });
+
+describe('quoted gateway output is redacted, and finish_reason is not guessed (#45)', () => {
+    const secretSettings = {
+        apiKey: 'sk-proj-gate8-secret-1234567890',
+        baseUrl: 'https://private-gateway.example.internal/v1',
+        model: 'qwen3-vl-plus',
+    };
+
+    /** A 200 whose content the gateway wrote, ending in what it received. */
+    function stubEcho(content: string, finishReason?: string) {
+        vi.stubGlobal('fetch', async () => {
+            return new Response(
+                JSON.stringify({
+                    choices: [
+                        {
+                            message: { content },
+                            ...(finishReason ? { finish_reason: finishReason } : {}),
+                        },
+                    ],
+                }),
+                { status: 200 },
+            );
+        });
+    }
+
+    const echoTail =
+        'not json at all ' + `apiKey=${secretSettings.apiKey} endpoint=${secretSettings.baseUrl}`;
+
+    it('keeps the key and the endpoint out of the parse-failure message', async () => {
+        // The message now shows the END of the output, so a gateway echoing
+        // the headers it received puts them exactly where we quote.
+        stubEcho(echoTail, 'stop');
+        await expect(
+            executeOpenaiCompat({
+                imageSource: tmpImage,
+                imageKind: 'local',
+                timeoutMs: 5000,
+                settings: secretSettings,
+            }),
+        ).rejects.toThrow(
+            expect.objectContaining({
+                message: expect.not.stringContaining(secretSettings.apiKey),
+            }),
+        );
+
+        stubEcho(echoTail, 'stop');
+        await expect(
+            executeOpenaiCompat({
+                imageSource: tmpImage,
+                imageKind: 'local',
+                timeoutMs: 5000,
+                settings: secretSettings,
+            }),
+        ).rejects.toThrow(
+            expect.objectContaining({
+                message: expect.not.stringContaining('private-gateway.example.internal'),
+            }),
+        );
+    });
+
+    it('keeps them out of the schema-mismatch message too', async () => {
+        // Same output, one fix short: quoting one error and not the other
+        // just moves the leak.
+        stubEcho(`{"summary":"x"} trailing ${secretSettings.apiKey}`, 'stop');
+        await expect(
+            executeOpenaiCompat({
+                imageSource: tmpImage,
+                imageKind: 'local',
+                timeoutMs: 5000,
+                settings: secretSettings,
+            }),
+        ).rejects.toThrow(
+            expect.objectContaining({
+                message: expect.not.stringContaining(secretSettings.apiKey),
+            }),
+        );
+    });
+
+    it('names the token limit when the answer was cut off', async () => {
+        stubEcho('{"summary":"half', 'length');
+        await expect(
+            executeOpenaiCompat({
+                imageSource: tmpImage,
+                imageKind: 'local',
+                timeoutMs: 5000,
+                settings: secretSettings,
+            }),
+        ).rejects.toThrow(/finish_reason=length.*max_tokens/s);
+    });
+
+    it('does not call a filtered answer a normal one', async () => {
+        // content_filter is the gateway saying it stopped early. Calling that
+        // "ended normally" sends people to tune structured output instead.
+        stubEcho('refused', 'content_filter');
+        const run = executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings: secretSettings,
+        });
+        await expect(run).rejects.toThrow(/finish_reason=content_filter/);
+        await expect(run).rejects.not.toThrow(/ended normally/);
+    });
+
+    it('still points a genuinely complete answer at structuredOutput', async () => {
+        stubEcho('sorry, I cannot do that', 'stop');
+        await expect(
+            executeOpenaiCompat({
+                imageSource: tmpImage,
+                imageKind: 'local',
+                timeoutMs: 5000,
+                settings: secretSettings,
+            }),
+        ).rejects.toThrow(/ended normally.*structuredOutput/s);
+    });
+});
+
+describe('the private endpoint stays out of every gateway error (#45)', () => {
+    const secretSettings = {
+        apiKey: 'sk-proj-gate9-secret-1234567890',
+        baseUrl: 'https://private-gateway.example.internal/v1',
+        model: 'qwen3-vl-plus',
+    };
+
+    async function messageOf(promise: Promise<unknown>): Promise<string> {
+        try {
+            await promise;
+        } catch (error) {
+            return (error as Error).message;
+        }
+        throw new Error('expected a rejection');
+    }
+
+    const run = () =>
+        executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings: secretSettings,
+        });
+
+    it('redacts it out of a non-2xx body, which only masked the key before', async () => {
+        vi.stubGlobal(
+            'fetch',
+            async () =>
+                new Response(
+                    `gateway rejected endpoint=${secretSettings.baseUrl} key=${secretSettings.apiKey}`,
+                    { status: 500 },
+                ),
+        );
+        const message = await messageOf(run());
+        expect(message).toContain('error 500');
+        expect(message).not.toContain('private-gateway.example.internal');
+        expect(message).not.toContain(secretSettings.apiKey);
+    });
+
+    it('redacts it out of a finish_reason the gateway invented', async () => {
+        vi.stubGlobal(
+            'fetch',
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        choices: [
+                            {
+                                message: { content: 'nope' },
+                                finish_reason: `blocked_by_${secretSettings.baseUrl}`,
+                            },
+                        ],
+                    }),
+                    { status: 200 },
+                ),
+        );
+        const message = await messageOf(run());
+        expect(message).not.toContain('private-gateway.example.internal');
+    });
+});
+
+describe('redaction runs before the message is clipped (#45)', () => {
+    // The endpoint is redacted by exact match, and a plain https URL matches
+    // none of the token shapes, so clipping through the middle of it first
+    // left the hostname in the message with nothing left to match.
+    const secretSettings = {
+        apiKey: 'sk-proj-gate10-secret-1234567890',
+        baseUrl: 'https://private-gateway.example.internal/v1/tenant-42',
+        model: 'qwen3-vl-plus',
+    };
+
+    async function messageOf(promise: Promise<unknown>): Promise<string> {
+        try {
+            await promise;
+        } catch (error) {
+            return (error as Error).message;
+        }
+        throw new Error('expected a rejection');
+    }
+
+    const run = () =>
+        executeOpenaiCompat({
+            imageSource: tmpImage,
+            imageKind: 'local',
+            timeoutMs: 5000,
+            settings: secretSettings,
+        });
+
+    // 251 + 'endpoint=' puts the URL at offset 260, so truncate's 300-char
+    // cut lands 40 characters in: past the hostname, before the end. The
+    // whole URL is no longer present for an exact match to find.
+    function straddling(): string {
+        return `${'x'.repeat(251)}endpoint=${secretSettings.baseUrl} tail`;
+    }
+
+    it('keeps it out of a non-2xx body clipped mid-hostname', async () => {
+        vi.stubGlobal('fetch', async () => new Response(straddling(), { status: 500 }));
+        const message = await messageOf(run());
+        expect(message).not.toContain('private-gateway');
+    });
+
+    it('keeps it out of the schema-mismatch quote', async () => {
+        vi.stubGlobal(
+            'fetch',
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        choices: [{ message: { content: `{"summary":"x"} ${straddling()}` } }],
+                    }),
+                    { status: 200 },
+                ),
+        );
+        const message = await messageOf(run());
+        expect(message).not.toContain('private-gateway');
+    });
+
+    it('keeps it out of the tail quote', async () => {
+        // tail() shows the END, so the endpoint has to survive that boundary.
+        vi.stubGlobal(
+            'fetch',
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        choices: [
+                            {
+                                // tail() cuts the FRONT, and 250 of padding
+                                // puts the cut inside `https://`, leaving the
+                                // hostname and everything after it visible.
+                                message: {
+                                    content: `no json ${secretSettings.baseUrl}${'y'.repeat(250)}`,
+                                },
+                                finish_reason: 'stop',
+                            },
+                        ],
+                    }),
+                    { status: 200 },
+                ),
+        );
+        const message = await messageOf(run());
+        expect(message).not.toContain('private-gateway');
+    });
+
+    it('keeps it out of a long invented finish_reason', async () => {
+        vi.stubGlobal(
+            'fetch',
+            async () =>
+                new Response(
+                    JSON.stringify({
+                        choices: [
+                            {
+                                message: { content: 'nope' },
+                                finish_reason: `${'blocked_'.repeat(4)}${secretSettings.baseUrl}${'z'.repeat(60)}`,
+                            },
+                        ],
+                    }),
+                    { status: 200 },
+                ),
+        );
+        const message = await messageOf(run());
+        expect(message).not.toContain('private-gateway');
+    });
+});
