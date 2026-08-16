@@ -63,26 +63,56 @@ export interface ModlensConfig {
 export const CONFIG_DIR = path.join(os.homedir(), '.modlens');
 export const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
-// Provider credentials used to be readable from GEMINI_API_KEY, OPENAI_API_KEY,
-// OPENAI_BASE_URL, ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL, and they are not
-// any more (issue #42). A baseUrl and an apiKey are one credential: taking one
-// from the file and the other from the environment built a pairing that
-// existed in neither, and ambient OPENAI_* variables are set for other tools
-// often enough that an explicitly configured engine would answer 401 with
-// nothing in the error naming where the key came from. The config file is the
-// only source now. modlens's own switches (MODLENS_MODEL, MODLENS_HARNESS)
-// and the proxy conventions (HTTPS_PROXY and friends) are unaffected: neither
-// is a credential, and neither can be split from a matching half.
+// A provider's settings come from one place, whole (issue #42). A baseUrl and
+// an apiKey are one credential, and drawing halves from two sources builds a
+// pairing that exists in neither: an ambient OPENAI_API_KEY set for another
+// tool used to replace the key beside a configured endpoint, and the run
+// answered 401 with nothing naming the environment as the source. Merging the
+// other way round would keep the same shape, so the rule is not about which
+// side wins a field: mention a provider in the config file and the file is its
+// source, mention nothing and the environment is, which keeps a container that
+// only exports variables working with both halves still matching.
+const ENV_BINDINGS: Record<string, Partial<Record<ProviderStringField, string>>> = {
+    'gemini-api': { apiKey: 'GEMINI_API_KEY' },
+    openai: { apiKey: 'OPENAI_API_KEY', baseUrl: 'OPENAI_BASE_URL' },
+    anthropic: { apiKey: 'ANTHROPIC_API_KEY', baseUrl: 'ANTHROPIC_BASE_URL' },
+};
+
+/** Everything the file holds for one provider, its aliases included. */
+function fileSettingsFor(providerName: string, config: ModlensConfig): ProviderSettings {
+    const aliasNames = Object.entries(providerAliases())
+        .filter(([alias, canonical]) => canonical === providerName && alias !== providerName)
+        .map(([alias]) => alias);
+    return {
+        ...Object.assign({}, ...aliasNames.map((alias) => config.providers?.[alias] ?? {})),
+        ...(config.providers?.[providerName] ?? {}),
+    };
+}
+
+/** What the environment holds for one provider, through its bound variables. */
+function envSettingsFor(providerName: string, env: NodeJS.ProcessEnv): ProviderSettings {
+    const settings: ProviderSettings = {};
+    for (const [field, variable] of Object.entries(ENV_BINDINGS[providerName] ?? {}) as Array<
+        [ProviderStringField, string]
+    >) {
+        const value = env[variable]?.trim();
+        if (value) {
+            settings[field] = value;
+        }
+    }
+    return settings;
+}
 
 /**
- * The endpoint bindings retired in 3.17.0, and the field each one used to
- * fill. Kept so the exact people they affected get told, rather than silently
- * having their key sent to the vendor's own endpoint: someone who routed a
- * gateway through `ANTHROPIC_BASE_URL` and left `anthropic.baseUrl` unset
- * would otherwise have that gateway's key, and the image beside it, delivered
- * to Anthropic. The check fires only in exactly that case.
+ * The endpoint variables that stop applying the moment the config file names
+ * their provider. Someone who routed a gateway through `ANTHROPIC_BASE_URL`
+ * and then set `anthropic.apiKey` in the file has, from 3.17.0, a file-sourced
+ * provider with no endpoint, and would otherwise have that gateway's key, and
+ * the image beside it, delivered to Anthropic's own endpoint. The check fires
+ * only in exactly that case: variable set, provider named by the file, no
+ * baseUrl there.
  */
-const RETIRED_ENDPOINT_BINDINGS: Record<string, string> = {
+const ENDPOINT_BINDINGS: Record<string, string> = {
     openai: 'OPENAI_BASE_URL',
     anthropic: 'ANTHROPIC_BASE_URL',
 };
@@ -92,20 +122,20 @@ export function assertNoRetiredEndpointBinding(
     settings: ProviderSettings,
     env: NodeJS.ProcessEnv = process.env,
 ): void {
-    const variable = RETIRED_ENDPOINT_BINDINGS[providerName];
-    if (!variable || settings.baseUrl?.trim()) {
+    const variable = ENDPOINT_BINDINGS[providerName];
+    if (!variable || settings.baseUrl?.trim() || !env[variable]?.trim()) {
         return;
     }
-    if (!env[variable]?.trim()) {
-        return;
-    }
-    // The command names the variable rather than its value: the shell
-    // expands it, so the migration stays one paste away without the message
-    // carrying an endpoint that may hold userinfo. A masked copy identifies
-    // which one is meant, since errors travel into logs and screenshots.
+    // The command names the variable rather than its value: the shell expands
+    // it, so the migration stays one paste away without the message carrying
+    // an endpoint that may hold userinfo. A masked copy identifies which one
+    // is meant, since errors travel into logs and screenshots. The spelling
+    // follows the platform, because a POSIX form is not runnable where most
+    // of the people this affects are (issue #42 came from Windows).
     const shown = maskUrlCredentials(env[variable]?.trim() ?? '');
+    const reference = process.platform === 'win32' ? `$env:${variable}` : `"$${variable}"`;
     throw new Error(
-        `${variable} is set (${shown}), but modlens stopped reading it in 3.17.0, and ${providerName}.baseUrl is not in the config file. Refusing rather than sending this key to the provider's own endpoint. To keep the endpoint you were using, run: modlens config set ${providerName}.baseUrl "$${variable}"`,
+        `${variable} is set (${shown}), but the config file configures ${providerName}, and since 3.17.0 a provider takes its settings from one place: the file, whole. ${providerName}.baseUrl is not in it, so this run would have used the provider's own endpoint. To keep the endpoint you were using, run: modlens config set ${providerName}.baseUrl ${reference}`,
     );
 }
 
@@ -142,21 +172,24 @@ export function defaultProviderName(config: ModlensConfig): string {
 }
 
 /** Resolve settings for one provider with env vars overriding the config file. */
+/** Whether the config file says anything about this provider, aliases included. */
+export function providerConfiguredInFile(providerName: string, config: ModlensConfig): boolean {
+    return Object.keys(fileSettingsFor(providerName, config)).length > 0;
+}
+
 export function resolveProviderSettings(
     providerName: string,
     config: ModlensConfig,
     env: NodeJS.ProcessEnv = process.env,
 ): ProviderSettings {
-    // Settings saved under an alias (config set gemini.apiKey) were invisible
-    // once the name resolved to its canonical form.
-    const aliasNames = Object.entries(providerAliases())
-        .filter(([alias, canonical]) => canonical === providerName && alias !== providerName)
-        .map(([alias]) => alias);
-    const fromFile = {
-        ...Object.assign({}, ...aliasNames.map((alias) => config.providers?.[alias] ?? {})),
-        ...(config.providers?.[providerName] ?? {}),
-    };
-    const settings: ProviderSettings = { ...fromFile };
+    // Settings saved under an alias (config set gemini.apiKey) count as the
+    // file mentioning this provider: they were invisible once the name
+    // resolved to its canonical form.
+    const fromFile = fileSettingsFor(providerName, config);
+    const mentioned = Object.keys(fromFile).length > 0;
+    const settings: ProviderSettings = mentioned
+        ? { ...fromFile }
+        : envSettingsFor(providerName, env);
     // The top-level proxy is the default; a provider-level one overrides it.
     if (!settings.proxy && config.proxy?.trim()) {
         settings.proxy = config.proxy.trim();
@@ -339,15 +372,26 @@ export function renderEffectiveConfig(
     env: NodeJS.ProcessEnv = process.env,
 ): string {
     const providerNames = new Set<string>(Object.keys(config.providers ?? {}));
+    // A provider configured only through the environment is still in effect,
+    // so it belongs in a view of what is in effect.
+    for (const [providerName, bindings] of Object.entries(ENV_BINDINGS)) {
+        if (Object.values(bindings).some((variable) => env[variable]?.trim())) {
+            providerNames.add(providerName);
+        }
+    }
 
     const providers: Record<string, Record<string, string>> = {};
     for (const name of [...providerNames].sort()) {
-        const fileSettings = config.providers?.[name] ?? {};
+        const fileSettings = fileSettingsFor(name, config);
+        // Whichever source is actually in effect for this provider, labelled
+        // as such: the view has to agree with what a run would use.
+        const mentioned = Object.keys(fileSettings).length > 0;
+        const effective = mentioned ? fileSettings : envSettingsFor(name, env);
+        const source: 'file' | 'env' = mentioned ? 'file' : 'env';
         const fields: Record<string, string> = {};
         for (const field of STRING_FIELDS) {
-            const value = fileSettings[field];
-            const source = value !== undefined ? 'file' : null;
-            if (value !== undefined && source) {
+            const value = effective[field];
+            if (value !== undefined) {
                 // config show exists to be pasted into issues: keys are
                 // masked, and a proxy URL's userinfo is a credential too.
                 const shown =

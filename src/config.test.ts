@@ -38,14 +38,14 @@ describe('resolveProviderSettings', () => {
         expect(settings.model).toBe('m1');
     });
 
-    it('leaves an unconfigured provider unconfigured, whatever the environment holds', () => {
+    it('uses the environment whole for a provider the file never mentions', () => {
         const settings = resolveProviderSettings(
             'openai',
             {},
             { OPENAI_API_KEY: 'k', OPENAI_BASE_URL: 'https://gw.example.com/v1' },
         );
-        expect(settings.baseUrl).toBeUndefined();
-        expect(settings.apiKey).toBeUndefined();
+        expect(settings.baseUrl).toBe('https://gw.example.com/v1');
+        expect(settings.apiKey).toBe('k');
     });
 });
 
@@ -278,14 +278,13 @@ describe('structuredOutput (#37)', () => {
     });
 });
 
-describe('provider credentials come from the file alone (#42)', () => {
-    // Ambient OPENAI_* variables are set for other tools all the time, and
-    // they used to win over an explicitly configured engine. What broke was
-    // not who wins: baseUrl and apiKey are one credential, and taking one
-    // from the file and the other from the environment produced a pairing
-    // that exists in neither, which is why the failure read as a 401 against
-    // an endpoint the user never pointed that key at.
-    it('ignores an ambient key when the file configures the engine', () => {
+describe('one provider, one source (#42)', () => {
+    // The reported failure was a configured Kimi endpoint answering 401
+    // because an ambient OPENAI_API_KEY replaced the configured key. The
+    // defect is not which side wins a field: a baseUrl and an apiKey are one
+    // credential, and drawing halves from two places builds a pairing that
+    // exists in neither. So a provider's settings come from one place.
+    it('takes the file whole when the file mentions this provider', () => {
         const settings = resolveProviderSettings(
             'openai',
             { providers: { openai: { apiKey: 'file-key', baseUrl: 'https://kimi.example/v1' } } },
@@ -295,9 +294,10 @@ describe('provider credentials come from the file alone (#42)', () => {
         expect(settings.baseUrl).toBe('https://kimi.example/v1');
     });
 
-    it('does not fill a gap from the environment either', () => {
-        // Half from the file and half from the environment is the pairing
-        // that caused this; an absent field stays absent and doctor says so.
+    it('does not fill a gap from the environment, which is how the pair got split', () => {
+        // Endpoint from the file, key from the environment: exactly the
+        // combination that answered 401, and exactly what a field-level
+        // "file wins" rule would still produce.
         const settings = resolveProviderSettings(
             'openai',
             { providers: { openai: { baseUrl: 'https://kimi.example/v1' } } },
@@ -306,13 +306,40 @@ describe('provider credentials come from the file alone (#42)', () => {
         expect(settings.apiKey).toBeUndefined();
     });
 
-    it('reports nothing from the environment in the effective config', () => {
-        const rendered = renderEffectiveConfig(
-            { providers: { openai: { model: 'm' } } },
-            { OPENAI_API_KEY: 'ambient-key' },
+    it('takes the environment whole when the file says nothing about it', () => {
+        // A container or CI job that only exports variables keeps working,
+        // and both halves come from the same place, so they still match.
+        const settings = resolveProviderSettings(
+            'openai',
+            { providers: { 'gemini-api': { apiKey: 'g' } } },
+            { OPENAI_API_KEY: 'env-key', OPENAI_BASE_URL: 'https://gw.example/v1' },
         );
-        expect(rendered).not.toContain('ambient-key');
-        expect(rendered).not.toContain('(env)');
+        expect(settings.apiKey).toBe('env-key');
+        expect(settings.baseUrl).toBe('https://gw.example/v1');
+    });
+
+    it('counts an alias entry as the file mentioning it', () => {
+        const settings = resolveProviderSettings(
+            'gemini-api',
+            { providers: { gemini: { model: 'm' } } },
+            { GEMINI_API_KEY: 'env-key' },
+        );
+        expect(settings.model).toBe('m');
+        expect(settings.apiKey).toBeUndefined();
+    });
+
+    it('labels the source it actually used', () => {
+        const fromEnv = JSON.parse(
+            renderEffectiveConfig({}, { OPENAI_API_KEY: 'k', OPENAI_BASE_URL: 'https://x/v1' }),
+        ) as { providers: Record<string, Record<string, string>> };
+        expect(fromEnv.providers.openai.baseUrl).toBe('https://x/v1 (env)');
+        const fromFile = JSON.parse(
+            renderEffectiveConfig(
+                { providers: { openai: { baseUrl: 'https://y/v1' } } },
+                { OPENAI_BASE_URL: 'https://x/v1' },
+            ),
+        ) as { providers: Record<string, Record<string, string>> };
+        expect(fromFile.providers.openai.baseUrl).toBe('https://y/v1 (file)');
     });
 });
 
@@ -349,7 +376,13 @@ describe('the retired endpoint bindings tell their users (#42)', () => {
         expect(message).not.toContain('hunter2');
         // The command is runnable because the shell expands the variable, so
         // nobody is asked to paste a masked value back into their config.
-        expect(message).toContain('openai.baseUrl "$OPENAI_BASE_URL"');
+        // The reference is the platform's own spelling, since a POSIX form is
+        // not runnable where this bug was reported from.
+        expect(message).toContain(
+            process.platform === 'win32'
+                ? 'openai.baseUrl $env:OPENAI_BASE_URL'
+                : 'openai.baseUrl "$OPENAI_BASE_URL"',
+        );
         expect(message).not.toMatch(/baseUrl \S*\*\*\*/);
     });
 

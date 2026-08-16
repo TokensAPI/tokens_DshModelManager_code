@@ -71,10 +71,23 @@ describe('providerAvailable', () => {
         expect(providerAvailable('openai', full, env)).toBe(true);
     });
 
-    it('ignores keys in the environment: the file is the only source (#42)', () => {
+    it('reads a provider from whichever single source configures it (#42)', () => {
+        // The environment configures a provider the file never mentions.
         expect(providerAvailable('gemini-api', {}, { PATH: pathWith(), GEMINI_API_KEY: 'g' })).toBe(
-            false,
+            true,
         );
+        // Once the file mentions it, the file is the source, whole: a key in
+        // the environment no longer completes a half-configured entry.
+        expect(
+            providerAvailable(
+                'gemini-api',
+                { providers: { 'gemini-api': { model: 'm' } } },
+                {
+                    PATH: pathWith(),
+                    GEMINI_API_KEY: 'g',
+                },
+            ),
+        ).toBe(false);
         expect(
             providerAvailable(
                 'gemini-api',
