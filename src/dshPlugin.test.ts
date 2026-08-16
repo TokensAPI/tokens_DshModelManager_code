@@ -1,8 +1,16 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { VISION_RESULT_SCHEMA } from './schema.ts';
+
+/** Isolated paste directories handed to every route under test. */
+const routePasteDirs: string[] = [];
+afterAll(() => {
+    for (const dir of routePasteDirs) {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
 
 describe('dsh plugin bundle', () => {
     it('ships a vision schema identical to the source of truth', () => {
@@ -783,6 +791,14 @@ describe('dsh paste-to-path host route', () => {
         llm?: unknown,
         events?: Record<string, () => void>,
     ) {
+        // Every route under test gets its own paste directory. The route
+        // sweeps on every successful paste, so without this the suite would
+        // sweep the real store and delete a developer's own live pastes. That
+        // slipped through twice by fixing the sweeper's tests and leaving the
+        // route's, which is why it is wired here rather than per test.
+        const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-testpaste-'));
+        routePasteDirs.push(isolated);
+        config = { pasteDir: isolated, ...config };
         // @ts-expect-error untyped on purpose
         const plugin = (await import('../dsh/index.js')) as {
             apply: (ctx: unknown, config?: Record<string, unknown>) => void;
@@ -2833,6 +2849,142 @@ describe('the paste store has a ceiling as well as a clock (#51)', () => {
             expect(survivors).toEqual(made.slice(-2));
         } finally {
             fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('the suite never touches the real paste store (#51)', () => {
+    // Twice this was fixed in the sweeper's own tests while the route kept
+    // using the default directory, and the route sweeps on every successful
+    // paste. This is the canary for that whole class rather than for one
+    // call site: whatever the suite does, the real store must be left as it
+    // was found.
+    it('leaves the default store exactly as it found it', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            __paste: { pasteRoot: (base?: string | null) => string };
+        };
+        const real = plugin.__paste.pasteRoot();
+        const before = fs.existsSync(real) ? fs.readdirSync(real).sort().join('|') : '<absent>';
+
+        // Exercise the sweeper the way a paste would, but pointed elsewhere.
+        const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-canary-'));
+        try {
+            fs.mkdirSync(path.join(isolated, 'p-zzzzzz'));
+            // @ts-expect-error untyped on purpose
+            const mod = (await import('../dsh/index.js')) as {
+                __paste: { sweepExpiredPastes: (n?: number, r?: string) => Promise<void> };
+            };
+            await mod.__paste.sweepExpiredPastes(Date.now(), isolated);
+        } finally {
+            fs.rmSync(isolated, { recursive: true, force: true });
+        }
+
+        const after = fs.existsSync(real) ? fs.readdirSync(real).sort().join('|') : '<absent>';
+        expect(after).toBe(before);
+    });
+});
+
+describe('the paste store refuses a directory that is not ours (#51)', () => {
+    // The path is predictable and the system temp directory is shared, so on
+    // a multi-user machine somebody else can get there first. A symlink at
+    // that name would aim a recursive cleanup at whatever it points to.
+    async function open(base: string) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            __paste: { openPasteRoot: (base?: string | null) => Promise<string> };
+        };
+        return plugin.__paste.openPasteRoot(base);
+    }
+
+    it('refuses a symlink standing in for the store', async () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-linkroot-'));
+        const target = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-linktarget-'));
+        const link = path.join(scratch, 'store');
+        try {
+            fs.writeFileSync(path.join(target, 'precious.txt'), 'keep me');
+            fs.symlinkSync(target, link, 'dir');
+            await expect(open(link)).rejects.toThrow(/not a directory/);
+            expect(fs.existsSync(path.join(target, 'precious.txt'))).toBe(true);
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+            fs.rmSync(target, { recursive: true, force: true });
+        }
+    });
+
+    it('refuses a file sitting where the store should be', async () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-fileroot-'));
+        const asFile = path.join(scratch, 'store');
+        try {
+            fs.writeFileSync(asFile, 'not a directory');
+            await expect(open(asFile)).rejects.toThrow(/not a directory/);
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+        }
+    });
+
+    it('creates a private store and narrows an over-permissive one', async () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-mode-'));
+        const store = path.join(scratch, 'store');
+        try {
+            await open(store);
+            expect(fs.statSync(store).mode & 0o777).toBe(0o700);
+            fs.chmodSync(store, 0o777);
+            await open(store);
+            expect(fs.statSync(store).mode & 0o777).toBe(0o700);
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('the paste store is created before it is trusted (#51)', () => {
+    // Checking a fixed name and then creating it leaves a window: on a shared
+    // temp directory somebody can drop a symlink between the two and have the
+    // write land wherever it points.
+    async function open(base: string) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            __paste: { openPasteRoot: (base?: string | null) => Promise<string> };
+        };
+        return plugin.__paste.openPasteRoot(base);
+    }
+
+    it('creates a nested store, and its parent, privately', async () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-nested-'));
+        try {
+            const nested = path.join(scratch, 'a', 'b', 'store');
+            await open(nested);
+            expect(fs.statSync(nested).isDirectory()).toBe(true);
+            expect(fs.statSync(nested).mode & 0o777).toBe(0o700);
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+        }
+    });
+
+    it('refuses a symlink that was already sitting at the name', async () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-race-'));
+        const target = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-racetarget-'));
+        try {
+            fs.writeFileSync(path.join(target, 'precious.txt'), 'keep me');
+            const link = path.join(scratch, 'store');
+            fs.symlinkSync(target, link, 'dir');
+            await expect(open(link)).rejects.toThrow(/not a directory/);
+            // Nothing was written through the link either.
+            expect(fs.readdirSync(target)).toEqual(['precious.txt']);
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+            fs.rmSync(target, { recursive: true, force: true });
+        }
+    });
+
+    it('is safe to open twice', async () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-twice-'));
+        try {
+            const store = path.join(scratch, 'store');
+            await expect(Promise.all([open(store), open(store)])).resolves.toEqual([store, store]);
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
         }
     });
 });

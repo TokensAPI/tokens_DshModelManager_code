@@ -415,9 +415,7 @@ function registerPasteRoute(ctx, host, ownProviders, config = {}) {
         const { mkdtemp, writeFile } = await import('node:fs/promises')
         const { tmpdir } = await import('node:os')
         const { join } = await import('node:path')
-        const root = pasteRoot(config.pasteDir)
-        const { mkdir } = await import('node:fs/promises')
-        await mkdir(root, { recursive: true, mode: 0o700 })
+        const root = await openPasteRoot(config.pasteDir)
         const dir = await mkdtemp(join(root, 'p-'))
         const file = join(dir, `paste${sniff.ext}`)
         await writeFile(file, buffer, { mode: 0o600 })
@@ -1292,6 +1290,51 @@ function pasteRoot(base = null) {
   return base ?? join(tmpdirPath(), 'modlens-dsh-paste')
 }
 
+/**
+ * Open the store directory, or refuse it.
+ *
+ * The path is predictable and the system temp directory is shared, so on a
+ * multi-user machine somebody else can get there first. A symlink planted at
+ * that name would point this plugin's recursive cleanup at whatever it names,
+ * which is the oldest trick there is against a program that tidies up in
+ * /tmp. So an existing entry has to be a real directory this user owns, and a
+ * new one is created private. Anything else is refused, and the paste fails
+ * loudly rather than writing into somebody else's directory.
+ */
+async function openPasteRoot(base = null) {
+  const { mkdir, lstat, chmod } = await import('node:fs/promises')
+  const { dirname } = await import('node:path')
+  const root = pasteRoot(base)
+  // Create first, then check. Checking first leaves a window between the
+  // answer and the use, and on a shared temp directory that window is enough
+  // for somebody to drop a symlink at the name and have this write into
+  // whatever it points at. An exclusive mkdir either creates the directory,
+  // in which case it is ours by construction, or reports that something is
+  // already there, which is the case worth inspecting.
+  await mkdir(dirname(root), { recursive: true }).catch(() => {})
+  try {
+    await mkdir(root, { mode: 0o700 })
+    return root
+  } catch (error) {
+    if (error?.code !== 'EEXIST') {
+      throw error
+    }
+  }
+  // Something was already at that name. lstat, so a symlink reads as a link
+  // rather than as whatever it points at.
+  const info = await lstat(root)
+  if (!info.isDirectory()) {
+    throw new Error(`${root} exists and is not a directory`)
+  }
+  if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
+    throw new Error(`${root} belongs to another user`)
+  }
+  // Narrow it even if it was created wider, so a later paste is not readable
+  // by everyone on the machine.
+  await chmod(root, 0o700).catch(() => {})
+  return root
+}
+
 function tmpdirPath() {
   // Resolved lazily so a test can point HOME/TMPDIR elsewhere first.
   return process.env.TMPDIR || process.env.TEMP || process.env.TMP || '/tmp'
@@ -1324,13 +1367,24 @@ async function sweepExpiredPastes(now = Date.now(), base = null, maxBytes = PAST
       try {
         const info = await stat(full)
         if (now - info.mtimeMs >= PASTE_TTL_MS) {
-          await rm(full, { recursive: true, force: true })
-          continue
+          try {
+            await rm(full, { recursive: true, force: true })
+            continue
+          } catch {
+            // Held open, or removed only in part. Either way it still
+            // occupies the disk, so it stays on the books rather than being
+            // silently written off and leaving the ceiling reading low.
+          }
         }
-        kept.push({ full, mtimeMs: info.mtimeMs, bytes: await directorySize(full) })
+        // A directory that cannot be measured still occupies the disk, so it
+        // stays on the books at the largest a single paste may be. Erring
+        // high makes the ceiling clean sooner; erring low, or dropping the
+        // entry, lets the store grow while the ceiling reads comfortable.
+        const bytes = await directorySize(full).catch(() => PASTE_MAX_BYTES)
+        kept.push({ full, mtimeMs: info.mtimeMs, bytes })
       } catch {
-        // Vanished, held open by another process, or not ours to remove.
-        // A paste must never fail over housekeeping.
+        // Vanished between listing and measuring. A paste must never fail
+        // over housekeeping.
       }
     }
     let total = kept.reduce((sum, item) => sum + item.bytes, 0)
@@ -1341,7 +1395,10 @@ async function sweepExpiredPastes(now = Date.now(), base = null, maxBytes = PAST
         await rm(item.full, { recursive: true, force: true })
         total -= item.bytes
       } catch {
-        // Still held. Move on rather than spin.
+        // Still held, or gone only in part. Measure what is actually left
+        // instead of trusting the subtraction, and keep going: one
+        // undeletable directory must not stop the rest from being freed.
+        total -= item.bytes - (await directorySize(item.full).catch(() => item.bytes))
       }
     }
   } catch {
@@ -1431,4 +1488,10 @@ function registerConfigRoute(ctx) {
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
 
 // The paste sweeper, reachable from the test suite the way __config is.
-export const __paste = { sweepExpiredPastes, ttlMs: PASTE_TTL_MS, maxBytes: PASTE_STORE_MAX_BYTES }
+export const __paste = {
+  sweepExpiredPastes,
+  openPasteRoot,
+  pasteRoot,
+  ttlMs: PASTE_TTL_MS,
+  maxBytes: PASTE_STORE_MAX_BYTES,
+}
