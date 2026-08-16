@@ -2688,3 +2688,151 @@ describe('replay state never crosses to an adapter that did not produce it (#49)
         expect(original.source.provider).toBe('deepseek-modlens');
     });
 });
+
+describe('pasted files do not accumulate forever (#51)', () => {
+    // The paste route cannot delete its file when the request ends: the path
+    // is what goes into the composer, so it has to outlive the response and
+    // survive until the model reads it. Nothing collected them afterwards,
+    // so they built up for as long as dsh stayed installed.
+    //
+    // Every case here runs against an isolated root. Pointing the sweep at
+    // the real temp directory would delete a developer's own live pastes
+    // every time the suite ran.
+    async function paste() {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            __paste: {
+                sweepExpiredPastes: (now?: number, root?: string) => Promise<void>;
+                ttlMs: number;
+            };
+        };
+        return plugin.__paste;
+    }
+
+    function aged(root: string, name: string, ageMs: number): string {
+        const dir = path.join(root, name);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'paste.png'), 'x');
+        const when = new Date(Date.now() - ageMs);
+        fs.utimesSync(dir, when, when);
+        return dir;
+    }
+
+    function scratch(): string {
+        return fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-sweeproot-'));
+    }
+
+    it('removes an expired paste and keeps a fresh one', async () => {
+        const { sweepExpiredPastes, ttlMs } = await paste();
+        const root = scratch();
+        try {
+            const stale = aged(root, 'p-aaaaaa', ttlMs * 2);
+            const fresh = aged(root, 'p-bbbbbb', 0);
+            await sweepExpiredPastes(Date.now(), root);
+            expect(fs.existsSync(stale)).toBe(false);
+            expect(fs.existsSync(fresh)).toBe(true);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('keeps a draft that has been sitting for days', async () => {
+        // The window has to cover a person's pace. A composer holding a
+        // pasted path overnight, or over a weekend, must still resolve.
+        const { sweepExpiredPastes } = await paste();
+        const root = scratch();
+        try {
+            const weekend = aged(root, 'p-cccccc', 3 * 24 * 60 * 60 * 1000);
+            await sweepExpiredPastes(Date.now(), root);
+            expect(fs.existsSync(weekend)).toBe(true);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('leaves anything that is not a paste directory alone', async () => {
+        const { sweepExpiredPastes, ttlMs } = await paste();
+        const root = scratch();
+        try {
+            // Everything inside this directory is ours by construction, so
+            // the sweep no longer has to guess from a name. What matters now
+            // is that it never leaves the directory: a file rather than a
+            // paste is left alone, and nothing outside is reachable.
+            const stray = path.join(root, 'not-a-paste.txt');
+            fs.writeFileSync(stray, 'x');
+            const when = new Date(Date.now() - ttlMs * 10);
+            fs.utimesSync(stray, when, when);
+            await sweepExpiredPastes(Date.now(), root);
+            expect(fs.existsSync(stray)).toBe(true);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('does not follow a link out of the temp directory', async () => {
+        // A cleanup that follows a link is how it becomes someone else's
+        // deleted files.
+        const { sweepExpiredPastes, ttlMs } = await paste();
+        const root = scratch();
+        const elsewhere = scratch();
+        try {
+            fs.writeFileSync(path.join(elsewhere, 'precious.txt'), 'keep me');
+            const link = path.join(root, 'p-dddddd');
+            fs.symlinkSync(elsewhere, link, 'dir');
+            const when = new Date(Date.now() - ttlMs * 2);
+            fs.lutimesSync(link, when, when);
+            await sweepExpiredPastes(Date.now(), root);
+            expect(fs.existsSync(path.join(elsewhere, 'precious.txt'))).toBe(true);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+            fs.rmSync(elsewhere, { recursive: true, force: true });
+        }
+    });
+
+    it('survives a root it cannot list', async () => {
+        const { sweepExpiredPastes } = await paste();
+        await expect(
+            sweepExpiredPastes(Date.now(), path.join(os.tmpdir(), 'modlens-no-such-root')),
+        ).resolves.toBeUndefined();
+    });
+});
+
+describe('the paste store has a ceiling as well as a clock (#51)', () => {
+    // One image may be 25 MB and the window is a week, so a burst can reach
+    // tens of gigabytes before any of it expires. The ceiling only engages
+    // far past ordinary use, and removes oldest first: a worse rule than
+    // liveness, but running a disk out of space is worse than either.
+    it('drops the oldest until the store is under the ceiling', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            __paste: {
+                sweepExpiredPastes: (
+                    now?: number,
+                    root?: string,
+                    maxBytes?: number,
+                ) => Promise<void>;
+                maxBytes: number;
+            };
+        };
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cap-'));
+        try {
+            const big = Buffer.alloc(512 * 1024, 1);
+            const made: string[] = [];
+            for (let index = 0; index < 4; index++) {
+                const dir = path.join(root, `p-cap${index}`);
+                fs.mkdirSync(dir);
+                fs.writeFileSync(path.join(dir, 'paste.png'), big);
+                const when = new Date(Date.now() - (4 - index) * 60_000);
+                fs.utimesSync(dir, when, when);
+                made.push(dir);
+            }
+            // A ceiling just under two of them, so the rule has to engage
+            // and the newest are what survive.
+            await plugin.__paste.sweepExpiredPastes(Date.now(), root, big.length * 2);
+            const survivors = made.filter((dir) => fs.existsSync(dir));
+            expect(survivors).toEqual(made.slice(-2));
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+});
