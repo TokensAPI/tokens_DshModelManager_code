@@ -403,15 +403,23 @@ describe('the retired endpoint bindings tell their users (#42)', () => {
     it('refuses when the variable is set and the file has no endpoint', () => {
         // Silence here would deliver a gateway's key, and the image beside
         // it, to the vendor's own endpoint.
-        expect(() =>
-            assertNoRetiredEndpointBinding(
-                'anthropic',
-                { apiKey: 'k' },
-                {
-                    ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
-                },
-            ),
-        ).toThrow(/ANTHROPIC_BASE_URL.*anthropic\.baseUrl.*\$ANTHROPIC_BASE_URL/s);
+        expect(
+            () =>
+                assertNoRetiredEndpointBinding(
+                    'anthropic',
+                    { apiKey: 'k' },
+                    {
+                        ANTHROPIC_BASE_URL: 'https://gateway.example/v1',
+                    },
+                ),
+            // The reference is the platform's own spelling, the same way the
+            // masking test below checks it. Asserting the POSIX form
+            // unconditionally is what kept Windows CI red from 3.17.0.
+        ).toThrow(
+            process.platform === 'win32'
+                ? /ANTHROPIC_BASE_URL.*anthropic\.baseUrl \$env:ANTHROPIC_BASE_URL/s
+                : /ANTHROPIC_BASE_URL.*anthropic\.baseUrl "\$ANTHROPIC_BASE_URL"/s,
+        );
     });
 
     it('masks credentials the endpoint URL carries, since errors travel', () => {
