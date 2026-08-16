@@ -165,6 +165,13 @@ npx -y skills add liustack/vibemaster -g
 
 ⭐ If it helps, star [ModLens](https://github.com/liustack/modlens) and [VibeMaster](https://github.com/liustack/vibemaster). Stars are how the next developer finds them.
 
+## Key ecosystem partners
+
+The projects worth recommending in the DeepSeek Harness ecosystem.
+
+- 🛒 **[dsh-market](https://github.com/dsh-market/dsh-market)** — The plugin market inside DeepSeek Harness. Browse 800+ community plugins with category filters and screenshot previews, one-click install and update, and live theme switching. Most need no restart.
+  DeepSeek Harness 的可视化插件市场。设置页里直接逛社区全部 800+ 插件：分类筛选、截图预览、一键安装与更新、主题即点即换，装完多数免重启。
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=liustack%2Fmodlens&type=date&legend=top-left">
