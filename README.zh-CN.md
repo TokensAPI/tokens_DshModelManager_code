@@ -177,6 +177,13 @@ Codex 桌面 App 中识别一张推文截图。作者、配文、照片内容（
 
 ⭐ 如果它对你有用，请给 [ModLens](https://github.com/liustack/modlens) 一个 star，这是其他开发者找到它的方式。
 
+## 重要生态伙伴
+
+DeepSeek Harness 生态里最值得推荐的项目。
+
+- 🛒 **[dsh-market](https://github.com/dsh-market/dsh-market)** — DeepSeek Harness 的可视化插件市场。设置页里直接逛社区全部 800+ 插件：分类筛选、截图预览、一键安装与更新、主题即点即换，装完多数免重启。
+  The plugin market inside DeepSeek Harness. Browse 800+ community plugins with category filters and screenshot previews, one-click install and update, and live theme switching. Most need no restart.
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=liustack%2Fmodlens&type=date&legend=top-left">
