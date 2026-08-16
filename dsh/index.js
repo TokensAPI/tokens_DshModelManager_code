@@ -425,7 +425,11 @@ function registerPasteRoute(ctx, host, ownProviders, config = {}) {
         // installed (issue #51). Sweeping the expired ones here keeps it to
         // the moment a paste already costs a disk write, with no timer to
         // own and nothing running when nobody is pasting.
-        void sweepExpiredPastes(Date.now(), root)
+        // Fire and forget: the response must not wait on housekeeping. The
+        // promise is kept so a test can await the side effect instead of
+        // racing it, which is otherwise a coin flip decided by the scheduler.
+        lastPasteSweep = sweepExpiredPastes(Date.now(), root)
+        void lastPasteSweep
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ path: file }))
       } catch (error) {
@@ -1284,6 +1288,9 @@ const PASTE_TTL_MS = 7 * 24 * 60 * 60 * 1000
  */
 const PASTE_STORE_MAX_BYTES = 1024 * 1024 * 1024
 
+/** The most recent sweep, so tests can await what production does not. */
+let lastPasteSweep = Promise.resolve()
+
 /** Everything this plugin writes for pastes lives under one directory. */
 function pasteRoot(base = null) {
   return base ?? join(tmpdir(), 'modlens-dsh-paste')
@@ -1522,6 +1529,7 @@ export const __config = { engineSummary, applyEngineSettings, modlensConfigPath 
 // The paste sweeper, reachable from the test suite the way __config is.
 export const __paste = {
   sweepExpiredPastes,
+  settled: () => lastPasteSweep,
   openPasteRoot,
   pasteRoot,
   ttlMs: PASTE_TTL_MS,

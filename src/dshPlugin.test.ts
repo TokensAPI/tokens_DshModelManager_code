@@ -9,6 +9,17 @@ import { VISION_RESULT_SCHEMA } from './schema.ts';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * The same path, spelled the one way both sides can agree on. Windows hands
+ * out 8.3 short names (RUNNER~1) from the temp directory, and Node's realpath
+ * resolves links without expanding those, while the native one does. Comparing
+ * two spellings of the same directory is not a test of anything.
+ */
+const canon = (target: string): string =>
+    typeof fs.realpathSync.native === 'function'
+        ? fs.realpathSync.native(target)
+        : fs.realpathSync(target);
+
 /** Isolated paste directories handed to every route under test. */
 const routePasteDirs: string[] = [];
 afterAll(() => {
@@ -900,6 +911,10 @@ describe('dsh paste-to-path host route', () => {
             fs.utimesSync(expiredElsewhere, expired, expired);
             fs.symlinkSync(writtenParent, linkedParent, 'dir');
 
+            // @ts-expect-error untyped on purpose
+            const mod = (await import('../dsh/index.js')) as {
+                __paste: { settled: () => Promise<void> };
+            };
             const routes = await routeOf({ pasteDir: path.join(linkedParent, 'store') });
             const out = { code: 0, body: '' };
             let moved = false;
@@ -918,10 +933,10 @@ describe('dsh paste-to-path host route', () => {
             const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 5]);
             await routes[0].handler(fakeReq('POST', png) as never, res as never);
 
-            for (let attempt = 0; attempt < 100; attempt++) {
-                if (!fs.existsSync(expiredInWritten) || !fs.existsSync(expiredElsewhere)) break;
-                await new Promise<void>((resolve) => setImmediate(resolve));
-            }
+            // Await the sweep rather than spinning until it happens to have
+            // run: the route fires it without waiting, so polling turns a
+            // scheduling detail into a flaky assertion.
+            await mod.__paste.settled();
             expect(out.code).toBe(200);
             expect(fs.existsSync(expiredInWritten)).toBe(false);
             expect(fs.existsSync(expiredElsewhere)).toBe(true);
@@ -3067,8 +3082,8 @@ describe('the paste store refuses a directory that is not ours (#51)', () => {
             const store = path.join(scratch, 'store');
             const expected = path.join(fs.realpathSync(scratch), 'store');
             try {
-                await expect(open(store)).resolves.toBe(expected);
-                await expect(open(store)).resolves.toBe(expected);
+                expect(canon(await open(store))).toBe(canon(expected));
+                expect(canon(await open(store))).toBe(canon(expected));
             } finally {
                 fs.rmSync(scratch, { recursive: true, force: true });
             }
@@ -3140,8 +3155,9 @@ describe('the paste store is created before it is trusted (#51)', () => {
         const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-twice-'));
         try {
             const store = path.join(scratch, 'store');
-            const real = path.join(fs.realpathSync(scratch), 'store');
-            await expect(Promise.all([open(store), open(store)])).resolves.toEqual([real, real]);
+            const [a, b] = await Promise.all([open(store), open(store)]);
+            const real = canon(path.join(fs.realpathSync(scratch), 'store'));
+            expect([canon(a), canon(b)]).toEqual([real, real]);
         } finally {
             fs.rmSync(scratch, { recursive: true, force: true });
         }
@@ -3166,8 +3182,8 @@ describe('the paste store is created before it is trusted (#51)', () => {
                     return result.stdout;
                 }),
             );
-            expect(new Set(opened)).toEqual(
-                new Set([path.join(fs.realpathSync(scratch), 'store')]),
+            expect(new Set(opened.map(canon))).toEqual(
+                new Set([canon(path.join(fs.realpathSync(scratch), 'store'))]),
             );
             if (process.platform !== 'win32') {
                 expect(fs.statSync(store).mode & 0o777).toBe(0o700);
@@ -3201,7 +3217,7 @@ describe('the paste store checks the whole path, not just the leaf (#51)', () =>
             // What matters is that the store ends up at the resolved path
             // and the caller is told where that is.
             const opened = await open(path.join(linkedParent, 'store'));
-            expect(opened).toBe(path.join(fs.realpathSync(elsewhere), 'store'));
+            expect(canon(opened)).toBe(canon(path.join(elsewhere, 'store')));
             expect(fs.readdirSync(elsewhere)).toEqual(['store']);
         } finally {
             fs.rmSync(scratch, { recursive: true, force: true });
