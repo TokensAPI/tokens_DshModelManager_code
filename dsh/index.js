@@ -1302,8 +1302,8 @@ function pasteRoot(base = null) {
  * loudly rather than writing into somebody else's directory.
  */
 async function openPasteRoot(base = null) {
-  const { mkdir, lstat, chmod } = await import('node:fs/promises')
-  const { dirname } = await import('node:path')
+  const { mkdir, lstat, chmod, realpath } = await import('node:fs/promises')
+  const { basename, dirname } = await import('node:path')
   const root = pasteRoot(base)
   // Create first, then check. Checking first leaves a window between the
   // answer and the use, and on a shared temp directory that window is enough
@@ -1311,28 +1311,48 @@ async function openPasteRoot(base = null) {
   // whatever it points at. An exclusive mkdir either creates the directory,
   // in which case it is ours by construction, or reports that something is
   // already there, which is the case worth inspecting.
-  await mkdir(dirname(root), { recursive: true }).catch(() => {})
+  // Canonicalise the parent first, then work inside it. A system temp
+  // directory is often behind a legitimate link (macOS puts /var behind
+  // /private/var), so refusing every resolved ancestor would refuse ordinary
+  // machines. What must not be a link is the leaf: an exclusive mkdir
+  // succeeds just as happily through one, and the directory it makes then
+  // sits wherever that link points.
+  const parent = dirname(root)
+  await mkdir(parent, { recursive: true }).catch(() => {})
+  let realParent
   try {
-    await mkdir(root, { mode: 0o700 })
-    return root
+    realParent = await realpath(parent)
+  } catch (error) {
+    throw new Error(`${parent} is not usable for the paste store: ${error?.message ?? error}`)
+  }
+  const target = join(realParent, basename(root))
+  try {
+    await mkdir(target, { mode: 0o700 })
   } catch (error) {
     if (error?.code !== 'EEXIST') {
       throw error
     }
   }
-  // Something was already at that name. lstat, so a symlink reads as a link
-  // rather than as whatever it points at.
-  const info = await lstat(root)
+  // lstat, so a link reads as a link rather than as whatever it points at.
+  const info = await lstat(target)
   if (!info.isDirectory()) {
-    throw new Error(`${root} exists and is not a directory`)
+    throw new Error(`${target} exists and is not a directory`)
   }
   if (typeof process.getuid === 'function' && info.uid !== process.getuid()) {
-    throw new Error(`${root} belongs to another user`)
+    throw new Error(`${target} belongs to another user`)
   }
   // Narrow it even if it was created wider, so a later paste is not readable
-  // by everyone on the machine.
-  await chmod(root, 0o700).catch(() => {})
-  return root
+  // by everyone on the machine. A failure here is not cosmetic: it means the
+  // directory stays readable by others and this cannot fix it, so the paste
+  // is refused rather than written where it can be read.
+  if ((info.mode & 0o777) !== 0o700) {
+    await chmod(target, 0o700)
+    const after = await lstat(target)
+    if ((after.mode & 0o777) !== 0o700) {
+      throw new Error(`${target} could not be made private`)
+    }
+  }
+  return target
 }
 
 function tmpdirPath() {
@@ -1406,6 +1426,16 @@ async function sweepExpiredPastes(now = Date.now(), base = null, maxBytes = PAST
   }
 }
 
+/**
+ * What a paste directory occupies, or a throw when that cannot be known.
+ *
+ * A file that vanished between listing and measuring really does occupy
+ * nothing, so it counts as zero. Any other failure means the number would be
+ * an undercount, and an undercount here is worse than no answer: the caller
+ * puts an unmeasurable directory on the books at the largest a paste may be,
+ * while a quietly low number lets the store pass a ceiling it has already
+ * exceeded.
+ */
 async function directorySize(dir) {
   const { readdir, stat } = await import('node:fs/promises')
   let bytes = 0
@@ -1413,8 +1443,9 @@ async function directorySize(dir) {
     if (!entry.isFile()) continue
     try {
       bytes += (await stat(join(dir, entry.name))).size
-    } catch {
-      // Gone between listing and measuring.
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue
+      throw error
     }
   }
   return bytes

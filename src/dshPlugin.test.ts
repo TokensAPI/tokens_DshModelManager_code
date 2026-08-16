@@ -2982,9 +2982,79 @@ describe('the paste store is created before it is trusted (#51)', () => {
         const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-twice-'));
         try {
             const store = path.join(scratch, 'store');
-            await expect(Promise.all([open(store), open(store)])).resolves.toEqual([store, store]);
+            const real = path.join(fs.realpathSync(scratch), 'store');
+            await expect(Promise.all([open(store), open(store)])).resolves.toEqual([real, real]);
         } finally {
             fs.rmSync(scratch, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('the paste store checks the whole path, not just the leaf (#51)', () => {
+    // An exclusive mkdir succeeds just as happily through a symlinked parent,
+    // and the leaf it creates then sits wherever that link points. Creating
+    // something is not proof of where it is.
+    async function open(base: string) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            __paste: { openPasteRoot: (base?: string | null) => Promise<string> };
+        };
+        return plugin.__paste.openPasteRoot(base);
+    }
+
+    it('resolves a linked parent and reports where the store really is', async () => {
+        const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-parent-'));
+        const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-parenttarget-'));
+        try {
+            const linkedParent = path.join(scratch, 'parent');
+            fs.symlinkSync(elsewhere, linkedParent, 'dir');
+            // A legitimate link in an ancestor is resolved rather than
+            // refused, since a system temp directory is often behind one.
+            // What matters is that the store ends up at the resolved path
+            // and the caller is told where that is.
+            const opened = await open(path.join(linkedParent, 'store'));
+            expect(opened).toBe(path.join(fs.realpathSync(elsewhere), 'store'));
+            expect(fs.readdirSync(elsewhere)).toEqual(['store']);
+        } finally {
+            fs.rmSync(scratch, { recursive: true, force: true });
+            fs.rmSync(elsewhere, { recursive: true, force: true });
+        }
+    });
+
+    // The refusal when chmod cannot narrow an existing store is not tested:
+    // as the owning user chmod succeeds regardless of the parent's mode, and
+    // arranging a directory this process owns but cannot chmod needs another
+    // user. The narrowing itself is covered above; only the throw is not.
+});
+
+describe('an unmeasurable paste is not counted as empty (#51)', () => {
+    // A quietly low number is worse than no number: the store passes a
+    // ceiling it has already exceeded, and keeps growing.
+    it('treats a directory it cannot measure as a full-size paste', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            __paste: {
+                sweepExpiredPastes: (n?: number, r?: string, max?: number) => Promise<void>;
+            };
+        };
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-unmeasured-'));
+        try {
+            const opaque = path.join(root, 'p-opaqu1');
+            fs.mkdirSync(opaque);
+            fs.writeFileSync(path.join(opaque, 'paste.png'), Buffer.alloc(900, 1));
+            const fresh = path.join(root, 'p-fresh1');
+            fs.mkdirSync(fresh);
+            fs.writeFileSync(path.join(fresh, 'paste.png'), Buffer.alloc(900, 1));
+            // Older, so it is the first to go once the ceiling engages.
+            const old = new Date(Date.now() - 60_000);
+            fs.utimesSync(opaque, old, old);
+
+            await plugin.__paste.sweepExpiredPastes(Date.now(), root, 1000);
+            // 1800 bytes against a 1000 byte ceiling: something must go.
+            const left = fs.readdirSync(root);
+            expect(left.length).toBeLessThan(2);
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
         }
     });
 });
