@@ -581,7 +581,23 @@ function registerVisionProvider(ctx, config, ownProviders) {
         async resolveModel(_provider, model, signal) {
           const info = await ctx.llm.resolveModelInfo(upstream, model, signal)
           if (!shouldWrap(info)) {
-            throw new Error(`model "${model}" is outside the modlens vision wrap scope`)
+            // Refusing is right: wrapping a model that reads images itself
+            // would claim a bridge it does not need, hand it text evidence
+            // instead of the picture, and lose whatever its own vision does
+            // better. What was wrong is that the refusal explained nothing.
+            // A session that already picked this entry fails every turn, and
+            // the catalogue is advisory so nothing clears the stale choice,
+            // leaving the user to read internal vocabulary and guess.
+            //
+            // Only the image case gets the specific wording. The same check
+            // also fails when a model leaves the configured families, which
+            // is a different situation and keeps the general message.
+            const declaresImage = Array.isArray(info?.inputModalities) && info.inputModalities.includes('image')
+            throw new Error(
+              declaresImage
+                ? `model "${model}" declares native image input, so its "(modlens vision)" entry no longer applies. Select the same model from the provider group without "(modlens vision)".`
+                : `model "${model}" is outside the modlens vision wrap scope`,
+            )
           }
           return { ...withVision(info), id: model }
         },

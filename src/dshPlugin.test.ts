@@ -3720,3 +3720,61 @@ describe('the wrapper survives the paths review found untested (#57)', () => {
         expect(disposed).toBe(true);
     });
 });
+
+describe('a route that gains native vision says so, and says what to do', () => {
+    // Refusing to wrap a model that reads images itself is right: the bridge
+    // would claim work it does not do, hand the model text instead of the
+    // picture, and lose whatever its own vision does better. The defect was
+    // that the refusal explained nothing, while a session holding that entry
+    // fails every turn and nothing clears the stale choice.
+    async function resolveThrough(modalities: string[] | undefined, id = 'deepseek-v4-flash') {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        let adapter: Record<string, CallableFunction> | undefined;
+        const llm = {
+            providerRetryPolicy: () => undefined,
+            registerAdapter: (_ids: string[], next: Record<string, CallableFunction>) => {
+                adapter = next;
+                const handle = () => {};
+                handle.replace = () => {};
+                return handle;
+            },
+            listProviders: () => [{ id: 'lanz', name: 'Lanz' }],
+            listModels: async () => [{ provider: 'lanz', id, name: id }],
+            resolveModelInfo: async () => ({
+                provider: 'lanz',
+                id,
+                name: id,
+                ...(modalities === undefined ? {} : { inputModalities: modalities }),
+            }),
+            stream: () => (async function* () {})(),
+        };
+        plugin.apply(
+            { tools: { register: () => {} }, attachments: {}, on: () => {}, llm } as never,
+            { upstream: 'lanz', providerId: 'house-lanz' },
+        );
+        return (adapter as Record<string, CallableFunction>).resolveModel('house-lanz', id);
+    }
+
+    it('wraps a route while it is still text-only', async () => {
+        await expect(resolveThrough(['text'])).resolves.toMatchObject({ id: 'deepseek-v4-flash' });
+    });
+
+    it('names the cause and the way out once the route declares image input', async () => {
+        // Same route, same model id, different declared capability.
+        await expect(resolveThrough(['text', 'image'])).rejects.toThrow(
+            /declares native image input.*without "\(modlens vision\)"/s,
+        );
+    });
+
+    it('keeps the general message when the model simply left the families', async () => {
+        // A different situation with a different answer, so it keeps its own
+        // wording rather than telling the user to pick a plain entry that
+        // does not exist.
+        await expect(resolveThrough(['text'], 'llama-4-scout')).rejects.toThrow(
+            /outside the modlens vision wrap scope/,
+        );
+    });
+});
