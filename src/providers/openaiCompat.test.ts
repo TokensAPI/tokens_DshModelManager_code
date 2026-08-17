@@ -584,3 +584,125 @@ describe('redaction runs before the message is clipped (#45)', () => {
         expect(message).not.toContain('private-gateway');
     });
 });
+
+describe('a mismatched shape names the knob that applies (#59)', () => {
+    // The advice on this path used to be "Retry, or switch to gemini-api /
+    // anthropic", which sends someone off an endpoint that one config line
+    // would have fixed. That is what happened on Kimi Code: the reader blamed
+    // the model. The sibling branch sixteen lines above already named
+    // structuredOutput, added for #45 and never carried across.
+
+    /** A 200 whose content parses but does not fit the contract. */
+    function stubHalfAnswer(finishReason?: string) {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => ({
+                ok: true,
+                json: async () => ({
+                    choices: [
+                        {
+                            message: { content: JSON.stringify({ summary: 'x' }) },
+                            ...(finishReason ? { finish_reason: finishReason } : {}),
+                        },
+                    ],
+                }),
+            })),
+        );
+    }
+
+    async function messageFrom(extra: Record<string, unknown>): Promise<string> {
+        try {
+            await executeOpenaiCompat({
+                imageSource: 'https://example.com/a.png',
+                imageKind: 'remote',
+                timeoutMs: 1000,
+                settings: { ...settings, ...extra },
+            });
+        } catch (error) {
+            return (error as Error).message;
+        }
+        throw new Error('expected a rejection');
+    }
+
+    it('points an unenforced answer at structuredOutput, not at another provider', async () => {
+        stubHalfAnswer('stop');
+
+        const message = await messageFrom({});
+
+        expect(message).toContain('does not match the vision schema');
+        expect(message).toContain('modlens config set openai.structuredOutput true');
+        expect(message).not.toContain('switch to gemini-api');
+    });
+
+    it('keeps the old advice once the gateway was asked and answered badly anyway', async () => {
+        stubHalfAnswer('stop');
+
+        const message = await messageFrom({ structuredOutput: true });
+
+        expect(message).toContain('switch to gemini-api');
+        // Telling someone to set an option they already set is the fastest way
+        // to lose them.
+        expect(message).not.toContain('structuredOutput true');
+    });
+
+    it('blames the response_format the caller supplied, since it replaces ours', async () => {
+        stubHalfAnswer('stop');
+
+        const message = await messageFrom({
+            structuredOutput: true,
+            extraBody: { response_format: { type: 'json_object' } },
+        });
+
+        expect(message).toContain('extraBody');
+        // Enabling a setting that is already on, and overridden anyway, fixes
+        // nothing here.
+        expect(message).not.toContain('structuredOutput true');
+    });
+
+    it('never tells someone to enable what is already enabled, on either branch', async () => {
+        // The sibling branch, for output that does not parse at all, kept
+        // recommending structuredOutput unconditionally. Fixing one advice path
+        // and leaving the other giving impossible advice is the same defect.
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => ({
+                ok: true,
+                json: async () => ({
+                    choices: [{ message: { content: 'not json' }, finish_reason: 'stop' }],
+                }),
+            })),
+        );
+
+        const message = await messageFrom({ structuredOutput: true });
+
+        expect(message).toContain('non-JSON output');
+        expect(message).not.toContain('structuredOutput true');
+    });
+
+    it('names a gateway that stopped for its own reason, and blames no knob', async () => {
+        // content_filter is not a shape problem and not a limit, and it can
+        // arrive alongside an override, where both schema knobs are red
+        // herrings.
+        stubHalfAnswer('content_filter');
+
+        const message = await messageFrom({
+            structuredOutput: true,
+            extraBody: { response_format: { type: 'json_object' } },
+        });
+
+        expect(message).toContain('finish_reason=content_filter');
+        expect(message).not.toContain('structuredOutput true');
+        expect(message).not.toContain('extraBody replaces');
+    });
+
+    it('calls a truncated answer truncated rather than a schema problem', async () => {
+        // A cut-off answer can still be parseable JSON, so it lands here rather
+        // than on the non-JSON path that already handles finish_reason.
+        stubHalfAnswer('length');
+
+        const message = await messageFrom({});
+
+        expect(message).toContain('finish_reason=length');
+        expect(message).not.toContain('structuredOutput true');
+    });
+});

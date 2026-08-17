@@ -17,6 +17,62 @@ import type {
     VisionProvider,
 } from './index.ts';
 
+type OpenaiSettings = BuildProviderInvocationOptions['settings'];
+
+/**
+ * Whether the request actually carried the schema modlens derives.
+ * `structuredOutput` asks for it, and a `response_format` the caller put in
+ * `extraBody` replaces it outright, so both decide what a mismatched answer
+ * means. Read from one place so the request and the error cannot disagree.
+ */
+function derivedSchemaSent(settings: OpenaiSettings): boolean {
+    return (
+        Boolean(settings?.structuredOutput) && settings?.extraBody?.response_format === undefined
+    );
+}
+
+/**
+ * What to change when the answer arrived whole and is still unusable. Which
+ * knob applies is a property of the request that went out, not of the way the
+ * output disappointed, so both failure branches ask this one question.
+ */
+function requestShapeAdvice(settings: OpenaiSettings): string {
+    if (settings?.extraBody?.response_format !== undefined) {
+        return 'The response_format in your extraBody replaces the schema modlens derives, so yours decides the shape here. Check it against the contract, or drop it to hand enforcement back to modlens.';
+    }
+    if (!derivedSchemaSent(settings)) {
+        return 'The gateway was never asked to enforce the shape, so this is the model free-handing it. Ask the gateway instead: modlens config set openai.structuredOutput true.';
+    }
+    return 'The gateway was asked to enforce the shape and answered with this anyway. Retry, or switch to gemini-api / anthropic for enforced schemas.';
+}
+
+/**
+ * Unusable output has several causes that look alike, and each has a different
+ * knob. Naming only one of them sent a user off an endpoint that a single
+ * config line would have fixed, after concluding the model could not do it
+ * (issue #59). Truncation outranks everything, because a cut-off answer
+ * explains missing fields whatever the request asked for. Only `stop` says
+ * outright that the answer finished; an absent reason is read the same way
+ * only because some gateways omit the field.
+ *
+ * `whenFinished` is the one part that differs between the two branches: what
+ * was wrong with output that did arrive complete.
+ */
+function unusableOutputAdvice(
+    finishReason: string | undefined,
+    settings: OpenaiSettings,
+    quoteReason: (reason: string) => string,
+    whenFinished: string,
+): string {
+    if (finishReason === 'length') {
+        return 'The answer was cut off (finish_reason=length), so this is a length limit rather than a shape problem. Raise it, e.g. modlens config set openai.extraBody \'{"max_tokens":4096}\'.';
+    }
+    if (finishReason !== undefined && finishReason !== 'stop') {
+        return `The gateway ended the answer with finish_reason=${quoteReason(finishReason)}, so it may be incomplete for a reason of its own. Check what that reason means for this endpoint before changing the request.`;
+    }
+    return `${whenFinished} ${requestShapeAdvice(settings)}`;
+}
+
 export async function executeOpenaiCompat(
     options: BuildProviderInvocationOptions,
 ): Promise<ProviderParsedOutput> {
@@ -67,8 +123,7 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
                         // caller supplied wins outright rather than being
                         // merged into ours, since the two describe the same
                         // thing and a blend of them describes neither.
-                        ...(options.settings?.structuredOutput &&
-                        options.settings?.extraBody?.response_format === undefined
+                        ...(derivedSchemaSent(options.settings)
                             ? { response_format: visionResponseFormat() }
                             : {}),
                         messages: [
@@ -122,18 +177,14 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
     const rawResult = extractJson(text);
     if (rawResult === null) {
         // Why it failed decides what the user should do, and the causes used
-        // to look identical (issue #45). Only `stop` is evidence the answer
-        // is complete: `content_filter` and a gateway's own private reasons
-        // are not, and calling them normal sends people to tune the wrong
-        // knob. The tail is where the damage is, so the message ends with it
-        // rather than with the opening summary.
-        const finishReason = payload.choices?.[0]?.finish_reason;
-        const advice =
-            finishReason === 'length'
-                ? 'The answer was cut off (finish_reason=length). Raise the limit, e.g. modlens config set openai.extraBody \'{"max_tokens":4096}\'.'
-                : finishReason === undefined || finishReason === 'stop'
-                  ? 'The answer ended normally but no complete JSON object could be read from it. Ask the gateway to enforce the shape: modlens config set openai.structuredOutput true.'
-                  : `The gateway ended the answer with finish_reason=${quote(finishReason, (t) => truncate(t, 80))}, so it may be incomplete for a reason of its own. Check what that reason means for this endpoint before changing the request.`;
+        // to look identical (issue #45). The tail is where the damage is, so
+        // the message ends with it rather than with the opening summary.
+        const advice = unusableOutputAdvice(
+            payload.choices?.[0]?.finish_reason,
+            options.settings,
+            (reason) => quote(reason, (clipped) => truncate(clipped, 80)),
+            'The answer ended normally but no complete JSON object could be read from it.',
+        );
         throw new Error(
             `OpenAI-compatible API returned non-JSON output. ${advice} Output ended with: ${quote(text, tail)}`,
         );
@@ -147,8 +198,14 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
     const result = normalizeVisionResult(rawResult);
     const missing = missingSchemaFields(result);
     if (missing.length > 0) {
+        const advice = unusableOutputAdvice(
+            payload.choices?.[0]?.finish_reason,
+            options.settings,
+            (reason) => quote(reason, (clipped) => truncate(clipped, 80)),
+            'The answer ended normally and parsed, but not into the contract.',
+        );
         throw new Error(
-            `OpenAI-compatible API returned JSON that does not match the vision schema (wrong or missing: ${missing.join(', ')}). Retry, or switch to gemini-api / anthropic for enforced schemas. Got: ${quote(text)}`,
+            `OpenAI-compatible API returned JSON that does not match the vision schema (wrong or missing: ${missing.join(', ')}). ${advice} Got: ${quote(text)}`,
         );
     }
 
