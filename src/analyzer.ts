@@ -398,7 +398,7 @@ async function runProvider(
             parsed = parseOutput(commandResult.stdout);
         } finally {
             // Output goes over stdout, so nothing here needs to outlive the run.
-            isolation?.cleanup();
+            await isolation?.cleanup();
         }
     } else {
         throw new Error(
@@ -459,7 +459,7 @@ function validateInputFile(filePath: string): void {
 interface IsolatedImage {
     imageSource?: string;
     workdir: string;
-    cleanup: () => void;
+    cleanup: () => Promise<void>;
 }
 
 /**
@@ -474,32 +474,38 @@ interface IsolatedImage {
  * On Windows a directory that is a live process's current directory cannot be
  * deleted, and this directory IS the provider's cwd. A child that lingers for
  * a moment after its output arrives, as kimi does while it writes its session
- * state, leaves that handle held, `rmSync` throws EPERM, and because cleanup
+ * state, leaves that handle held, removal fails with EPERM, and because cleanup
  * runs in a `finally` the error replaced a perfectly good result: the read
  * succeeded, took its full 45 seconds, and was then reported as a failed
  * attempt (issue #50). `force` suppresses ENOENT, never EPERM.
  *
- * So removal is best effort. One retry covers the ordinary case of a handle
- * released a moment later, and if that fails too the directory is left in the
+ * Asynchronous `rm`, never `rmSync`: on Node 24.0.0 through 24.13.0 the sync
+ * call reaches a C++ path that aborts the process outright (0xC0000409) instead
+ * of throwing, when the top-level path handed to it holds non-ASCII characters
+ * (nodejs/node#58759, fixed in 24.13.1). This path is built from `os.tmpdir()`,
+ * so a Windows machine whose temp directory or any ancestor of it is non-ASCII
+ * takes that abort right here, and no `try`/`catch` catches an abort. The async
+ * call runs the JS rimraf, which never reaches that binding (issue #58).
+ *
+ * rimraf's own `maxRetries`/`retryDelay` stand in for the retry this used to
+ * do by hand: it waits `retryDelay` and tries once more on EBUSY, EMFILE,
+ * ENFILE, ENOTEMPTY and EPERM, which covers the held Windows cwd above. Errors
+ * outside that set now fail on the first attempt rather than after a pointless
+ * second, and either way removal stays best effort: what is left stays in the
  * system temp directory, which is where a leftover belongs and what the OS
  * already cleans. Losing a temp directory is not worth losing the answer.
  */
-function removeWorkdir(workdir: string): void {
+export async function removeWorkdir(workdir: string): Promise<void> {
     try {
-        fs.rmSync(workdir, { recursive: true, force: true });
-        return;
+        await fs.promises.rm(workdir, {
+            recursive: true,
+            force: true,
+            maxRetries: 1,
+            retryDelay: 500,
+        });
     } catch {
-        // Held open for now; try again once the child is fully gone.
+        // Still held. A temp directory is the right thing to leak here.
     }
-    const retry = setTimeout(() => {
-        try {
-            fs.rmSync(workdir, { recursive: true, force: true });
-        } catch {
-            // Still held. A temp directory is the right thing to leak here.
-        }
-    }, 500);
-    // Never hold the process open for a directory removal.
-    retry.unref();
 }
 
 function isolateImage(source: string): IsolatedImage {

@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { analyzeImage, composeChain, resolveInput, runCommand } from './analyzer.ts';
+import { analyzeImage, composeChain, removeWorkdir, resolveInput, runCommand } from './analyzer.ts';
 
 const onWindows = process.platform === 'win32';
 
@@ -810,4 +810,78 @@ describe('a throwaway directory never costs the answer (#50)', () => {
         },
         30_000,
     );
+});
+
+describe('cleaning up a throwaway directory never aborts the process (#58)', () => {
+    // On Node 24.0.0 through 24.13.0, fs.rmSync reaches a C++ path that aborts
+    // the process outright (0xC0000409) instead of throwing, when the top-level
+    // path handed to it holds non-ASCII characters (nodejs/node#58759, fixed in
+    // 24.13.1). The directory removed here is created under os.tmpdir(), so any
+    // Windows machine whose temp path or one of its ancestors is non-ASCII
+    // walks into it. An abort cannot be caught, so the defence is not to reach
+    // that binding at all, which is what the first test pins down. Nothing here
+    // uses rmSync, including the fixtures: on an affected Node the setup would
+    // be as capable of aborting the run as the code under test.
+
+    it('asks rimraf for the removal rather than the binding that aborts', async () => {
+        // The only assertion that can distinguish the two implementations off
+        // Windows or on a patched Node, and the one that stops a later edit
+        // back to the sync form from passing a green suite to a user.
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-spy-'));
+        const rm = vi.spyOn(fs.promises, 'rm');
+
+        try {
+            await removeWorkdir(root);
+
+            expect(rm).toHaveBeenCalledWith(root, {
+                recursive: true,
+                force: true,
+                maxRetries: 1,
+                retryDelay: 500,
+            });
+        } finally {
+            rm.mockRestore();
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    });
+
+    it('removes a directory whose path holds non-ASCII characters', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-i18n-'));
+        // The upstream reproduction's own characters.
+        const workdir = path.join(root, '速_dir');
+        fs.mkdirSync(workdir);
+        fs.writeFileSync(path.join(workdir, '思.png'), 'bytes');
+
+        await removeWorkdir(workdir);
+
+        expect(fs.existsSync(workdir)).toBe(false);
+        await fs.promises.rm(root, { recursive: true, force: true });
+    });
+
+    it('resolves rather than throwing when the directory is already gone', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-gone-'));
+        await fs.promises.rm(root, { recursive: true, force: true });
+
+        await expect(removeWorkdir(root)).resolves.toBeUndefined();
+    });
+
+    it.skipIf(onWindows)('swallows a removal that genuinely cannot be done', async () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-held-'));
+        const workdir = path.join(root, 'inner');
+        fs.mkdirSync(workdir);
+        fs.writeFileSync(path.join(workdir, 'file.txt'), 'x');
+        // An unwritable parent makes the removal fail for real rather than by
+        // mock. It fails as EACCES, which rimraf does not retry, so this covers
+        // the promise that a failure never costs the answer (#50) and not the
+        // 500ms retry: that path needs the EPERM only Windows produces here.
+        fs.chmodSync(root, 0o500);
+
+        try {
+            await expect(removeWorkdir(workdir)).resolves.toBeUndefined();
+            expect(fs.existsSync(workdir)).toBe(true);
+        } finally {
+            fs.chmodSync(root, 0o700);
+            await fs.promises.rm(root, { recursive: true, force: true });
+        }
+    });
 });
