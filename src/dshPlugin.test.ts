@@ -3567,18 +3567,6 @@ describe('the wrapper survives the paths review found untested (#57)', () => {
         };
     }
 
-    function harness(llm: Record<string, unknown>, config: Record<string, unknown>) {
-        const handlers: Record<string, () => void> = {};
-        const errors: string[] = [];
-        const original = console.error;
-        console.error = (value?: unknown) => errors.push(String(value));
-        try {
-            return { handlers, errors, llm, config };
-        } finally {
-            console.error = original;
-        }
-    }
-
     it('drops a wrapper whose upstream disappears in explicit mode', async () => {
         const mod = await plugin();
         const handlers: Record<string, () => void> = {};
