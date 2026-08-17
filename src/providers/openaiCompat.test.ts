@@ -331,8 +331,7 @@ describe('quoted gateway output is redacted, and finish_reason is not guessed (#
         });
     }
 
-    const echoTail =
-        'not json at all ' + `apiKey=${secretSettings.apiKey} endpoint=${secretSettings.baseUrl}`;
+    const echoTail = `not json at all apiKey=${secretSettings.apiKey} endpoint=${secretSettings.baseUrl}`;
 
     it('keeps the key and the endpoint out of the parse-failure message', async () => {
         // The message now shows the END of the output, so a gateway echoing
