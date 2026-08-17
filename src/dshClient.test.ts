@@ -479,3 +479,156 @@ describe('settings card (#39)', () => {
         ).toEqual(summary.reuse);
     });
 });
+
+describe('the API key field is masked without being a password field (#56)', () => {
+    // Safari's iCloud Keychain offers to enable autofill for any site with a
+    // password input, then pops its bubble on every focus, for a field that
+    // is always empty here: the key lives in the config file and the host
+    // sends only whether one is stored. autocomplete cannot turn that off,
+    // because WebKit ignores it on password fields on purpose.
+    const SOURCE = fs.readFileSync(path.join(__dirname, '..', 'dsh', 'client.js'), 'utf-8');
+
+    function secretProps(css: unknown): Record<string, unknown> {
+        let loaded:
+            | {
+                  factory: (require: (id: string) => unknown) => {
+                      __card: { secretFieldProps: () => Record<string, unknown> };
+                  };
+              }
+            | undefined;
+        const windowStub = {
+            __ModuleLoader__: {
+                load: (definition: typeof loaded) => {
+                    loaded = definition;
+                },
+            },
+        };
+        const documentStub = {
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            querySelectorAll: () => [],
+            documentElement: { lang: 'en' },
+        };
+        new Function('window', 'document', 'CSS', 'fetch', SOURCE)(
+            windowStub,
+            documentStub,
+            css,
+            () => Promise.resolve(),
+        );
+        const card = (loaded as NonNullable<typeof loaded>).factory(() => ({})).__card;
+        return card.secretFieldProps();
+    }
+
+    it('masks with text-security where the browser supports it', () => {
+        const props = secretProps({ supports: (name: string) => name === '-webkit-text-security' });
+        expect(props.type).toBe('text');
+        expect((props.style as Record<string, unknown>).WebkitTextSecurity).toBe('disc');
+        expect(props.autoComplete).toBe('off');
+    });
+
+    it('falls back to a password field rather than showing the key', () => {
+        // The nuisance is worth more than the alternative, which is somebody's
+        // API key in clear text while they type it.
+        expect(secretProps({ supports: () => false }).type).toBe('password');
+        expect(secretProps(undefined).type).toBe('password');
+    });
+});
+
+describe('the rendered API key field, not just the helper (#56)', () => {
+    // The previous version of these tests only exercised the props helper.
+    // An independent review mutated the call site to ask for a plain text
+    // field, and every test stayed green while the key rendered in clear
+    // text. What has to be pinned is the field the card actually builds.
+    const SOURCE = fs.readFileSync(path.join(__dirname, '..', 'dsh', 'client.js'), 'utf-8');
+
+    /** Every element the card built, flattened, with its props. */
+    function renderCard(css: unknown): Array<{ type: unknown; props: Record<string, unknown> }> {
+        let loaded:
+            | {
+                  factory: (require: (id: string) => unknown) => {
+                      __card: { ConfigCard: (react: unknown, ui: unknown) => () => unknown };
+                  };
+              }
+            | undefined;
+        const windowStub = {
+            __ModuleLoader__: {
+                load: (definition: typeof loaded) => {
+                    loaded = definition;
+                },
+            },
+        };
+        const documentStub = {
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            querySelectorAll: () => [],
+            documentElement: { lang: 'en' },
+        };
+        new Function('window', 'document', 'CSS', 'fetch', SOURCE)(
+            windowStub,
+            documentStub,
+            css,
+            () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+        );
+
+        const built: Array<{ type: unknown; props: Record<string, unknown> }> = [];
+        // A state stub that hands back what the card needs to reach the
+        // engine fields: expanded, with a summary and a draft naming openai.
+        const summary = {
+            provider: 'openai',
+            engines: { openai: { baseUrl: '', model: '', hasKey: true, source: 'file' } },
+            keyless: [],
+            reuse: {},
+        };
+        const draft = { provider: 'openai', apiKey: '', baseUrl: '', model: '', reuse: {} };
+        const states = [true, summary, draft, ''];
+        let index = 0;
+        const react = {
+            createElement: (type: unknown, props: Record<string, unknown>, ...kids: unknown[]) => {
+                built.push({ type, props: props ?? {} });
+                return { type, props, kids };
+            },
+            useState: () => [states[index++ % states.length], () => {}],
+            useEffect: () => {},
+            useCallback: (fn: unknown) => fn,
+        };
+        const Input = function Input() {
+            return null;
+        };
+        const Card = (loaded as NonNullable<typeof loaded>)
+            .factory(() => ({}))
+            .__card.ConfigCard(react, { Input });
+        Card();
+        return built.filter((node) => node.type === Input);
+    }
+
+    function apiKeyField(css: unknown): Record<string, unknown> | undefined {
+        // The key field is the one whose placeholder is the stored-key hint.
+        return renderCard(css).find((node) =>
+            String(node.props.placeholder ?? '').match(/留空|leave empty/),
+        )?.props;
+    }
+
+    it('renders masked rather than as a password field', () => {
+        const props = apiKeyField({ supports: () => true });
+        expect(props).toBeDefined();
+        expect(props?.type).toBe('text');
+        expect((props?.style as Record<string, unknown> | undefined)?.WebkitTextSecurity).toBe(
+            'disc',
+        );
+    });
+
+    it('renders a password field where masking is unavailable', () => {
+        expect(apiKeyField({ supports: () => false })?.type).toBe('password');
+    });
+
+    it('never renders the key field as a plain visible input', () => {
+        for (const css of [{ supports: () => true }, { supports: () => false }, undefined]) {
+            const props = apiKeyField(css);
+            const masked =
+                props?.type === 'password' ||
+                (props?.style as Record<string, unknown> | undefined)?.WebkitTextSecurity ===
+                    'disc';
+            expect(masked).toBe(true);
+        }
+    });
+});
