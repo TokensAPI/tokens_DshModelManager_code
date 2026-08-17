@@ -11,7 +11,6 @@
 //
 // Every route carries a reuseNote so the analyzer can say whose quota a
 // read spent; credentials are fetched at call time and live only in memory.
-import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -28,6 +27,7 @@ import type {
 import { openaiCompatProvider } from '../providers/openaiCompat.ts';
 import { visionResultSchemaJson } from '../schema.ts';
 import { extractJson, parseJsonLoose, truncate, tryParseJson } from '../util/json.ts';
+import { execFileSyncHidden } from '../util/spawnHidden.ts';
 import { resolveSpawnPlan } from '../util/winExec.ts';
 import { type AutoDiscovery, discoverAuto } from './discover.ts';
 
@@ -482,7 +482,7 @@ function fetchPiKey(piPath: string, modelId: string, provider: string, timeoutMs
             '--provider',
             provider,
         ]);
-        const key = execFileSync(plan.command, plan.args, {
+        const key = execFileSyncHidden(plan.command, plan.args, {
             encoding: 'utf-8',
             stdio: ['ignore', 'pipe', 'pipe'],
             timeout: timeoutMs,

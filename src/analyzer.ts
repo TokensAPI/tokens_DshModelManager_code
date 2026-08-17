@@ -1,4 +1,3 @@
-import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -21,6 +20,7 @@ import {
 } from './providers/index.ts';
 import { missingSchemaFields, normalizeVisionResult } from './schema.ts';
 import { redactSecrets } from './util/redact.ts';
+import { spawnHidden } from './util/spawnHidden.ts';
 import { resolveSpawnPlan } from './util/winExec.ts';
 
 export interface AnalyzeOptions {
@@ -563,7 +563,7 @@ export function runCommand(
         );
         // A shim that edits the environment hands back the whole thing.
         const spawnEnv = plan.env ?? childEnv;
-        const child = spawn(plan.command, plan.args, {
+        const child = spawnHidden(plan.command, plan.args, {
             cwd: invocation.cwd,
             stdio: ['ignore', 'pipe', 'pipe'],
             // A provider may mark its own child, which is how kimi-cli tells a

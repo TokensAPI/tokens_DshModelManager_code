@@ -4,13 +4,13 @@
 // files, and one `opencode models` listing (its catalog lives behind the CLI).
 // The chain does not consume these results yet; doctor shows them so the
 // discovery is visible and debuggable before any routing lands on top.
-import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { globMatch } from '../guard/rules.ts';
 import { findOnPath } from '../providers/availability.ts';
 import { redactSecrets } from '../util/redact.ts';
+import { execFileSyncHidden } from '../util/spawnHidden.ts';
 import { resolveSpawnPlan } from '../util/winExec.ts';
 
 /**
@@ -98,7 +98,7 @@ function defaultRunCli(bin: string, args: string[], timeoutMs: number): string {
     // .cmd cannot be exec'd without a shell, and the probes talk to the same
     // npm-installed CLIs.
     const plan = resolveSpawnPlan(bin, args);
-    return execFileSync(plan.command, plan.args, {
+    return execFileSyncHidden(plan.command, plan.args, {
         encoding: 'utf-8',
         timeout: timeoutMs,
         stdio: 'pipe',
