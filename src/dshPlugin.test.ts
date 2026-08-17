@@ -316,6 +316,14 @@ describe('dsh plugin vision provider (phase 3)', () => {
             adapter: Record<string, CallableFunction>;
         }> = [];
         const streamed: Array<Record<string, unknown>> = [];
+        const upstreamRetryPolicy = {
+            mode: 'normal',
+            maxRetries: 50,
+            retryableCodes: ['RATE_LIMIT'],
+            initialDelayMs: 1,
+            maxDelayMs: 2,
+            jitterRatio: 0,
+        };
         const llm = {
             registerAdapter: (providers: string[], adapter: Record<string, CallableFunction>) => {
                 registered.push({ providers, adapter });
@@ -325,14 +333,27 @@ describe('dsh plugin vision provider (phase 3)', () => {
                     provider: 'deepseek-official',
                     id: 'deepseek-v4-flash',
                     name: 'DeepSeek V4 Flash',
+                    description: 'Fast route',
+                    inputModalities: ['text', 'audio'],
                 },
             ],
             resolveModelInfo: async (_p: string, model: string) => ({
                 provider: 'deepseek-official',
                 id: model,
                 name: 'DeepSeek V4 Flash',
-                inputModalities: ['text'],
+                description: 'Fast route',
+                inputModalities: ['text', 'audio'],
+                context: { contextWindow: 128_000 },
+                defaultMaxTokens: 8192,
+                reasoning: {
+                    efforts: [{ id: 'high', name: 'High' }],
+                    defaultEffort: 'high',
+                },
             }),
+            providerRetryPolicy: (provider: string) => {
+                expect(provider).toBe('deepseek-official');
+                return upstreamRetryPolicy;
+            },
             stream: (options: Record<string, unknown>) => {
                 streamed.push(options);
                 return (async function* () {})();
@@ -346,33 +367,57 @@ describe('dsh plugin vision provider (phase 3)', () => {
         };
         expect(providerInfo.id).toBe('deepseek-modlens');
         expect(providerInfo.name.length).toBeGreaterThan(0);
-        expect(registered[0].adapter.providerRetryPolicy('deepseek-modlens')).toBeUndefined();
+        expect(registered[0].adapter.providerRetryPolicy('deepseek-modlens')).toBe(
+            upstreamRetryPolicy,
+        );
         const adapter = registered[0].adapter;
         const models = (await adapter.listModels('deepseek-modlens')) as Array<{
             provider: string;
             name: string;
+            description: string;
             inputModalities: string[];
         }>;
         expect(models).toHaveLength(1);
         expect(models[0].provider).toBe('deepseek-modlens');
-        expect(models[0].inputModalities).toContain('image');
+        expect(models[0].inputModalities).toEqual(['text', 'audio', 'image']);
         expect(models[0].name).toContain('modlens vision');
+        expect(models[0].description).toBe('Fast route');
         const info = (await adapter.resolveModel('deepseek-modlens', 'deepseek-v4-flash')) as {
             provider: string;
             id: string;
+            description: string;
             inputModalities: string[];
+            context: { contextWindow: number };
+            defaultMaxTokens: number;
+            reasoning: { efforts: Array<{ id: string }>; defaultEffort: string };
         };
         expect(info.provider).toBe('deepseek-modlens');
         expect(info.id).toBe('deepseek-v4-flash');
-        expect(info.inputModalities).toEqual(['text', 'image']);
+        expect(info.inputModalities).toEqual(['text', 'audio', 'image']);
+        expect(info).toMatchObject({
+            description: 'Fast route',
+            context: { contextWindow: 128_000 },
+            defaultMaxTokens: 8192,
+            reasoning: { efforts: [{ id: 'high' }], defaultEffort: 'high' },
+        });
+        const signal = new AbortController().signal;
         for await (const _chunk of adapter.stream({
             provider: 'deepseek-modlens',
             model: 'deepseek-v4-flash',
             messages: [],
+            signal,
+            maxTokens: 4096,
+            reasoningEffort: 'high',
         }) as AsyncIterable<unknown>) {
             // drain
         }
         expect(streamed[0].provider).toBe('deepseek-official');
+        expect(streamed[0]).toMatchObject({
+            model: 'deepseek-v4-flash',
+            signal,
+            maxTokens: 4096,
+            reasoningEffort: 'high',
+        });
     });
 
     it('degrades silently without the registration surface or when disabled', async () => {
@@ -383,6 +428,118 @@ describe('dsh plugin vision provider (phase 3)', () => {
             { visionProvider: false },
         );
         expect(registered).toEqual([]);
+    });
+
+    it('reports an upstream catalog failure instead of disguising it as no models', async () => {
+        let adapter: Record<string, CallableFunction> | undefined;
+        await loadWith({
+            registerAdapter: (
+                _providers: string[],
+                candidate: Record<string, CallableFunction>,
+            ) => {
+                adapter = candidate;
+            },
+            listModels: async () => {
+                throw new Error('upstream catalog offline');
+            },
+            resolveModelInfo: async () => ({}),
+            stream: () => (async function* () {})(),
+        });
+        await expect(adapter?.listModels('deepseek-modlens')).rejects.toThrow(
+            'upstream catalog offline',
+        );
+    });
+
+    it.each(['no adapter registered for upstream', 'upstream retry policy is invalid'])(
+        'does not register with harness defaults when retry lookup fails: %s',
+        async (message) => {
+            const registered: string[] = [];
+            const errors: string[] = [];
+            const original = console.error;
+            console.error = (value?: unknown) => errors.push(String(value));
+            try {
+                await loadWith({
+                    registerAdapter: (
+                        providers: string[],
+                        adapter: Record<string, CallableFunction>,
+                    ) => {
+                        adapter.providerInfo(providers[0]);
+                        adapter.providerRetryPolicy(providers[0]);
+                        registered.push(...providers);
+                    },
+                    providerRetryPolicy: () => {
+                        throw new Error(message);
+                    },
+                    listModels: async () => [],
+                    resolveModelInfo: async () => ({}),
+                    stream: () => (async function* () {})(),
+                });
+            } finally {
+                console.error = original;
+            }
+            expect(registered).toEqual([]);
+            expect(errors.join('\n')).toContain(message);
+        },
+    );
+
+    it('refreshes retry policy in explicit single-route mode too', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const handlers: Record<string, () => void> = {};
+        const captured: number[] = [];
+        let maxRetries = 2;
+        let retryLookupFails = false;
+        let disposed = false;
+        const llm = {
+            providerRetryPolicy: () => {
+                if (retryLookupFails) throw new Error('retry lookup failed during refresh');
+                return {
+                    mode: 'normal',
+                    maxRetries,
+                    retryableCodes: ['RATE_LIMIT'],
+                    initialDelayMs: 1,
+                    maxDelayMs: 2,
+                    jitterRatio: 0,
+                };
+            },
+            registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                const capture = () => {
+                    adapter.providerInfo(ids[0]);
+                    const policy = adapter.providerRetryPolicy(ids[0]) as { maxRetries: number };
+                    captured.push(policy.maxRetries);
+                };
+                capture();
+                const handle = () => {
+                    disposed = true;
+                };
+                handle.replace = capture;
+                return handle;
+            },
+            listProviders: () => [{ id: 'lanz', name: 'Lanz' }],
+            listModels: async () => [],
+            resolveModelInfo: async () => ({}),
+            stream: () => (async function* () {})(),
+        };
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: (event: string, fn: () => void) => {
+                    handlers[event] = fn;
+                },
+                llm,
+            } as never,
+            { upstream: 'lanz', providerId: 'house-lanz' },
+        );
+        expect(captured).toEqual([2]);
+        maxRetries = 50;
+        handlers['llm/adapters-updated']();
+        expect(captured).toEqual([2, 50]);
+        retryLookupFails = true;
+        handlers['llm/adapters-updated']();
+        expect(disposed).toBe(true);
     });
 });
 
@@ -1376,6 +1533,77 @@ describe('dsh vision provider auto-discovery (#29)', () => {
         expect(registered.filter((id) => id === 'modlens-opencode-go')).toHaveLength(1);
     });
 
+    it('refreshes registration-captured facts when the upstream route changes', async () => {
+        // dsh captures providerInfo and providerRetryPolicy in registerAdapter.
+        // Its upstream adapters call registration.replace() when either fact
+        // changes, which emits adapters-updated. The wrapper must refresh its
+        // own registration from that notification too.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const handlers: Record<string, () => void> = {};
+        const upstream = { id: 'lanz', name: 'Lanz' };
+        let maxRetries = 2;
+        let upstreamRegistered = true;
+        let wrapperDisposed = false;
+        const captured: Array<{ name: string; maxRetries: number }> = [];
+        const llm = {
+            listProviders: () => (upstreamRegistered ? [{ ...upstream }] : []),
+            listModels: async () => [{ id: 'glm-5.3', name: 'GLM 5.3' }],
+            resolveModelInfo: async () => ({}),
+            providerRetryPolicy: () => ({
+                mode: 'normal',
+                maxRetries,
+                retryableCodes: ['RATE_LIMIT'],
+                initialDelayMs: 1,
+                maxDelayMs: 2,
+                jitterRatio: 0,
+            }),
+            stream: () => (async function* () {})(),
+            registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                const capture = () => {
+                    const info = adapter.providerInfo(ids[0]) as { name: string };
+                    const retry = adapter.providerRetryPolicy(ids[0]) as { maxRetries: number };
+                    captured.push({ name: info.name, maxRetries: retry.maxRetries });
+                };
+                capture();
+                const handle = () => {
+                    wrapperDisposed = true;
+                };
+                handle.replace = capture;
+                return handle;
+            },
+        };
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: (event: string, fn: () => void) => {
+                    handlers[event] = fn;
+                },
+                llm,
+            } as never,
+            {},
+        );
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(captured).toEqual([{ name: 'Lanz (modlens vision)', maxRetries: 2 }]);
+
+        upstream.name = 'Lanz Gateway';
+        maxRetries = 50;
+        handlers['llm/adapters-updated']();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(captured).toEqual([
+            { name: 'Lanz (modlens vision)', maxRetries: 2 },
+            { name: 'Lanz Gateway (modlens vision)', maxRetries: 50 },
+        ]);
+
+        upstreamRegistered = false;
+        handlers['llm/adapters-updated']();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(wrapperDisposed).toBe(true);
+    });
+
     it('notifications landing inside the probe window never double-register', async () => {
         // A deferred listModels holds the first sweep suspended while
         // notifications fire: the claim-before-await plus serialization must
@@ -1459,6 +1687,51 @@ describe('dsh vision provider auto-discovery (#29)', () => {
         handlers['llm/adapters-updated']();
         await new Promise((r) => setTimeout(r, 10));
         expect(attempts).toEqual(['modlens-opencode-go']);
+    });
+
+    it('does not mistake an upstream retry error containing already for a duplicate', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const handlers: Record<string, () => void> = {};
+        const attempts: string[] = [];
+        const registered: string[] = [];
+        let broken = true;
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: (event: string, fn: () => void) => {
+                    handlers[event] = fn;
+                },
+                llm: {
+                    listProviders: () => [{ id: 'lanz', name: 'Lanz' }],
+                    listModels: async () => [{ id: 'glm-5.3', name: 'GLM 5.3' }],
+                    resolveModelInfo: async () => ({}),
+                    providerRetryPolicy: () => {
+                        if (broken) throw new Error('upstream already unavailable');
+                        return undefined;
+                    },
+                    registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                        attempts.push(ids[0]);
+                        adapter.providerInfo(ids[0]);
+                        adapter.providerRetryPolicy(ids[0]);
+                        registered.push(ids[0]);
+                    },
+                    stream: () => (async function* () {})(),
+                },
+            } as never,
+            {},
+        );
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(registered).toEqual([]);
+
+        broken = false;
+        handlers['llm/adapters-updated']();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(attempts).toEqual(['modlens-lanz', 'modlens-lanz']);
+        expect(registered).toEqual(['modlens-lanz']);
     });
 
     it('a route without eligible models is retried when models appear later', async () => {
