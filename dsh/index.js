@@ -10,11 +10,11 @@
 // Loaded via the cordis.patch.yml row `@liustack/modlens/dsh` (see the
 // package.json `dsh.bundle` manifest). Providers, reuse grants, and guard
 // rules keep living in ~/.modlens/config.json, shared with every harness.
-import { spawn } from 'node:child_process'
 import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawnHidden } from './spawnHidden.js'
 
 const CLI_PATH = fileURLToPath(new URL('../dist/main.js', import.meta.url))
 // Kept in lockstep with src/schema.ts by a repo test; the plugin file cannot
@@ -1023,7 +1023,7 @@ async function readImageBlock(ctx, block, signal) {
 
 function run(command, args, signal) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawnHidden(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       signal,
       // In the packaged desktop app process.execPath is the Electron binary;
@@ -1349,7 +1349,11 @@ function openConfigFile() {
       : process.platform === 'win32'
         ? ['cmd', ['/c', 'start', '', file]]
         : ['xdg-open', [file]]
-  spawn(command, args, { detached: true, stdio: 'ignore' }).unref()
+  // Hiding applies to the `cmd` that runs `start`, not to the editor it hands
+  // off to: `start` opens the file through its association in a process of its
+  // own. Windows ignores CREATE_NO_WINDOW next to DETACHED_PROCESS, so what
+  // this leaves is SW_HIDE on the middleman.
+  spawnHidden(command, args, { detached: true, stdio: 'ignore' }).unref()
 }
 
 /** localhost, ::1, or anything in 127/8, matching dsh's own /api fence. */

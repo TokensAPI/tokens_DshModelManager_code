@@ -11,8 +11,8 @@
 // injects CODEX_THREAD_ID, and opencode servers (OpenChamber included, issue
 // #30) inject OPENCODE/OPENCODE_PID. Ancestry still comes first where it
 // exists: it resolves nesting to the innermost harness.
-import * as childProcess from 'child_process';
 import * as path from 'path';
+import { execFileSyncHidden } from '../util/spawnHidden.ts';
 
 const HARNESS_BY_BASENAME: Record<string, string> = {
     claude: 'claude-code',
@@ -83,7 +83,7 @@ export function detectHarnessDetailed(): HarnessDetection {
     // used to lead with "ps: unknown option" noise (issue #30).
     if (process.platform !== 'win32') {
         try {
-            const ps = childProcess.execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], {
+            const ps = execFileSyncHidden('ps', ['-Ao', 'pid=,ppid=,command='], {
                 encoding: 'utf-8',
                 maxBuffer: 16 * 1024 * 1024,
                 stdio: ['ignore', 'pipe', 'pipe'],
