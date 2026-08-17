@@ -463,12 +463,6 @@ interface IsolatedImage {
 }
 
 /**
- * Place the input image, and nothing else, into a fresh temp directory the agent
- * runs in. Subprocess providers are handed a path and broad permissions, so text
- * inside the image could otherwise point them at neighbouring files; a directory
- * of one removes that reach.
- */
-/**
  * Remove a throwaway directory without ever failing the run over it.
  *
  * On Windows a directory that is a live process's current directory cannot be
@@ -508,6 +502,12 @@ export async function removeWorkdir(workdir: string): Promise<void> {
     }
 }
 
+/**
+ * Place the input image, and nothing else, into a fresh temp directory the agent
+ * runs in. Subprocess providers are handed a path and broad permissions, so text
+ * inside the image could otherwise point them at neighbouring files; a directory
+ * of one removes that reach.
+ */
 function isolateImage(source: string): IsolatedImage {
     const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-work-'));
     const imageSource = path.join(workdir, path.basename(source));
