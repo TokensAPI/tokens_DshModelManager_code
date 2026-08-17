@@ -533,34 +533,50 @@ function registerVisionProvider(ctx, config, ownProviders) {
     return
   }
 
+  // dsh snapshots providerInfo and providerRetryPolicy at registration time.
+  // Keep the state and registration handle for each wrapper so an upstream
+  // replacement can refresh those snapshots instead of leaving a synthetic
+  // route on yesterday's name or recovery policy.
+  const registrations = new Map()
+  const wrapped = new Set(['deepseek-modlens'])
+  const policyKey = (policy) => (policy === undefined ? undefined : JSON.stringify(policy))
+
   const registerWrapper = (upstream, providerId, displayName) => {
-    const withVision = (info) => ({
-      ...info,
-      provider: providerId,
-      inputModalities: ['text', 'image'],
-    })
+    const state = { displayName, retryPolicyKey: undefined }
+    const withVision = (info) => {
+      const inputModalities = Array.isArray(info?.inputModalities) ? [...info.inputModalities] : []
+      if (!inputModalities.includes('text')) inputModalities.unshift('text')
+      if (!inputModalities.includes('image')) inputModalities.push('image')
+      return { ...info, provider: providerId, inputModalities }
+    }
     try {
-      ctx.llm.registerAdapter([providerId], {
+      const registration = ctx.llm.registerAdapter([providerId], {
         // Duck-typing LlmAdapter: providerInfo/providerRetryPolicy are
         // base-class defaults a plain object must supply itself (their
         // absence is exactly the silent registration failure this catch
         // used to swallow).
         providerInfo(provider) {
-          return { id: provider, name: displayName }
+          return { id: provider, name: state.displayName }
         },
         providerRetryPolicy() {
-          return undefined
+          // dsh captures this synchronously when the wrapper route registers.
+          // Returning the base default here gives the synthetic route a retry
+          // budget unrelated to the real route it ultimately calls (#57).
+          // Older preview builds exposed registration before this runtime
+          // query, so keep their former default only when the query itself is
+          // absent. A current runtime that cannot resolve `upstream` throws,
+          // and the registration boundary below fails closed instead.
+          if (typeof ctx.llm.providerRetryPolicy !== 'function') return undefined
+          const policy = ctx.llm.providerRetryPolicy(upstream)
+          state.retryPolicyKey = policyKey(policy)
+          return policy
         },
         async listModels(_provider, signal) {
-          try {
-            const models = await ctx.llm.listModels(upstream, signal)
-            return models.filter(shouldWrap).map((model) => ({
-              ...withVision(model),
-              name: `${model.name ?? model.id} (modlens vision)`,
-            }))
-          } catch {
-            return []
-          }
+          const models = await ctx.llm.listModels(upstream, signal)
+          return models.filter(shouldWrap).map((model) => ({
+            ...withVision(model),
+            name: `${model.name ?? model.id} (modlens vision)`,
+          }))
         },
         async resolveModel(_provider, model, signal) {
           const info = await ctx.llm.resolveModelInfo(upstream, model, signal)
@@ -583,6 +599,7 @@ function registerVisionProvider(ctx, config, ownProviders) {
         },
         evidenceCache: new Map(),
       })
+      registrations.set(upstream, { providerId, registration, state })
       // Trusted as ours only on a registration this call actually made. A
       // duplicate below means someone else holds that id, and skipping a
       // provider we do not own would let a real vision model's paste be
@@ -592,7 +609,10 @@ function registerVisionProvider(ctx, config, ownProviders) {
     } catch (error) {
       // A duplicate means a concurrent or earlier registration already won:
       // that is success for the claim, not a reason to retry forever.
-      if (/already|duplicate/i.test(String(error))) {
+      const duplicate =
+        error?.code === 'DUPLICATE_ADAPTER' ||
+        /\balready registered\b|\bduplicate (adapter|provider)\b/i.test(String(error))
+      if (duplicate) {
         console.error(`[modlens] vision provider ${providerId} already registered, keeping the existing one`)
         return true
       }
@@ -604,8 +624,67 @@ function registerVisionProvider(ctx, config, ownProviders) {
     }
   }
 
+  const dropWrapper = (upstream, current) => {
+    registrations.delete(upstream)
+    wrapped.delete(upstream)
+    ownProviders?.delete(current.providerId)
+    if (typeof current.registration === 'function') current.registration()
+  }
+
+  const refreshWrapper = (upstream, displayName) => {
+    const current = registrations.get(upstream)
+    if (!current || typeof current.registration?.replace !== 'function') return
+    let nextPolicyKey
+    try {
+      nextPolicyKey =
+        typeof ctx.llm.providerRetryPolicy === 'function' ? policyKey(ctx.llm.providerRetryPolicy(upstream)) : undefined
+    } catch (error) {
+      dropWrapper(upstream, current)
+      console.error(`[modlens] vision provider refresh removed (${current.providerId}): ${error}`)
+      return
+    }
+    if (current.state.displayName === displayName && current.state.retryPolicyKey === nextPolicyKey) return
+    const previousName = current.state.displayName
+    current.state.displayName = displayName
+    try {
+      // Re-read both adapter methods at the same atomic boundary dsh's own
+      // adapters use when their registration-captured facts change.
+      current.registration.replace([current.providerId])
+    } catch (error) {
+      current.state.displayName = previousName
+      dropWrapper(upstream, current)
+      console.error(`[modlens] vision provider refresh failed (${current.providerId}): ${error}`)
+    }
+  }
+
   if (config.upstream) {
-    registerWrapper(config.upstream, config.providerId || 'deepseek-modlens', 'DeepSeek (modlens vision)')
+    const upstream = config.upstream
+    const providerId = config.providerId || 'deepseek-modlens'
+    const displayName = 'DeepSeek (modlens vision)'
+    let reconciling = false
+    const reconcile = () => {
+      if (reconciling) return
+      reconciling = true
+      try {
+        const current = registrations.get(upstream)
+        const available =
+          typeof ctx.llm.listProviders !== 'function' ||
+          ctx.llm.listProviders().some((info) => (typeof info === 'string' ? info : info?.id) === upstream)
+        if (!current) {
+          registerWrapper(upstream, providerId, displayName)
+          return
+        }
+        if (!available) {
+          dropWrapper(upstream, current)
+          return
+        }
+        refreshWrapper(upstream, displayName)
+      } finally {
+        reconciling = false
+      }
+    }
+    reconcile()
+    if (typeof ctx.on === 'function') ctx.on('llm/adapters-updated', reconcile)
     return
   }
 
@@ -617,7 +696,6 @@ function registerVisionProvider(ctx, config, ownProviders) {
   // skip it while this one is still probing), and sweeps are serialized on
   // one promise chain so two can never interleave their probes at all.
   const discover = Array.isArray(config.discover) ? new Set(config.discover) : null
-  const wrapped = new Set(['deepseek-modlens'])
   const sweepOnce = async () => {
     try {
       await sweepBody()
@@ -636,10 +714,22 @@ function registerVisionProvider(ctx, config, ownProviders) {
       }
       return
     }
-    for (const info of ctx.llm.listProviders()) {
+    const providers = ctx.llm.listProviders()
+    const available = new Set(providers.map((info) => info?.id).filter(Boolean))
+    for (const [upstream, current] of registrations) {
+      if (available.has(upstream)) continue
+      dropWrapper(upstream, current)
+    }
+    for (const info of providers) {
       const id = info?.id
-      if (!id || wrapped.has(id) || String(id).startsWith('modlens-')) continue
+      if (!id || String(id).startsWith('modlens-')) continue
       if (discover && !discover.has(id)) continue
+      const base = info.name ?? id
+      if (registrations.has(id)) {
+        refreshWrapper(id, `${base} (modlens vision)`)
+        continue
+      }
+      if (wrapped.has(id)) continue
       // Claim before the await: the probe may suspend, and the sweep a
       // registration triggers must not probe the same id concurrently.
       wrapped.add(id)
@@ -658,7 +748,6 @@ function registerVisionProvider(ctx, config, ownProviders) {
         continue
       }
       const providerId = id === 'deepseek-official' ? 'deepseek-modlens' : `modlens-${id}`
-      const base = info.name ?? id
       if (!registerWrapper(id, providerId, `${base} (modlens vision)`)) {
         wrapped.delete(id)
       }
