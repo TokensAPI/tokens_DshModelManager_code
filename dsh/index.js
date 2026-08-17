@@ -631,6 +631,11 @@ function registerVisionProvider(ctx, config, ownProviders) {
     if (typeof current.registration === 'function') current.registration()
   }
 
+  // A caveat for whoever reads the catch below: commitRoutes mutates the
+  // registry and only then emits, so a listener throwing during that emit
+  // means the replace already SUCCEEDED. Treating the throw as failure and
+  // disposing would drop a healthy registration. No shipped listener can
+  // throw there today, which is why this is a comment rather than a guard.
   const refreshWrapper = (upstream, displayName) => {
     const current = registrations.get(upstream)
     if (!current || typeof current.registration?.replace !== 'function') return
@@ -660,7 +665,20 @@ function registerVisionProvider(ctx, config, ownProviders) {
   if (config.upstream) {
     const upstream = config.upstream
     const providerId = config.providerId || 'deepseek-modlens'
-    const displayName = 'DeepSeek (modlens vision)'
+    // Named after the route it actually wraps. This used to say DeepSeek
+    // whatever `upstream` was, so anyone pointing it at another route got a
+    // model group labelled for a provider they were not using. The refresh
+    // plumbing below could never correct it, because the name it compared
+    // against was a constant.
+    const upstreamName = () => {
+      if (typeof ctx.llm.listProviders !== 'function') return upstream
+      try {
+        const found = ctx.llm.listProviders().find((entry) => entry.id === upstream)
+        return found?.name ?? upstream
+      } catch {
+        return upstream
+      }
+    }
     let reconciling = false
     const reconcile = () => {
       if (reconciling) return
@@ -671,14 +689,14 @@ function registerVisionProvider(ctx, config, ownProviders) {
           typeof ctx.llm.listProviders !== 'function' ||
           ctx.llm.listProviders().some((info) => (typeof info === 'string' ? info : info?.id) === upstream)
         if (!current) {
-          registerWrapper(upstream, providerId, displayName)
+          registerWrapper(upstream, providerId, `${upstreamName()} (modlens vision)`)
           return
         }
         if (!available) {
           dropWrapper(upstream, current)
           return
         }
-        refreshWrapper(upstream, displayName)
+        refreshWrapper(upstream, `${upstreamName()} (modlens vision)`)
       } finally {
         reconciling = false
       }
