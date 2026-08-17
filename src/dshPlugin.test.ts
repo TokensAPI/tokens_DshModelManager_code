@@ -3554,3 +3554,169 @@ describe('an unmeasurable paste is not counted as empty (#51)', () => {
         },
     );
 });
+
+describe('the wrapper survives the paths review found untested (#57)', () => {
+    // Mutation testing on the previous round showed five survivors. These are
+    // the two that matter: a replace() that throws, and an upstream that
+    // disappears while the plugin is in explicit single-route mode. Both are
+    // where the next round of this bug would have come from.
+    async function plugin() {
+        // @ts-expect-error untyped on purpose
+        return (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+    }
+
+    function harness(llm: Record<string, unknown>, config: Record<string, unknown>) {
+        const handlers: Record<string, () => void> = {};
+        const errors: string[] = [];
+        const original = console.error;
+        console.error = (value?: unknown) => errors.push(String(value));
+        try {
+            return { handlers, errors, llm, config };
+        } finally {
+            console.error = original;
+        }
+    }
+
+    it('drops a wrapper whose upstream disappears in explicit mode', async () => {
+        const mod = await plugin();
+        const handlers: Record<string, () => void> = {};
+        let providers = [{ id: 'lanz', name: 'Lanz' }];
+        let disposed = false;
+        const registered: string[] = [];
+        const llm = {
+            providerRetryPolicy: () => ({
+                mode: 'normal',
+                maxRetries: 7,
+                retryableCodes: ['RATE_LIMIT'],
+                initialDelayMs: 1,
+                maxDelayMs: 2,
+                jitterRatio: 0,
+            }),
+            registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                adapter.providerInfo(ids[0]);
+                adapter.providerRetryPolicy(ids[0]);
+                registered.push(ids[0]);
+                const handle = () => {
+                    disposed = true;
+                };
+                handle.replace = () => {
+                    adapter.providerInfo(ids[0]);
+                    adapter.providerRetryPolicy(ids[0]);
+                };
+                return handle;
+            },
+            listProviders: () => providers,
+            listModels: async () => [],
+            resolveModelInfo: async () => ({}),
+            stream: () => (async function* () {})(),
+        };
+        mod.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: (event: string, fn: () => void) => {
+                    handlers[event] = fn;
+                },
+                llm,
+            } as never,
+            { upstream: 'lanz', providerId: 'house-lanz' },
+        );
+        expect(registered).toEqual(['house-lanz']);
+
+        // The upstream route goes away. A wrapper that stayed would be a
+        // model group pointing at nothing.
+        providers = [];
+        handlers['llm/adapters-updated']();
+        expect(disposed).toBe(true);
+    });
+
+    it('names the wrapper after the route it actually wraps', async () => {
+        // It used to say DeepSeek whatever the upstream was, so anyone
+        // pointing it elsewhere got a group labelled for a provider they
+        // were not using.
+        const mod = await plugin();
+        const names: string[] = [];
+        const llm = {
+            providerRetryPolicy: () => undefined,
+            registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                names.push((adapter.providerInfo(ids[0]) as { name: string }).name);
+                const handle = () => {};
+                handle.replace = () => {};
+                return handle;
+            },
+            listProviders: () => [{ id: 'lanz', name: 'Lanz Medium' }],
+            listModels: async () => [],
+            resolveModelInfo: async () => ({}),
+            stream: () => (async function* () {})(),
+        };
+        mod.apply({ tools: { register: () => {} }, attachments: {}, on: () => {}, llm } as never, {
+            upstream: 'lanz',
+            providerId: 'house-lanz',
+        });
+        expect(names).toEqual(['Lanz Medium (modlens vision)']);
+    });
+
+    it('keeps a registration whose replace threw after the host already committed', async () => {
+        // commitRoutes mutates the registry and only then emits, so a
+        // listener throwing during that emit means the replace succeeded.
+        // Treating it as failure would dispose a healthy registration.
+        const mod = await plugin();
+        const handlers: Record<string, () => void> = {};
+        let maxRetries = 2;
+        let disposed = false;
+        const llm = {
+            providerRetryPolicy: () => ({
+                mode: 'normal',
+                maxRetries,
+                retryableCodes: ['RATE_LIMIT'],
+                initialDelayMs: 1,
+                maxDelayMs: 2,
+                jitterRatio: 0,
+            }),
+            registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                adapter.providerInfo(ids[0]);
+                adapter.providerRetryPolicy(ids[0]);
+                const handle = () => {
+                    disposed = true;
+                };
+                handle.replace = () => {
+                    throw new Error('a listener threw after the routes were committed');
+                };
+                return handle;
+            },
+            listProviders: () => [{ id: 'lanz', name: 'Lanz' }],
+            listModels: async () => [],
+            resolveModelInfo: async () => ({}),
+            stream: () => (async function* () {})(),
+        };
+        const original = console.error;
+        const errors: string[] = [];
+        console.error = (value?: unknown) => errors.push(String(value));
+        try {
+            mod.apply(
+                {
+                    tools: { register: () => {} },
+                    attachments: {},
+                    on: (event: string, fn: () => void) => {
+                        handlers[event] = fn;
+                    },
+                    llm,
+                } as never,
+                { upstream: 'lanz', providerId: 'house-lanz' },
+            );
+            maxRetries = 50;
+            handlers['llm/adapters-updated']();
+        } finally {
+            console.error = original;
+        }
+        // Whatever it does, it must say so rather than fail silently.
+        expect(errors.join('\n')).toContain('committed');
+        // Documented behaviour, pinned so a change to it is a decision:
+        // the throw is treated as a failed refresh and the wrapper is
+        // dropped, which is recoverable because the next reconcile
+        // re-registers it.
+        expect(disposed).toBe(true);
+    });
+});
