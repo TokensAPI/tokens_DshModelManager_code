@@ -11,7 +11,9 @@ import {
     providerConfiguredInFile,
     renderEffectiveConfig,
     resolveProviderSettings,
+    saveProviderBundle,
     setConfigValue,
+    useProviderBundle,
 } from './config.ts';
 
 describe('defaultProviderName', () => {
@@ -506,5 +508,129 @@ describe('setConfigValue accepts only names a provider answers to', () => {
             /Unknown provider: opeanai/,
         );
         expect(fs.existsSync(file)).toBe(false);
+    });
+});
+
+describe('saved copies of the openai slot (#67)', () => {
+    // Switching gateways used to overwrite providers.openai and lose the
+    // previous key. A saved copy is inert data: resolution, guards, and the
+    // env bindings never read it, and only save/use write it.
+    function tmpConfig(): string {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-saved-'));
+        return path.join(dir, 'config.json');
+    }
+
+    const dashscope = {
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        apiKey: 'sk-alibaba-123456',
+        model: 'qwen3-vl-plus',
+    };
+    const ark = {
+        baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
+        apiKey: 'ak-bytedance-123456',
+        model: 'doubao-seed-1.6-vision',
+    };
+
+    function seed(file: string, settings: Record<string, unknown>): void {
+        fs.writeFileSync(file, JSON.stringify({ providers: { openai: settings } }));
+    }
+
+    it('snapshots the slot under a label and swaps another one in, whole', () => {
+        const file = tmpConfig();
+        seed(file, dashscope);
+        saveProviderBundle('openai', 'dashscope', file);
+
+        fs.writeFileSync(
+            file,
+            JSON.stringify({
+                providers: { openai: ark },
+                saved: JSON.parse(fs.readFileSync(file, 'utf-8')).saved,
+            }),
+        );
+        saveProviderBundle('openai', 'ark', file);
+        useProviderBundle('openai', 'dashscope', false, file);
+
+        const config = loadConfigFile(file);
+        expect(config.providers?.openai).toEqual(dashscope);
+        // The other bundle survived the switch: that is the whole point.
+        expect(config.saved?.openai?.ark).toEqual(ark);
+    });
+
+    it('refuses to drop an unsaved active slot, and --discard means it', () => {
+        const file = tmpConfig();
+        seed(file, dashscope);
+        saveProviderBundle('openai', 'dashscope', file);
+        // The user edits the slot afterwards; the edit is nowhere saved.
+        setConfigValue('openai.model', 'qwen3-vl-max', file);
+
+        expect(() => useProviderBundle('openai', 'dashscope', false, file)).toThrow(
+            /not saved under any label/,
+        );
+        useProviderBundle('openai', 'dashscope', true, file);
+        expect(loadConfigFile(file).providers?.openai).toEqual(dashscope);
+    });
+
+    it('folds an alias-spelled section into the snapshot and clears it on use', () => {
+        const file = tmpConfig();
+        // openai-compat is an alias spelling of the same slot; the canonical
+        // key wins on conflict, and use must remove every spelling or the
+        // leftover section would keep merging into reads beside the bundle.
+        fs.writeFileSync(
+            file,
+            JSON.stringify({
+                providers: {
+                    'openai-compat': { baseUrl: 'https://old.example/v1', model: 'old-model' },
+                    openai: { model: 'qwen3-vl-plus', apiKey: 'sk-alibaba-123456' },
+                },
+            }),
+        );
+        saveProviderBundle('openai', 'merged', file);
+
+        const saved = loadConfigFile(file).saved?.openai?.merged;
+        expect(saved?.model).toBe('qwen3-vl-plus');
+        expect(saved?.baseUrl).toBe('https://old.example/v1');
+
+        useProviderBundle('openai', 'merged', false, file);
+        const config = loadConfigFile(file);
+        expect(config.providers && 'openai-compat' in config.providers).toBe(false);
+        expect(config.providers?.openai).toEqual(saved);
+    });
+
+    it('refuses labels that are not labels and slots that are not openai', () => {
+        const file = tmpConfig();
+        seed(file, dashscope);
+
+        expect(() => saveProviderBundle('openai', 'Bad Label', file)).toThrow(/lowercase/);
+        expect(() => saveProviderBundle('gemini-api', 'work', file)).toThrow(
+            /Only the openai slot/,
+        );
+        expect(() => saveProviderBundle('openai', 'empty', tmpConfig())).toThrow(/Nothing to save/);
+    });
+
+    it('names the saved labels when the asked-for one does not exist', () => {
+        const file = tmpConfig();
+        seed(file, dashscope);
+        saveProviderBundle('openai', 'dashscope', file);
+
+        expect(() => useProviderBundle('openai', 'ark', false, file)).toThrow(/Saved: dashscope/);
+    });
+
+    it('masks every saved key in the effective view', () => {
+        const file = tmpConfig();
+        seed(file, dashscope);
+        saveProviderBundle('openai', 'dashscope', file);
+
+        const view = renderEffectiveConfig(loadConfigFile(file), {});
+        expect(view).toContain('dashscope');
+        expect(view).not.toContain('sk-alibaba-123456');
+    });
+
+    it('survives ordinary config set round-trips untouched', () => {
+        const file = tmpConfig();
+        seed(file, dashscope);
+        saveProviderBundle('openai', 'dashscope', file);
+        setConfigValue('gemini-api.apiKey', 'g-key-123', file);
+
+        expect(loadConfigFile(file).saved?.openai?.dashscope).toEqual(dashscope);
     });
 });

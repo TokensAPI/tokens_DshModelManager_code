@@ -58,6 +58,14 @@ export interface ModlensConfig {
      * this model as a built-in provider.
      */
     reuse?: Partial<Record<ReuseHarness, boolean>>;
+    /**
+     * Named saved copies of one provider slot's file settings, keyed by slot
+     * then by a user-chosen label (issue #67). Inert data: nothing in
+     * resolution, guards, failover, or env binding reads it. Only `config
+     * save` and `config use` write it, and only the openai slot is accepted,
+     * because it is the one slot users point at many different gateways.
+     */
+    saved?: Record<string, Record<string, ProviderSettings>>;
 }
 
 export const CONFIG_DIR = path.join(os.homedir(), '.modlens');
@@ -329,6 +337,11 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
         }
     }
 
+    persistConfig(config, configPath);
+}
+
+/** Write the config back with the 0600 permissions every write here uses. */
+function persistConfig(config: ModlensConfig, configPath: string): void {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     try {
@@ -336,6 +349,114 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
     } catch {
         // best effort on platforms without chmod
     }
+}
+
+const SAVED_LABEL = /^[a-z][a-z0-9-]*$/;
+
+/** Deep equality over JSON-shaped data; the `use` refusal rests on it. */
+function deepEqualJson(a: unknown, b: unknown): boolean {
+    if (a === b) return true;
+    if (Array.isArray(a) && Array.isArray(b)) {
+        return a.length === b.length && a.every((item, i) => deepEqualJson(item, b[i]));
+    }
+    if (a && b && typeof a === 'object' && typeof b === 'object') {
+        const ka = Object.keys(a as object).sort();
+        const kb = Object.keys(b as object).sort();
+        return (
+            ka.length === kb.length &&
+            ka.every(
+                (key, i) =>
+                    key === kb[i] &&
+                    deepEqualJson(
+                        (a as Record<string, unknown>)[key],
+                        (b as Record<string, unknown>)[key],
+                    ),
+            )
+        );
+    }
+    return false;
+}
+
+/** The one slot `save`/`use` accept, with alias spellings folded onto it. */
+function savedSlotFor(slot: string): string {
+    const folded = slot.trim().toLowerCase();
+    const canonical = providerAliases()[folded] ?? folded;
+    if (canonical !== 'openai') {
+        throw new Error(
+            `Only the openai slot has saved copies; "${slot}" does not. It is the one slot users point at many different gateways.`,
+        );
+    }
+    return canonical;
+}
+
+/**
+ * Snapshot the openai slot's file settings under a label (issue #67).
+ * Switching gateways used to overwrite providers.openai and lose the previous
+ * key; a saved copy is where it survives.
+ */
+export function saveProviderBundle(slot: string, label: string, configPath = CONFIG_PATH): void {
+    const canonical = savedSlotFor(slot);
+    if (!SAVED_LABEL.test(label)) {
+        throw new Error(
+            `Labels are lowercase letters, digits and hyphens, starting with a letter: "${label}" is not.`,
+        );
+    }
+    const config = loadConfigFile(configPath);
+    const snapshot = fileSettingsFor(canonical, config);
+    if (Object.keys(snapshot).length === 0) {
+        throw new Error(
+            `Nothing to save: the ${canonical} slot is empty in ${configPath}. Configure it first (modlens config set openai.baseUrl <url>).`,
+        );
+    }
+    config.saved ??= {};
+    config.saved[canonical] ??= {};
+    config.saved[canonical][label] = snapshot;
+    persistConfig(config, configPath);
+}
+
+/**
+ * Replace the openai slot with a saved copy, whole (issue #67). A merge would
+ * build an endpoint nobody configured, so the bundle swaps in as one piece.
+ * An active slot that is not saved under any label refuses to be overwritten:
+ * losing a key silently is the failure this feature exists to remove, so it
+ * can only happen when `discard` says so in as many words.
+ */
+export function useProviderBundle(
+    slot: string,
+    label: string,
+    discard = false,
+    configPath = CONFIG_PATH,
+): void {
+    const canonical = savedSlotFor(slot);
+    const config = loadConfigFile(configPath);
+    const bundle = config.saved?.[canonical]?.[label];
+    if (bundle === undefined) {
+        const known = Object.keys(config.saved?.[canonical] ?? {}).sort();
+        throw new Error(
+            known.length === 0
+                ? `No saved copies exist for ${canonical} yet. Save the current one first: modlens config save openai <label>.`
+                : `No saved copy named "${label}". Saved: ${known.join(', ')}.`,
+        );
+    }
+    const current = fileSettingsFor(canonical, config);
+    const currentSaved =
+        Object.keys(current).length === 0 ||
+        Object.values(config.saved?.[canonical] ?? {}).some((entry) =>
+            deepEqualJson(entry, current),
+        );
+    if (!currentSaved && !discard) {
+        throw new Error(
+            `The current ${canonical} settings are not saved under any label and would be lost. Save them first (modlens config save openai <label>) or pass --discard.`,
+        );
+    }
+    // Every alias spelling goes, or an old section under openai-compat would
+    // keep merging into reads beside the bundle that just swapped in.
+    for (const key of fileKeysFor(canonical, config)) {
+        delete config.providers?.[key];
+    }
+    config.providers ??= {};
+    config.providers[canonical] = { ...bundle };
+    persistConfig(config, configPath);
 }
 
 /** Accepts a JSON array of globs or a comma-separated list. Empty clears. */
@@ -472,11 +593,30 @@ export function renderEffectiveConfig(
         provider?: string;
         proxy?: string;
         providers: Record<string, Record<string, string>>;
+        saved?: Record<string, Record<string, string>>;
         guards?: Record<string, string>;
         reuse?: Record<string, string>;
     } = {
         providers,
     };
+    // Saved copies are inert data, but they hold keys, so the view names
+    // them the way it names everything secret: present, masked, never shown.
+    const savedView: Record<string, Record<string, string>> = {};
+    for (const [slot, bundles] of Object.entries(config.saved ?? {})) {
+        for (const label of Object.keys(bundles).sort()) {
+            const bundle = bundles[label];
+            const parts = [
+                bundle.model,
+                bundle.baseUrl,
+                bundle.apiKey !== undefined ? `key ${maskKey(bundle.apiKey)}` : 'no key',
+            ].filter(Boolean);
+            savedView[slot] ??= {};
+            savedView[slot][label] = parts.join(' @ ');
+        }
+    }
+    if (Object.keys(savedView).length > 0) {
+        effective.saved = savedView;
+    }
     if (config.provider?.trim()) {
         effective.provider = config.provider.trim();
     }

@@ -11,7 +11,9 @@ import {
     initConfigFile,
     loadConfigFile,
     renderEffectiveConfig,
+    saveProviderBundle,
     setConfigValue,
+    useProviderBundle,
 } from './config.ts';
 import { buildDoctorReport, renderDoctorReport } from './doctor.ts';
 import { runGuard } from './guard/index.ts';
@@ -224,6 +226,41 @@ config
                     '',
                 ].join('\n'),
             );
+        } catch (error) {
+            process.stderr.write(
+                `Error: ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+            process.exitCode = 1;
+        }
+    });
+
+config
+    .command('save <slot> <label>')
+    .description(
+        'Snapshot a provider slot under a label (openai only), so switching gateways never loses a key',
+    )
+    .action((slot: string, label: string) => {
+        try {
+            saveProviderBundle(slot, label);
+            process.stdout.write(`Saved the ${slot} slot as "${label}" in ${CONFIG_PATH}\n`);
+        } catch (error) {
+            process.stderr.write(
+                `Error: ${error instanceof Error ? error.message : String(error)}\n`,
+            );
+            process.exitCode = 1;
+        }
+    });
+
+config
+    .command('use <slot> <label>')
+    .description(
+        'Replace a provider slot with a saved copy, whole. Refuses to drop unsaved settings without --discard',
+    )
+    .option('--discard', 'Overwrite the current slot even though it is not saved under any label')
+    .action((slot: string, label: string, options: { discard?: boolean }) => {
+        try {
+            useProviderBundle(slot, label, Boolean(options.discard));
+            process.stdout.write(`The ${slot} slot now holds "${label}" (${CONFIG_PATH})\n`);
         } catch (error) {
             process.stderr.write(
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,
