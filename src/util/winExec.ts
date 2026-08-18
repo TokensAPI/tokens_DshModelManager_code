@@ -59,15 +59,42 @@ export interface SpawnPlan {
  * that changes which program runs. Anything that is not a clean yes or a
  * clean no declines the shim instead.
  */
-export type Existence = 'present' | 'absent' | 'unknown';
+export type Existence = 'present' | 'directory' | 'absent' | 'unknown';
 
-function existenceOf(target: string): Existence {
+/** Exported for tests: the predicate is where directory-blindness lived. */
+export function existenceOf(target: string): Existence {
     try {
-        fs.statSync(target);
-        return 'present';
+        return fs.statSync(target).isDirectory() ? 'directory' : 'present';
     } catch (error) {
         return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' : 'unknown';
     }
+}
+
+/**
+ * PATH elements the way the Windows search reads them: `;` splits only
+ * outside quotes, and the quotes themselves are not part of the directory
+ * name. Handing the quoted spelling to the filesystem probed a directory
+ * that does not exist, which silently deleted the entry from the search
+ * and ran whichever node the next entry held.
+ */
+function splitWindowsPath(pathValue: string): string[] {
+    const entries: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (const char of pathValue) {
+        if (char === '"') {
+            inQuotes = !inQuotes;
+            continue;
+        }
+        if (char === ';' && !inQuotes) {
+            if (current) entries.push(current);
+            current = '';
+            continue;
+        }
+        current += char;
+    }
+    if (current) entries.push(current);
+    return entries;
 }
 
 export interface ResolveDeps {
@@ -152,10 +179,7 @@ function resolveLikeCmd(
     const effectiveCwd = cwd ?? process.cwd();
     const dirs = [
         ...(skipCwd ? [] : [effectiveCwd]),
-        ...pathValue
-            .split(';')
-            .filter(Boolean)
-            .map((dir) => path.win32.resolve(effectiveCwd, dir)),
+        ...splitWindowsPath(pathValue).map((dir) => path.win32.resolve(effectiveCwd, dir)),
     ];
     for (const dir of dirs) {
         // Extensions first, the bare name last. Windows CI settled this: with
@@ -169,6 +193,9 @@ function resolveLikeCmd(
             if (found === 'unknown') {
                 return null;
             }
+            // A directory that happens to carry the name is skipped and the
+            // search continues, which is what cmd does; counting it as the
+            // winner handed spawn a directory while cmd ran the next hit.
             if (found === 'present') {
                 return /\.(cmd|bat)$/i.test(candidate) ? null : candidate;
             }
@@ -186,7 +213,12 @@ function resolveLikeCmd(
 function templatePath(text: string, shimDir: string): string | null {
     const rooted = /^%(?:dp0%|~dp0)\\?(.*)$/i.exec(text);
     if (!rooted) {
-        return path.win32.isAbsolute(text) && !text.includes('%') ? text : null;
+        // Only a drive-qualified local path: UNC and device paths pass
+        // isAbsolute, and spawning one does strictly more than checking one.
+        // No real generator writes them (cmd-shim roots everything in %dp0%,
+        // and pnpm's pinned nodeExecPath is drive-qualified), so refusing
+        // costs nothing that recognition was supposed to allow.
+        return isFullyQualifiedLocalPath(text) && !text.includes('%') ? text : null;
     }
     const rest = rooted[1];
     if (rest.includes('%') || rest === '') {
@@ -262,7 +294,10 @@ function nodeRecipe(
     if (found === 'unknown') {
         return null;
     }
-    if (found === 'present') {
+    // IF EXIST matches directories too, so a directory named node.exe takes
+    // this arm exactly as it would under cmd, and the spawn fails the same
+    // way cmd's would. Only the PATH lookup is pickier than IF EXIST.
+    if (found === 'present' || found === 'directory') {
         return {
             command: local,
             args: tail,
@@ -294,16 +329,19 @@ const NPM_PROLOGUE = [
     'CALL :find_dp0',
 ];
 
+// Every generator writes whitespace before %*, and requiring it matters: cmd
+// expands %* in place, so a hand-glued `"...cli.js"%*` concatenates the first
+// caller argument onto the script path while a split argv would not.
 const NPM_PREFIX = 'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & ';
 /** 4.1.0 through 9.0.1: nothing between the prefix and the interpreter. */
-const NPM_EXEC_LEGACY = /^"%_prog%"(.*)%\*$/;
+const NPM_EXEC_LEGACY = /^"%_prog%"(.*)\s%\*$/;
 /** 9.0.2 onwards: the PATHEXT edit rides the execution line, after endLocal. */
-const NPM_EXEC_CURRENT = /^set PATHEXT=%PATHEXT:;\.([A-Z]+);=;% & "%_prog%"(.*)%\*$/;
+const NPM_EXEC_CURRENT = /^set PATHEXT=%PATHEXT:;\.([A-Z]+);=;% & "%_prog%"(.*)\s%\*$/;
 const NPM_NATIVE_EXEC = /^"([^"]*)"\s+%\*$/;
 const PNPM_IF = /^@IF EXIST "([^"]*)" \($/;
-const PNPM_ARM = /^"([^"]*)"(.*)%\*$/;
-const PNPM_BARE_ARM = /^node(.*)%\*$/;
-const PNPM_ONELINE = /^@"([^"]*)"(.*)%\*$/;
+const PNPM_ARM = /^"([^"]*)"(.*)\s%\*$/;
+const PNPM_BARE_ARM = /^node(.*)\s%\*$/;
+const PNPM_ONELINE = /^@"([^"]*)"(.*)\s%\*$/;
 
 /**
  * Trim each line and drop the trailing blank ones. Leading indentation is
@@ -396,9 +434,13 @@ function matchNpm(
 }
 
 /**
- * pnpm's two shapes. Its optional PATH and NODE_PATH preambles are absent
- * here on purpose: a direct spawn cannot reproduce them, so shims carrying
- * them are simply not one of the recognised four.
+ * pnpm's two shapes, without its optional PATH and NODE_PATH preambles.
+ * Shims carrying those are declined today, and honesty about why matters: the
+ * NODE_PATH form is a conditional assignment a plan's env could reproduce, so
+ * this is an unrecognised template, not an unreproducible one. It is also the
+ * DEFAULT pnpm layout (extendNodePath with the isolated linker), so declining
+ * leaves those shims to the spawn EINVAL this module exists to remove; a
+ * recogniser for them is the known gap here.
  */
 function matchPnpm(
     lines: string[],
