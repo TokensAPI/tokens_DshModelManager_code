@@ -3766,3 +3766,73 @@ describe('a route that gains native vision says so, and says what to do', () => 
         );
     });
 });
+
+describe('the settings card is dispatchable on rc.7 (#61, #65)', () => {
+    // rc.7's settings page renders a plugin card only when the card's slot key
+    // matches a namespace the host serves in settings.describe. The card keys
+    // itself 'modlens' (see dshClient.test.ts), so the host half must serve a
+    // 'modlens' namespace or the card silently never renders, which is exactly
+    // how both reports found it.
+    async function loadWithSettings(config: Record<string, unknown> = {}) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const registered: Array<{ ns: string; schema: unknown; options: unknown }> = [];
+        const armed: string[][] = [];
+        const ctx = {
+            tools: { register: () => {} },
+            attachments: {
+                readImage: async () => ({
+                    data: new Uint8Array([1]),
+                    ref: { mediaType: 'image/png' },
+                }),
+            },
+            on: () => {},
+            inject: (deps: string[], fn: (scope: unknown) => void) => {
+                armed.push(deps);
+                if (deps.includes('settings')) {
+                    fn({
+                        settings: {
+                            register: (ns: string, schema: unknown, options: unknown) => {
+                                registered.push({ ns, schema, options });
+                                return { get: () => ({}), watch: () => () => {} };
+                            },
+                        },
+                    });
+                }
+            },
+        };
+        plugin.apply(ctx as never, config);
+        return { registered, armed };
+    }
+
+    it('serves the namespace the card is keyed by', async () => {
+        const { registered } = await loadWithSettings();
+
+        expect(registered).toHaveLength(1);
+        expect(registered[0].ns).toBe('modlens');
+        // The card renders instead of the generic form, so the schema's only
+        // jobs are to pass the section through and to serialize. The envelope
+        // is the exact shape @deepseek-ai/schemastery emits for an empty
+        // object schema, hardcoded so this plugin does not import a harness
+        // package to describe nothing.
+        const schema = registered[0].schema as ((value: unknown) => unknown) & {
+            toJSON: () => unknown;
+        };
+        expect(schema(undefined)).toEqual({});
+        expect(schema({ kept: 1 })).toEqual({ kept: 1 });
+        expect(schema.toJSON()).toEqual({
+            uid: 0,
+            refs: { 0: { type: 'object', meta: { default: {} }, dict: {} } },
+        });
+    });
+
+    it('keeps the namespace off when the card is off', async () => {
+        // settingsCard: false removes the card and its route, so a namespace
+        // would be a settings entry pointing at nothing.
+        const { registered } = await loadWithSettings({ settingsCard: false });
+
+        expect(registered).toEqual([]);
+    });
+});

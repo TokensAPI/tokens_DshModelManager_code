@@ -334,6 +334,7 @@ describe('settings card (#39)', () => {
 
     function loadCard(configStatus: number) {
         const slotRegistrations: string[] = [];
+        const slotSpecs: Array<Record<string, unknown>> = [];
         const injected: string[][] = [];
         let loaded:
             | {
@@ -388,6 +389,7 @@ describe('settings card (#39)', () => {
                             },
                             register: (spec: { id: string }) => {
                                 slotRegistrations.push(spec.id);
+                                slotSpecs.push(spec as unknown as Record<string, unknown>);
                                 return spec;
                             },
                         },
@@ -395,7 +397,7 @@ describe('settings card (#39)', () => {
                 }
             },
         });
-        return { slotRegistrations, injected, card: exports.__card };
+        return { slotRegistrations, slotSpecs, injected, card: exports.__card };
     }
 
     it('does not mount where its route is off, instead of rendering an error', async () => {
@@ -410,6 +412,21 @@ describe('settings card (#39)', () => {
         const on = loadCard(200);
         await new Promise((resolve) => setTimeout(resolve, 10));
         expect(on.slotRegistrations).toEqual(['modlens']);
+    });
+
+    it('registers under the key rc.7 dispatches by and the id rc.6 lists by (#61, #65)', async () => {
+        // rc.7 made settings.plugin.item a keyed slot: register throws without
+        // options.key, and the card renders only when the key matches a
+        // settings namespace the host serves. The host half registers that
+        // namespace as 'modlens' (see dshPlugin.test.ts), so the two literals
+        // must stay equal. rc.6's list slot required options.id instead, and
+        // one client.js serves both, so both ride along.
+        const on = loadCard(200);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+
+        const spec = on.slotSpecs.find((entry) => entry.name === 'settings.plugin.item');
+        expect(spec?.key).toBe('modlens');
+        expect(spec?.id).toBe('modlens');
     });
 
     it('sends only what the save is about', async () => {

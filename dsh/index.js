@@ -74,16 +74,41 @@ export function apply(ctx, config = {}) {
       }
       // Same web server, a separate switch: turning paste-to-path off is a
       // statement about how images enter, not about whether the engine can
-      // be configured. dsh's own settings surface renders a hardcoded set of
-      // cards and does not enumerate namespaces, so the card the browser half
-      // contributes talks to this route rather than to a settings schema
-      // (issue #39).
+      // be configured. The card the browser half contributes talks to this
+      // route rather than to a settings schema, because modlens config lives
+      // in ~/.modlens/config.json and is shared with the CLI and every other
+      // harness (issue #39).
       if (config.settingsCard !== false) {
         try {
           registerConfigRoute(scope)
         } catch (error) {
           console.error(`[modlens] settings card route skipped: ${error}`)
         }
+      }
+    })
+  }
+  // Since rc.7 the settings page dispatches plugin cards by served settings
+  // namespace: a card renders only when its slot key matches a namespace the
+  // host answers for in settings.describe (issues #61, #65). The namespace
+  // registered here is an empty pass-through object, because its whole job is
+  // to make the card dispatchable; the values stay in ~/.modlens/config.json,
+  // behind the loopback route above, where every other harness can read them.
+  // The schema is duck-typed to what the seam calls on it, callable plus
+  // toJSON, the same stance the LlmAdapter takes: importing a dsh package for
+  // it would pin this plugin to one harness version. Harnesses without the
+  // settings service never run the closure, and their older settings page
+  // rendered every registered card anyway.
+  if (config.settingsCard !== false && typeof ctx.inject === 'function') {
+    ctx.inject(['settings'], (scope) => {
+      try {
+        const passThrough = (value) => ({ ...(value ?? {}) })
+        passThrough.toJSON = () => ({
+          uid: 0,
+          refs: { 0: { type: 'object', meta: { default: {} }, dict: {} } },
+        })
+        scope.settings.register('modlens', passThrough, { base: {} })
+      } catch (error) {
+        console.error(`[modlens] settings namespace skipped: ${error}`)
       }
     })
   }

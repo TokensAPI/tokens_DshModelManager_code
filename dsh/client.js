@@ -864,7 +864,7 @@ window.__ModuleLoader__.load({
       var ui = require('@deepseek-ai/dsh-client-ui-primitives')
       var Card = ConfigCard(react, ui)
       ctx.slots.inject('settings.plugin.item', function* () {
-        yield ctx.slots.register({ name: 'settings.plugin.item', id: 'modlens', order: 30 }, Card)
+        yield ctx.slots.register({ name: 'settings.plugin.item', id: 'modlens', key: 'modlens', order: 30 }, Card)
       })
     }
 
