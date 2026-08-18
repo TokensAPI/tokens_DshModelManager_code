@@ -620,6 +620,134 @@ describe('existence tells a directory from a file (review)', () => {
     });
 });
 
+describe("pnpm's NODE_PATH preamble, the default isolated-linker layout", () => {
+    // Verbatim from @zkochan/cmd-shim 9.0.7 with nodePath set, the block
+    // pnpm emits whenever extendNodePath is on, which is its default.
+    const PNPM_WITH_NODE_PATH = `@SETLOCAL
+@IF NOT DEFINED NODE_PATH (
+  @SET "NODE_PATH=C:\\proj\\node_modules\\.pnpm\\node_modules"
+) ELSE (
+  @SET "NODE_PATH=C:\\proj\\node_modules\\.pnpm\\node_modules;%NODE_PATH%"
+)
+@IF EXIST "%~dp0\\node.exe" (
+  "%~dp0\\node.exe"  "%~dp0\\pkg2\\cli.js" %*
+) ELSE (
+  @SET PATHEXT=%PATHEXT:;.JS;=;%
+  node  "%~dp0\\pkg2\\cli.js" %*
+)`;
+
+    const PNPM_NATIVE_WITH_NODE_PATH = `@SETLOCAL
+@IF NOT DEFINED NODE_PATH (
+  @SET "NODE_PATH=C:\\hoist"
+) ELSE (
+  @SET "NODE_PATH=C:\\hoist;%NODE_PATH%"
+)
+@"%~dp0\\pkg2\\tool2.exe"   %*`;
+
+    const env = { PATHEXT: '.COM;.EXE;.JS;.VBS', PATH: 'C:\\nodejs' };
+
+    it('recognises the node form and sets NODE_PATH when the child had none', () => {
+        const recipe = recognize(
+            PNPM_WITH_NODE_PATH,
+            { existence: onlyPresent('C:\\proj\\node_modules\\.bin\\node.exe') },
+            env,
+        );
+
+        expect(recipe?.command).toBe('C:\\proj\\node_modules\\.bin\\node.exe');
+        expect(recipe?.args).toEqual(['C:\\proj\\node_modules\\.bin\\pkg2\\cli.js']);
+        expect(recipe?.env?.NODE_PATH).toBe('C:\\proj\\node_modules\\.pnpm\\node_modules');
+    });
+
+    it('prepends to an existing NODE_PATH, whatever its spelling', () => {
+        const recipe = recognize(
+            PNPM_WITH_NODE_PATH,
+            { existence: onlyPresent('C:\\proj\\node_modules\\.bin\\node.exe') },
+            { ...env, Node_Path: 'D:\\already' },
+        );
+
+        const value = Object.entries(recipe?.env ?? {}).find(
+            ([key]) => key.toLowerCase() === 'node_path',
+        )?.[1];
+        expect(value).toBe('C:\\proj\\node_modules\\.pnpm\\node_modules;D:\\already');
+    });
+
+    it('treats an empty NODE_PATH as undefined, the way cmd DEFINED does', () => {
+        // SET NAME= deletes in cmd, so an empty-but-present variable is a
+        // Node-side artifact cmd could never observe as defined.
+        const recipe = recognize(
+            PNPM_WITH_NODE_PATH,
+            { existence: onlyPresent('C:\\proj\\node_modules\\.bin\\node.exe') },
+            { ...env, NODE_PATH: '' },
+        );
+
+        expect(recipe?.env?.NODE_PATH).toBe('C:\\proj\\node_modules\\.pnpm\\node_modules');
+    });
+
+    it('keeps the PATHEXT edit on the bare-node arm alongside NODE_PATH', () => {
+        const recipe = recognize(
+            PNPM_WITH_NODE_PATH,
+            { existence: onlyPresent('C:\\nodejs\\node.EXE') },
+            env,
+        );
+
+        expect(recipe?.command).toBe('C:\\nodejs\\node.EXE');
+        expect(recipe?.env?.NODE_PATH).toBe('C:\\proj\\node_modules\\.pnpm\\node_modules');
+        const pathext = Object.entries(recipe?.env ?? {}).find(
+            ([key]) => key.toLowerCase() === 'pathext',
+        )?.[1];
+        expect(pathext).toBe('.COM;.EXE;.VBS');
+    });
+
+    it('recognises the native form and carries NODE_PATH to the child', () => {
+        const recipe = recognize(PNPM_NATIVE_WITH_NODE_PATH, {}, env);
+
+        expect(recipe?.command).toBe('C:\\proj\\node_modules\\.bin\\pkg2\\tool2.exe');
+        expect(recipe?.env?.NODE_PATH).toBe('C:\\hoist');
+    });
+
+    it('declines a preamble whose two branches name different directories', () => {
+        const twisted = PNPM_WITH_NODE_PATH.replace('C:\\hoist', 'C:\\other').replace(
+            'NODE_PATH=C:\\proj\\node_modules\\.pnpm\\node_modules;%NODE_PATH%',
+            'NODE_PATH=C:\\elsewhere;%NODE_PATH%',
+        );
+
+        expect(
+            recognize(
+                twisted,
+                { existence: onlyPresent('C:\\proj\\node_modules\\.bin\\node.exe') },
+                env,
+            ),
+        ).toBeNull();
+    });
+
+    it('declines a preamble carrying an expansion it cannot perform', () => {
+        const expanded = PNPM_WITH_NODE_PATH.replace(
+            '@SET "NODE_PATH=C:\\proj\\node_modules\\.pnpm\\node_modules"',
+            '@SET "NODE_PATH=%APPDATA%\\hoist"',
+        );
+
+        expect(
+            recognize(
+                expanded,
+                { existence: onlyPresent('C:\\proj\\node_modules\\.bin\\node.exe') },
+                env,
+            ),
+        ).toBeNull();
+    });
+
+    it('declines the preamble on an npm-shaped shim, where no generator writes it', () => {
+        const grafted = `@ECHO off\n${PNPM_WITH_NODE_PATH.split('\n').slice(1).join('\n')}`;
+
+        expect(
+            recognize(
+                grafted,
+                { existence: onlyPresent('C:\\proj\\node_modules\\.bin\\node.exe') },
+                env,
+            ),
+        ).toBeNull();
+    });
+});
+
 describe('the lookup is as picky as cmd about what a hit is (review)', () => {
     const env = { PATHEXT: '.EXE', PATH: 'C:\\tools;C:\\nodejs' };
 
