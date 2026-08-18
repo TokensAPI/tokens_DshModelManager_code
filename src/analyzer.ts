@@ -376,7 +376,7 @@ async function runProvider(
         const isolation =
             !options.workdir && provider.isolateWorkdir
                 ? resolvedInput.kind === 'local'
-                    ? isolateImage(resolvedInput.source)
+                    ? await isolateImage(resolvedInput.source)
                     : emptyWorkdir()
                 : null;
         try {
@@ -508,18 +508,29 @@ export async function removeWorkdir(workdir: string): Promise<void> {
  * inside the image could otherwise point them at neighbouring files; a directory
  * of one removes that reach.
  */
-function isolateImage(source: string): IsolatedImage {
+async function isolateImage(source: string): Promise<IsolatedImage> {
     const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-work-'));
-    const imageSource = path.join(workdir, path.basename(source));
-    // Always a real copy, never a hardlink: a hardlink shares the inode, so a
-    // provider writing to its temp path would mutate the user's original file.
-    fs.copyFileSync(source, imageSource);
-    fs.chmodSync(imageSource, 0o600);
-    return {
-        imageSource,
-        workdir,
-        cleanup: () => removeWorkdir(workdir),
-    };
+    try {
+        const imageSource = path.join(workdir, path.basename(source));
+        // Always a real copy, never a hardlink: a hardlink shares the inode,
+        // so a provider writing to its temp path would mutate the user's
+        // original file.
+        fs.copyFileSync(source, imageSource);
+        fs.chmodSync(imageSource, 0o600);
+        return {
+            imageSource,
+            workdir,
+            cleanup: () => removeWorkdir(workdir),
+        };
+    } catch (error) {
+        // The cleanup in the run's finally only knows directories that were
+        // returned, so a copy that fails (an unreadable source, a full disk)
+        // must not leave the fresh directory behind, once per failover
+        // attempt. Awaited, so the directory is gone before the error
+        // travels; the error itself still does.
+        await removeWorkdir(workdir);
+        throw error;
+    }
 }
 
 /**
