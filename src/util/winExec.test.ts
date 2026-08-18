@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { type Existence, recognizeShim, resolveSpawnPlan } from './winExec.ts';
+import { type Existence, existenceOf, recognizeShim, resolveSpawnPlan } from './winExec.ts';
 
 // Every fixture here is verbatim output from a real generator, each version
 // installed in its own directory so one cannot quietly overwrite another:
@@ -80,7 +80,7 @@ const PNPM_NODE = `@SETLOCAL
 
 /** pnpm, a compiled binary. */
 const PNPM_NATIVE = `@SETLOCAL
-@"%~dp0\\..\\pkg\\prog.exe"  %*`;
+@"%~dp0\\..\\pkg\\prog.exe"   %*`;
 
 /** pnpm with nodeExecPath: one pinned absolute Node, no branch. */
 const PNPM_PINNED = `@SETLOCAL
@@ -601,6 +601,87 @@ describe('the bare node lookup is cmd lookup (#43)', () => {
             }
         },
     );
+});
+
+describe('existence tells a directory from a file (review)', () => {
+    it('reports a directory as directory, not present', () => {
+        // The lookup skips directories; the predicate mapping both to
+        // "present" is where spawn was handed a directory cmd would skip.
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-exist-'));
+        const dir = path.join(root, 'node');
+        fs.mkdirSync(dir);
+        const file = path.join(root, 'node.exe');
+        fs.writeFileSync(file, 'MZ');
+
+        expect(existenceOf(dir)).toBe('directory');
+        expect(existenceOf(file)).toBe('present');
+        expect(existenceOf(path.join(root, 'missing'))).toBe('absent');
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+});
+
+describe('the lookup is as picky as cmd about what a hit is (review)', () => {
+    const env = { PATHEXT: '.EXE', PATH: 'C:\\tools;C:\\nodejs' };
+
+    it('skips a directory that carries the name and keeps searching', () => {
+        // cmd requires an executable file; counting a directory as the winner
+        // handed spawn C:\tools\node while cmd ran the node one entry later.
+        const existence = (probe: string): Existence => {
+            if (probe.toLowerCase() === 'c:\\tools\\node') return 'directory';
+            if (probe.toLowerCase() === 'c:\\nodejs\\node.exe') return 'present';
+            return 'absent';
+        };
+        const recipe = recognize(NPM_NODE_LEGACY, { existence }, env);
+
+        expect(recipe?.command).toBe('C:\\nodejs\\node.EXE');
+    });
+
+    it('reads a quoted PATH entry the way the search does', () => {
+        // cmd strips the quotes per element; probing the quoted spelling
+        // deleted the entry from the search and ran another node entirely.
+        const recipe = recognize(
+            NPM_NODE_LEGACY,
+            { existence: onlyPresent('C:\\Program Files\\nodejs\\node.EXE') },
+            { PATHEXT: '.EXE', PATH: '"C:\\Program Files\\nodejs";C:\\other' },
+        );
+
+        expect(recipe?.command).toBe('C:\\Program Files\\nodejs\\node.EXE');
+    });
+
+    it('keeps a quoted semicolon inside one PATH entry', () => {
+        const recipe = recognize(
+            NPM_NODE_LEGACY,
+            { existence: onlyPresent('C:\\odd;dir\\node.EXE') },
+            { PATHEXT: '.EXE', PATH: '"C:\\odd;dir";C:\\other' },
+        );
+
+        expect(recipe?.command).toBe('C:\\odd;dir\\node.EXE');
+    });
+});
+
+describe('a target the file supplies stays on this machine (review)', () => {
+    it('declines a UNC target in the native template', () => {
+        // Spawning \\server\share does strictly more than checking it, and
+        // no real generator writes one, so recognition refuses rather than
+        // matching cmd into the network.
+        const recipe = recognize('@SETLOCAL\n@"\\\\server\\share\\payload.exe"   %*');
+
+        expect(recipe).toBeNull();
+    });
+
+    it('declines a device-qualified target even with a spawnable extension', () => {
+        const recipe = recognize('@SETLOCAL\n@"\\\\.\\C:\\payload.exe"   %*');
+
+        expect(recipe).toBeNull();
+    });
+
+    it('declines an entry glued to %*, which cmd would concatenate', () => {
+        // cmd expands %* in place, so "...cli.js"%* runs cli.js-p for a first
+        // argument of -p; a split argv is not that spawn, so decline.
+        const glued = PNPM_NATIVE.replace('"   %*', '"%*');
+
+        expect(recognize(glued)).toBeNull();
+    });
 });
 
 describe('PATHEXT assignment semantics', () => {
