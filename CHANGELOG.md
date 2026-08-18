@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.20.0 - 2026-08-18
+
+- **Windows: default-layout pnpm shims work ([#43](https://github.com/liustack/modlens/issues/43) closes for pnpm too).** pnpm with the isolated linker and `extendNodePath`, which is its default configuration, prepends a four-line NODE_PATH block to every shim, and the recogniser did not know the shape, so those shims were declined and still landed on the spawn `EINVAL` that 3.18.0 removed for npm. The block is now a recognised prefix of both pnpm shapes: the plan sets NODE_PATH to the hoisted directory when the child has none and prepends when it does, with cmd's own DEFINED semantics, and the directory value goes only into the child's environment, exactly where the shim itself puts it. Fixtures are verbatim generator output for the branch, multi-directory, and native forms. Found by the same review that shipped 3.19.0, which had recorded this as the known gap.
+
 ## 3.19.0 - 2026-08-18
 
 An adversarial review swept everything written since 3.17.0, three reviewers by area plus release-artifact checks. One crash, a config trap, and a set of lifecycle and Windows-lookup defects came out of it, all fixed here with tests that failed before the fix. One behaviour change is deliberate and marked breaking below.
