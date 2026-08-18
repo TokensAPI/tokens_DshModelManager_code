@@ -573,6 +573,44 @@ describe('dsh plugin vision provider (phase 3)', () => {
         }
     });
 
+    it('mints a pinned default id that encodes its upstream (#49)', async () => {
+        // The flat default, deepseek-modlens whatever the upstream, collided
+        // with the id auto-discovery mints for deepseek-official, so history
+        // from a pinned foreign upstream could later be relabelled as
+        // DeepSeek's and carry foreign replay state across the adapter
+        // boundary. The default now follows the sweep's minting rule; an
+        // explicit providerId and a pinned deepseek-official are unchanged.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const load = (upstream: string) => {
+            const registered: string[][] = [];
+            const llm = {
+                listProviders: () => [{ id: upstream, name: upstream }],
+                providerRetryPolicy: () => undefined,
+                registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                    registered.push(ids);
+                    adapter.providerInfo(ids[0]);
+                    const handle = () => {};
+                    handle.replace = () => {};
+                    return handle;
+                },
+                listModels: async () => [],
+                resolveModelInfo: async () => ({}),
+                stream: () => (async function* () {})(),
+            };
+            plugin.apply(
+                { tools: { register: () => {} }, attachments: {}, on: () => {}, llm } as never,
+                { upstream },
+            );
+            return registered;
+        };
+
+        expect(load('opencode-go')[0]).toEqual(['modlens-opencode-go']);
+        expect(load('deepseek-official')[0]).toEqual(['deepseek-modlens']);
+    });
+
     it('stops retrying an id another holder owns, until they release it', async () => {
         // A duplicate registration means someone else answers for the id (a
         // second modlens install). Retrying on every topology event repeated
