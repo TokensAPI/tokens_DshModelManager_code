@@ -674,11 +674,25 @@ function registerVisionProvider(ctx, config, ownProviders) {
     if (typeof current.registration === 'function') current.registration()
   }
 
-  // A caveat for whoever reads the catch below: commitRoutes mutates the
-  // registry and only then emits, so a listener throwing during that emit
-  // means the replace already SUCCEEDED. Treating the throw as failure and
-  // disposing would drop a healthy registration. No shipped listener can
-  // throw there today, which is why this is a comment rather than a guard.
+  // Whether our synthetic route is currently in the registry, spelled the
+  // way reconcile spells its availability check. Used where an operation
+  // failed and what to do next depends on whether it failed before or after
+  // the host committed.
+  const routed = (providerId) => {
+    if (typeof ctx.llm.listProviders !== 'function') return false
+    try {
+      return ctx.llm.listProviders().some((info) => (typeof info === 'string' ? info : info?.id) === providerId)
+    } catch {
+      return false
+    }
+  }
+
+  // commitRoutes mutates the registry and only then emits, so a listener
+  // throwing during that emit means the replace already SUCCEEDED, and
+  // treating the throw as failure would drop a healthy registration. dsh
+  // even ships such a listener (its llm invariant re-reads every policy on
+  // each update and fails loud), so the catch below asks the registry which
+  // side of the commit the failure landed on before deciding.
   const refreshWrapper = (upstream, displayName) => {
     const current = registrations.get(upstream)
     if (!current || typeof current.registration?.replace !== 'function') return
@@ -700,6 +714,15 @@ function registerVisionProvider(ctx, config, ownProviders) {
       current.registration.replace([current.providerId])
     } catch (error) {
       current.state.displayName = previousName
+      if (routed(current.providerId)) {
+        // The route survived, so the throw came from after the commit (a
+        // listener), or the host kept the old snapshot. Either converges on
+        // the next refresh; disposing would not.
+        console.error(
+          `[modlens] vision provider refresh failed (${current.providerId}), keeping the existing registration: ${error}`,
+        )
+        return
+      }
       dropWrapper(upstream, current)
       console.error(`[modlens] vision provider refresh failed (${current.providerId}): ${error}`)
     }
@@ -723,9 +746,21 @@ function registerVisionProvider(ctx, config, ownProviders) {
       }
     }
     let reconciling = false
+    let rerunQueued = false
     let waitingLogged = false
+    // The id is held by someone else (a second modlens install, most
+    // likely). Their registration answers the routing, so retrying ours on
+    // every topology event would only repeat the same log line; the claim is
+    // re-examined when the holder's route disappears.
+    let claimedElsewhere = false
     const reconcile = () => {
-      if (reconciling) return
+      if (reconciling) {
+        // dropWrapper's disposer makes the host emit adapters-updated while
+        // this very run is on the stack, and whatever that event announced
+        // (a quick remount, say) must not wait for an unrelated next event.
+        rerunQueued = true
+        return
+      }
       reconciling = true
       try {
         const current = registrations.get(upstream)
@@ -733,6 +768,11 @@ function registerVisionProvider(ctx, config, ownProviders) {
           typeof ctx.llm.listProviders !== 'function' ||
           ctx.llm.listProviders().some((info) => (typeof info === 'string' ? info : info?.id) === upstream)
         if (!current) {
+          if (claimedElsewhere) {
+            if (routed(providerId)) return
+            // The holder released the id: it is ours to try again.
+            claimedElsewhere = false
+          }
           if (!available) {
             // A pinned upstream that mounts after this plugin is ordinary
             // startup order (llm-pi-ai mounts its providers once settings
@@ -751,7 +791,11 @@ function registerVisionProvider(ctx, config, ownProviders) {
             return
           }
           waitingLogged = false
-          registerWrapper(upstream, providerId, `${upstreamName()} (modlens vision)`)
+          if (registerWrapper(upstream, providerId, `${upstreamName()} (modlens vision)`)) {
+            // True with nothing recorded is the duplicate branch: another
+            // holder already answers for this id.
+            claimedElsewhere = !registrations.has(upstream)
+          }
           return
         }
         if (!available) {
@@ -761,6 +805,10 @@ function registerVisionProvider(ctx, config, ownProviders) {
         refreshWrapper(upstream, `${upstreamName()} (modlens vision)`)
       } finally {
         reconciling = false
+        if (rerunQueued) {
+          rerunQueued = false
+          reconcile()
+        }
       }
     }
     reconcile()
@@ -795,16 +843,18 @@ function registerVisionProvider(ctx, config, ownProviders) {
       return
     }
     const providers = ctx.llm.listProviders()
-    const available = new Set(providers.map((info) => info?.id).filter(Boolean))
+    // Same tolerance as the pinned path: an entry may be a bare id string.
+    const idOf = (info) => (typeof info === 'string' ? info : info?.id)
+    const available = new Set(providers.map(idOf).filter(Boolean))
     for (const [upstream, current] of registrations) {
       if (available.has(upstream)) continue
       dropWrapper(upstream, current)
     }
     for (const info of providers) {
-      const id = info?.id
+      const id = idOf(info)
       if (!id || String(id).startsWith('modlens-')) continue
       if (discover && !discover.has(id)) continue
-      const base = info.name ?? id
+      const base = (typeof info === 'string' ? undefined : info.name) ?? id
       if (registrations.has(id)) {
         refreshWrapper(id, `${base} (modlens vision)`)
         continue
