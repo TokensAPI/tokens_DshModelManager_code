@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { GuardsConfig } from './guard/rules.ts';
-import { providerAliases } from './providers/index.ts';
+import { listProviders, providerAliases, resolveProvider } from './providers/index.ts';
 import { parseExtraBody } from './util/extraBody.ts';
 import { parseJsonOrExplain } from './util/json.ts';
 import { maskUrlCredentials } from './util/redact.ts';
@@ -264,8 +264,26 @@ export function setConfigValue(dottedKey: string, value: string, configPath = CO
                 `Invalid config key: ${dottedKey}. Use "provider", "proxy", "reuse.<claude|codex|opencode|pi|grok>", "guards.<denyModels|allowModels|denyWhenUnknown>", or "<provider>.<apiKey|baseUrl|model|proxy|extraBody|structuredOutput>".`,
             );
         }
-        const providerName = dottedKey.slice(0, dot);
+        const typedName = dottedKey.slice(0, dot);
         const field = dottedKey.slice(dot + 1);
+        // The file is read back by exact lowercase key, so a mis-cased or
+        // unknown name here would be saved, reported as saved, and silently
+        // never read, while the environment quietly kept answering for the
+        // provider the user thought they had just configured. Fold the case
+        // the way -p does, and refuse a name no provider answers to.
+        const providerName = typedName.trim().toLowerCase();
+        try {
+            resolveProvider(providerName);
+        } catch {
+            throw new Error(
+                `Unknown provider: ${typedName}. Use one of ${listProviders().join(', ')} (aliases like ${Object.keys(
+                    providerAliases(),
+                )
+                    .filter((alias) => providerAliases()[alias] !== alias)
+                    .slice(0, 4)
+                    .join(', ')} work too).`,
+            );
+        }
         if (field === 'structuredOutput') {
             // Only the openai route reads it, so accepting it anywhere else
             // would report a saved setting that never does anything.
