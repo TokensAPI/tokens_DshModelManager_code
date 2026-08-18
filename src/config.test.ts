@@ -471,3 +471,40 @@ describe('the retired endpoint bindings tell their users (#42)', () => {
         ).not.toThrow();
     });
 });
+
+describe('setConfigValue accepts only names a provider answers to', () => {
+    // 'OpenAI.apiKey' used to be saved verbatim, reported as saved, and then
+    // never read: the file is read back by exact lowercase key, so the
+    // environment quietly kept answering for the provider the user thought
+    // they had just configured, and the effective view showed two rows for
+    // one provider.
+    function tmpConfig(): string {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-cfg-'));
+        return path.join(dir, 'config.json');
+    }
+
+    it('folds a mis-cased provider onto the key reads use', () => {
+        const file = tmpConfig();
+        setConfigValue('OpenAI.apiKey', 'sk-value-123456', file);
+
+        const config = loadConfigFile(file);
+        expect(config.providers?.openai?.apiKey).toBe('sk-value-123456');
+        expect(config.providers && 'OpenAI' in config.providers).toBe(false);
+    });
+
+    it('keeps an alias as the storage key, folded', () => {
+        const file = tmpConfig();
+        setConfigValue('Gemini.apiKey', 'g-key-123456', file);
+
+        const config = loadConfigFile(file);
+        expect(config.providers?.gemini?.apiKey).toBe('g-key-123456');
+    });
+
+    it('refuses a name no provider answers to, naming the valid ones', () => {
+        const file = tmpConfig();
+        expect(() => setConfigValue('opeanai.apiKey', 'sk-x', file)).toThrow(
+            /Unknown provider: opeanai/,
+        );
+        expect(fs.existsSync(file)).toBe(false);
+    });
+});
