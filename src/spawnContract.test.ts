@@ -100,7 +100,8 @@ describe('no child process is started with a visible console (#60)', () => {
         // This is the whole guarantee: a child started anywhere else is not a
         // call site that forgot the option, it is a file that cannot exist.
         const reaching = shippedSources()
-            .map((file) => path.relative(root, file))
+            // Windows hands back backslashes, the allowlist speaks POSIX.
+            .map((file) => path.relative(root, file).split(path.sep).join('/'))
             .filter((relative) => !WRAPPERS.has(relative))
             .filter((relative) =>
                 /child_process/.test(fs.readFileSync(path.join(root, relative), 'utf-8')),
