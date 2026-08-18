@@ -83,7 +83,11 @@ function parseBraceSlice(trimmed: string): unknown | null {
  * truncation.
  *
  * Largest rather than first, because chatty output can put a small envelope in
- * front of the answer, and the answer is the bigger of the two.
+ * front of the answer, and the answer is the bigger of the two. A heuristic,
+ * not a proof: a model that closes the object early and keeps writing can
+ * leave a tail fragment bigger than the real prefix, and then the wrong span
+ * wins and the schema check names fields the model did produce. Both readings
+ * fail the read either way; this only decides which fields the error names.
  */
 function parseLongestBalancedObject(text: string): unknown | null {
     const spans: Array<[number, number]> = [];
