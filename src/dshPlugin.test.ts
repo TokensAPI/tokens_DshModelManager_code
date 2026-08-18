@@ -573,6 +573,191 @@ describe('dsh plugin vision provider (phase 3)', () => {
         }
     });
 
+    it('stops retrying an id another holder owns, until they release it', async () => {
+        // A duplicate registration means someone else answers for the id (a
+        // second modlens install). Retrying on every topology event repeated
+        // one log line forever, and the claim was never re-examined when the
+        // holder released the id.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const handlers: Record<string, () => void> = {};
+        let attempts = 0;
+        let held = true;
+        const llm = {
+            listProviders: () => [
+                { id: 'lanz', name: 'Lanz' },
+                ...(held ? [{ id: 'house-lanz', name: 'Held by someone else' }] : []),
+            ],
+            providerRetryPolicy: () => undefined,
+            registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                attempts += 1;
+                if (held) {
+                    const failure = new Error(
+                        `an adapter for provider "${ids[0]}" is already registered`,
+                    );
+                    (failure as Error & { code: string }).code = 'DUPLICATE_ADAPTER';
+                    throw failure;
+                }
+                adapter.providerInfo(ids[0]);
+                const handle = () => {};
+                handle.replace = () => {};
+                return handle;
+            },
+            listModels: async () => [],
+            resolveModelInfo: async () => ({}),
+            stream: () => (async function* () {})(),
+        };
+        const errors: string[] = [];
+        const original = console.error;
+        console.error = (value?: unknown) => errors.push(String(value));
+        try {
+            plugin.apply(
+                {
+                    tools: { register: () => {} },
+                    attachments: {},
+                    on: (event: string, fn: () => void) => {
+                        handlers[event] = fn;
+                    },
+                    llm,
+                } as never,
+                { upstream: 'lanz', providerId: 'house-lanz' },
+            );
+            expect(attempts).toBe(1);
+
+            // Held: further events do not retry and do not repeat the line.
+            handlers['llm/adapters-updated']();
+            handlers['llm/adapters-updated']();
+            expect(attempts).toBe(1);
+            expect(errors.filter((line) => line.includes('already registered')).length).toBe(1);
+
+            // Released: the id is ours to try again.
+            held = false;
+            handlers['llm/adapters-updated']();
+            expect(attempts).toBe(2);
+        } finally {
+            console.error = original;
+        }
+    });
+
+    it('re-reconciles when its own drop raised the topology event mid-run', async () => {
+        // dropWrapper's disposer makes the host emit adapters-updated while
+        // reconcile is still on the stack. The re-entrancy guard used to
+        // swallow that event outright, so an upstream that unmounted and
+        // remounted in one breath stayed unregistered until some unrelated
+        // event happened along.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const handlers: Record<string, () => void> = {};
+        let attempts = 0;
+        let mounted = true;
+        const llm = {
+            listProviders: () => (mounted ? [{ id: 'lanz', name: 'Lanz' }] : []),
+            providerRetryPolicy: () => undefined,
+            registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                attempts += 1;
+                adapter.providerInfo(ids[0]);
+                const handle = () => {
+                    // Real dsh: the disposer commits the removal, then emits.
+                    mounted = true;
+                    handlers['llm/adapters-updated']();
+                };
+                handle.replace = () => {};
+                return handle;
+            },
+            listModels: async () => [],
+            resolveModelInfo: async () => ({}),
+            stream: () => (async function* () {})(),
+        };
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: (event: string, fn: () => void) => {
+                    handlers[event] = fn;
+                },
+                llm,
+            } as never,
+            { upstream: 'lanz', providerId: 'house-lanz' },
+        );
+        expect(attempts).toBe(1);
+
+        // Unmount: reconcile drops the wrapper, the disposer remounts and
+        // re-emits mid-run, and the queued rerun re-registers.
+        mounted = false;
+        handlers['llm/adapters-updated']();
+        expect(attempts).toBe(2);
+    });
+
+    it('keeps the registration when a refresh fails after the host committed', async () => {
+        // commitRoutes mutates the registry and then emits, so a listener
+        // throwing during that emit means the replace succeeded. Disposing on
+        // that throw dropped a healthy registration; the catch now asks the
+        // registry which side of the commit the failure landed on.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const handlers: Record<string, () => void> = {};
+        let disposed = false;
+        let maxRetries = 2;
+        const llm = {
+            listProviders: () => [
+                { id: 'lanz', name: 'Lanz' },
+                { id: 'house-lanz', name: 'Lanz (modlens vision)' },
+            ],
+            providerRetryPolicy: () => ({
+                mode: 'normal',
+                maxRetries,
+                retryableCodes: ['RATE_LIMIT'],
+                initialDelayMs: 1,
+                maxDelayMs: 2,
+                jitterRatio: 0,
+            }),
+            registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                adapter.providerInfo(ids[0]);
+                adapter.providerRetryPolicy(ids[0]);
+                const handle = () => {
+                    disposed = true;
+                };
+                handle.replace = () => {
+                    // The commit landed; a listener blew up during the emit.
+                    throw new Error('invariant listener failed after commit');
+                };
+                return handle;
+            },
+            listModels: async () => [],
+            resolveModelInfo: async () => ({}),
+            stream: () => (async function* () {})(),
+        };
+        const errors: string[] = [];
+        const original = console.error;
+        console.error = (value?: unknown) => errors.push(String(value));
+        try {
+            plugin.apply(
+                {
+                    tools: { register: () => {} },
+                    attachments: {},
+                    on: (event: string, fn: () => void) => {
+                        handlers[event] = fn;
+                    },
+                    llm,
+                } as never,
+                { upstream: 'lanz', providerId: 'house-lanz' },
+            );
+            maxRetries = 50;
+            handlers['llm/adapters-updated']();
+
+            expect(disposed).toBe(false);
+            expect(errors.join('\n')).toContain('keeping the existing registration');
+        } finally {
+            console.error = original;
+        }
+    });
+
     it('refreshes retry policy in explicit single-route mode too', async () => {
         // @ts-expect-error untyped on purpose
         const plugin = (await import('../dsh/index.js')) as {
@@ -3327,9 +3512,10 @@ describe('the paste store has a ceiling as well as a clock (#51)', () => {
             // cross-process locking, which is more machinery than a temp
             // directory is worth.
             //
-            // What must hold is the ORDER. Whatever survives is the newest
-            // ones, never an older paste outliving a newer one, and the
-            // ceiling is respected.
+            // What must hold is the ORDER. When every removal succeeds, as
+            // here, the survivors are exactly the newest ones and the ceiling
+            // is respected. (A removal that fails leaves its older entry
+            // standing; the undeletable-directory test below owns that case.)
             const survivors = made.filter((dir) => fs.existsSync(dir));
             expect(survivors).toEqual(made.slice(made.length - survivors.length));
             expect(survivors.length).toBeLessThanOrEqual(2);
