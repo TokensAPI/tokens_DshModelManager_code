@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { VISION_RESULT_SCHEMA } from './schema.ts';
 
 const execFileAsync = promisify(execFile);
@@ -143,14 +143,25 @@ describe('dsh plugin auto-read (phase 2)', () => {
             } as never,
             { autoRead: true },
         );
+        const errors: string[] = [];
+        const original = console.error;
+        console.error = (value?: unknown) => errors.push(String(value));
         const messages = [imageMessage()];
-        const decision = await handlers['agent/pre-step'](
-            { messages, signal: undefined },
-            async () => ({ kind: 'enter', messages }),
-        );
+        let decision: Awaited<ReturnType<Handler>>;
+        try {
+            decision = await handlers['agent/pre-step'](
+                { messages, signal: undefined },
+                async () => ({ kind: 'enter', messages }),
+            );
+        } finally {
+            console.error = original;
+        }
         const block = decision.messages?.[0].content[1];
         expect(block?.text).toContain('could not be read');
-        expect(block?.text).toContain("no 'data' bytes");
+        // The detail lives in the harness log now; the wire text is a stage
+        // constant so a repeated failure cannot rewrite history (#68).
+        expect(block?.text).toContain('attachment store did not return it');
+        expect(errors.join('\n')).toContain("no 'data' bytes");
     });
 
     it('writes heic pastes with their real extension and refuses unknown types', async () => {
@@ -194,7 +205,11 @@ describe('dsh plugin auto-read (phase 2)', () => {
                 { messages, signal: undefined },
                 async () => ({ kind: 'enter', messages }),
             );
-            expect(pdf.messages?.[0].content[1].text).toContain('unsupported pasted media type');
+            const pdfText = pdf.messages?.[0].content[1].text;
+            // The type is attacker-shaped paste metadata, so the wire text is
+            // a pure constant and the concrete type lives in the log only.
+            expect(pdfText).toContain('its media type is not supported');
+            expect(pdfText).not.toContain('application/pdf');
         } finally {
             delete process.env.MODLENS_DSH_CLI;
         }
@@ -253,7 +268,11 @@ describe('dsh plugin auto-read (phase 2)', () => {
             expect(decision.kind).toBe('enter');
             const block = decision.messages?.[0].content[1];
             expect(block?.text).toContain('could not be read');
-            expect(block?.text).toContain('engine down');
+            // Stage constant, not the attempt's own words: the same broken
+            // engine phrasing itself differently every try used to rewrite
+            // history and bust the provider's prefix cache (#68).
+            expect(block?.text).toContain('the vision engine failed');
+            expect(block?.text).not.toContain('engine down');
         } finally {
             delete process.env.MODLENS_DSH_CLI;
         }
@@ -1060,30 +1079,340 @@ describe('dsh plugin request-time image conversion (v2)', () => {
         messages: [{ role: 'user', content: [{ type: 'image', attachment: { id } }] }],
     });
 
-    it('does not memoize a failed read: the next step retries', async () => {
-        const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-retry-'));
-        const marker = path.join(cliDir, 'runs');
-        const cli = path.join(cliDir, 'cli.js');
-        // First run fails (transient config error), later runs succeed.
+    async function adapterCapturing(cli: string) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const registered: Array<{ adapter: Record<string, CallableFunction> }> = [];
+        const seen: Array<Record<string, unknown>> = [];
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {
+                    readImage: async () => ({
+                        data: new Uint8Array([1]),
+                        ref: { mediaType: 'image/png' },
+                    }),
+                },
+                on: () => {},
+                llm: {
+                    registerAdapter: (_p: string[], adapter: Record<string, CallableFunction>) => {
+                        registered.push({ adapter });
+                    },
+                    listModels: async () => [],
+                    resolveModelInfo: async () => ({}),
+                    stream: (options: Record<string, unknown>) => {
+                        seen.push(options);
+                        return (async function* () {})();
+                    },
+                },
+            } as never,
+            {},
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        return { adapter: registered[0].adapter, seen };
+    }
+
+    /** The wire text of the image block the upstream actually received. */
+    const wireText = (seen: Array<Record<string, unknown>>, index: number) =>
+        (
+            (seen[index].messages as Array<{ content: Array<{ type: string; text?: string }> }>)[0]
+                .content[1] ?? // conversion may collapse blocks; fall back to the only block
+            (seen[index].messages as Array<{ content: Array<{ text?: string }> }>)[0].content[0]
+        ).text;
+
+    /** A CLI that fails with per-attempt DIFFERENT stderr, then succeeds. */
+    function flakyCli(dir: string, failuresBeforeSuccess: number): { cli: string; marker: string } {
+        const marker = path.join(dir, 'runs');
+        const cli = path.join(dir, 'cli.js');
         fs.writeFileSync(
             cli,
             `const fs=require('fs');const n=(fs.existsSync(${JSON.stringify(marker)})?fs.readFileSync(${JSON.stringify(marker)},'utf8').length:0)+1;fs.appendFileSync(${JSON.stringify(marker)},'x');
-             if(n===1){console.error('quota exhausted');process.exit(1)}
+             if(n<=${failuresBeforeSuccess}){console.error('engine flaky attempt '+n+' at '+Date.now());process.exit(1)}
              console.log(JSON.stringify({result:{summary:'S',ocr:{full_text:'RECOVERED'},uncertainty:[]}}))`,
         );
+        return { cli, marker };
+    }
+
+    const drain = async (adapter: Record<string, CallableFunction>, id: string) => {
+        for await (const _c of adapter.stream(imageRequest(id)) as AsyncIterable<unknown>) {
+            // drain
+        }
+    };
+
+    it('a failing read keeps its bytes and its cooldown: one probe, stable text (#68)', async () => {
+        // The provider caches by prefix, so the property under test is the
+        // BYTES of the rewritten history: same outcome, same text, and a
+        // broken engine probed once per cooldown, not once per step.
+        vi.useFakeTimers({ toFake: ['performance'] });
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-cool-'));
+        const { cli, marker } = flakyCli(dir, 2);
         try {
-            const adapter = await adapterWithCli(cli);
-            for await (const _c of adapter.stream(
-                imageRequest('att-r'),
-            ) as AsyncIterable<unknown>) {
-                // drain
-            }
-            for await (const _c of adapter.stream(
-                imageRequest('att-r'),
-            ) as AsyncIterable<unknown>) {
-                // drain
-            }
+            const { adapter, seen } = await adapterCapturing(cli);
+            await drain(adapter, 'att-cool');
+            await drain(adapter, 'att-cool');
+
+            // Within the cooldown: no second engine run, byte-identical text.
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+            expect(wireText(seen, 0)).toContain('the vision engine failed');
+            expect(wireText(seen, 1)).toBe(wireText(seen, 0));
+
+            // Cooldown over: exactly one re-probe, which fails with different
+            // stderr, and the wire text still does not move.
+            vi.advanceTimersByTime(61_000);
+            await drain(adapter, 'att-cool');
             expect(fs.readFileSync(marker, 'utf-8')).toBe('xx');
+            expect(wireText(seen, 2)).toBe(wireText(seen, 0));
+
+            // Second cooldown over: the engine has recovered, the text moves
+            // ONCE (placeholder to evidence), and then stays cached.
+            vi.advanceTimersByTime(61_000);
+            await drain(adapter, 'att-cool');
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('xxx');
+            expect(wireText(seen, 3)).toContain('RECOVERED');
+            await drain(adapter, 'att-cool');
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('xxx');
+            expect(wireText(seen, 4)).toBe(wireText(seen, 3));
+        } finally {
+            vi.useRealTimers();
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
+    it('auto-read and the wrapper share one evidence cache (#68)', async () => {
+        // auto-read used to bypass caching entirely and re-read every image
+        // on every step, healthy engine or not. Now every surface of the
+        // plugin reads a pasted attachment once.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-share-'));
+        const marker = path.join(dir, 'runs');
+        const cli = path.join(dir, 'cli.js');
+        fs.writeFileSync(
+            cli,
+            `const fs=require('fs');fs.appendFileSync(${JSON.stringify(marker)},'x');
+             console.log(JSON.stringify({result:{summary:'S',ocr:{full_text:'SHARED'},uncertainty:[]}}))`,
+        );
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const handlers: Record<string, CallableFunction> = {};
+        const registered: Array<{ adapter: Record<string, CallableFunction> }> = [];
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {
+                    readImage: async () => ({
+                        data: new Uint8Array([1]),
+                        ref: { mediaType: 'image/png' },
+                    }),
+                },
+                on: (event: string, fn: CallableFunction) => {
+                    handlers[event] = fn;
+                },
+                llm: {
+                    registerAdapter: (_p: string[], adapter: Record<string, CallableFunction>) => {
+                        registered.push({ adapter });
+                    },
+                    listModels: async () => [],
+                    resolveModelInfo: async () => ({}),
+                    stream: () => (async function* () {})(),
+                },
+            } as never,
+            { autoRead: true },
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        try {
+            const messages = [
+                {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: 'what is this' },
+                        { type: 'image', attachment: { id: 'att-s', mediaType: 'image/png' } },
+                    ],
+                },
+            ];
+            // Step 1 and step 2 through auto-read: one engine run total.
+            await handlers['agent/pre-step']({ messages, signal: undefined }, async () => ({
+                kind: 'enter',
+                messages,
+            }));
+            await handlers['agent/pre-step']({ messages, signal: undefined }, async () => ({
+                kind: 'enter',
+                messages,
+            }));
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+
+            // The wrapper route asks for the same attachment: still one run.
+            for await (const _c of registered[0].adapter.stream({
+                provider: 'deepseek-modlens',
+                model: 'm',
+                messages,
+            }) as AsyncIterable<unknown>) {
+                // drain
+            }
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
+    it('eviction spares every open walk and clears strangers first (#68)', async () => {
+        // Three policies died in review before this one. Oldest-first
+        // thrashed an over-cap scan (130 runs for 65 attachments, measured);
+        // newest-first starved a new session on a warm cache (also 130, also
+        // measured); per-walk pins invisible to each other let two
+        // interleaved sessions evict each other's in-flight entries (258
+        // misses per pass, measured). Eviction now sees EVERY open walk's
+        // pins and takes the least-recently-used stranger, or nothing. This
+        // drives the exported policy with the same operations cachedEvidence
+        // performs: hit = delete + set (recency refresh), miss = set + trim,
+        // every touched key pinned in its walk until end().
+        // @ts-expect-error untyped on purpose
+        const { beginEvidenceWalk, trimEvidenceCache } = (await import('../dsh/index.js')) as {
+            beginEvidenceWalk: (cache: Map<string, unknown>) => {
+                pin: (key: string) => void;
+                end: () => void;
+            };
+            trimEvidenceCache: (cache: Map<string, unknown>) => void;
+        };
+        const cache = new Map<string, unknown>();
+        type Walk = { pin: (key: string) => void; end: () => void };
+        const touch = (key: string, handle: Walk): boolean => {
+            handle.pin(key);
+            if (cache.has(key)) {
+                const value = cache.get(key);
+                cache.delete(key);
+                cache.set(key, value);
+                return false; // hit
+            }
+            cache.set(key, key);
+            trimEvidenceCache(cache);
+            return true; // miss, an engine run
+        };
+        const walk = (keys: string[]): number => {
+            const handle = beginEvidenceWalk(cache) as Walk;
+            try {
+                return keys.filter((key) => touch(key, handle)).length;
+            } finally {
+                handle.end();
+            }
+        };
+
+        // A warm cache full of a previous session's entries: the new session
+        // pays once, the strangers pay with their slots, pass two is free.
+        for (let i = 0; i < 256; i++) {
+            walk([`old-${i}`]);
+        }
+        const fresh = Array.from({ length: 65 }, (_, i) => `new-${i}`);
+        expect(walk(fresh)).toBe(65);
+        expect(walk(fresh)).toBe(0);
+        expect(cache.size).toBe(256);
+        expect(cache.has('old-0')).toBe(false);
+        expect(cache.has('old-100')).toBe(true);
+
+        // Two interleaved sessions whose joint working set exceeds the cap:
+        // both walks stay pinned, neither evicts the other, and both repeat
+        // passes are free. The cache floats above the cap while they run.
+        const a = Array.from({ length: 129 }, (_, i) => `a-${i}`);
+        const b = Array.from({ length: 129 }, (_, i) => `b-${i}`);
+        const walkA = beginEvidenceWalk(cache) as Walk;
+        const walkB = beginEvidenceWalk(cache) as Walk;
+        try {
+            let missesA = 0;
+            let missesB = 0;
+            for (let i = 0; i < 129; i++) {
+                if (touch(a[i], walkA)) missesA++;
+                if (touch(b[i], walkB)) missesB++;
+            }
+            expect(missesA).toBe(129);
+            expect(missesB).toBe(129);
+            missesA = 0;
+            missesB = 0;
+            for (let i = 0; i < 129; i++) {
+                if (touch(a[i], walkA)) missesA++;
+                if (touch(b[i], walkB)) missesB++;
+            }
+            expect(missesA).toBe(0);
+            expect(missesB).toBe(0);
+        } finally {
+            walkA.end();
+            walkB.end();
+        }
+
+        // Overlapping walks must not inflate the union: two walks pinning the
+        // SAME keys leave real strangers evictable, and the sum-based
+        // early-out that skipped them was measured leaving 128 victims in
+        // place. Refcounts count the union exactly.
+        {
+            const overlapA = beginEvidenceWalk(cache) as Walk;
+            const overlapB = beginEvidenceWalk(cache) as Walk;
+            try {
+                const shared = [...cache.keys()].slice(-129);
+                for (const key of shared) {
+                    overlapA.pin(key);
+                    overlapB.pin(key);
+                }
+                const before = cache.size;
+                touch('overlap-miss', overlapA);
+                // The stranger paid; the cache did not float.
+                expect(cache.size).toBe(Math.min(before + 1, 256));
+                expect(cache.size).toBe(256);
+                // And the second pass over this variant is free too: the new
+                // entry and every shared pin hit the cache.
+                expect(touch('overlap-miss', overlapA)).toBe(false);
+                for (const key of shared) {
+                    expect(touch(key, overlapB)).toBe(false);
+                }
+            } finally {
+                overlapA.end();
+                overlapB.end();
+            }
+        }
+
+        // The walks ended, their pins released: the next miss drains the
+        // excess back to the cap in one trim.
+        walk(['drain-1']);
+        expect(cache.size).toBe(256);
+
+        // A single history larger than the cap floats above it for the walk
+        // and is stable on the next step: zero misses on the repeat.
+        const huge = Array.from({ length: 300 }, (_, i) => `huge-${i}`);
+        expect(walk(huge)).toBe(300);
+        expect(walk(huge)).toBe(0);
+    });
+
+    it('the cache key ignores attachment key order (#68)', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-key-'));
+        const { cli, marker } = flakyCli(dir, 0);
+        try {
+            const { adapter } = await adapterCapturing(cli);
+            const stream = (attachment: Record<string, unknown>) =>
+                adapter.stream({
+                    provider: 'deepseek-modlens',
+                    model: 'm',
+                    messages: [{ role: 'user', content: [{ type: 'image', attachment }] }],
+                }) as AsyncIterable<unknown>;
+            for await (const _c of stream({ id: 'att-k', mediaType: 'image/png' })) {
+                // drain
+            }
+            for await (const _c of stream({ mediaType: 'image/png', id: 'att-k' })) {
+                // drain
+            }
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
+    it('concurrent steps join one failing probe and read the same bytes (#68)', async () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-join-'));
+        const { cli, marker } = flakyCli(dir, 99);
+        try {
+            const { adapter, seen } = await adapterCapturing(cli);
+            await Promise.all([drain(adapter, 'att-j'), drain(adapter, 'att-j')]);
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+            expect(wireText(seen, 1)).toBe(wireText(seen, 0));
         } finally {
             delete process.env.MODLENS_DSH_CLI;
         }
