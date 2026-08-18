@@ -694,6 +694,50 @@ describe('a mismatched shape names the knob that applies (#59)', () => {
         expect(message).not.toContain('extraBody replaces');
     });
 
+    it('treats a null finish_reason as absent instead of crashing the diagnosis', async () => {
+        // null is the streaming-chunk spelling of the field, and compat
+        // gateways that reuse one response model for both modes send it in
+        // non-streaming responses too. It used to fall into the quoted-reason
+        // branch, where redaction called .split on it, so the very error this
+        // advice exists for surfaced as a TypeError instead.
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => ({
+                ok: true,
+                json: async () => ({
+                    choices: [
+                        {
+                            message: { content: JSON.stringify({ summary: 'x' }) },
+                            finish_reason: null,
+                        },
+                    ],
+                }),
+            })),
+        );
+
+        const message = await messageFrom({});
+
+        expect(message).toContain('does not match the vision schema');
+        expect(message).toContain('modlens config set openai.structuredOutput true');
+    });
+
+    it('treats a non-string finish_reason as absent on the non-JSON branch too', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(async () => ({
+                ok: true,
+                json: async () => ({
+                    choices: [{ message: { content: 'not json' }, finish_reason: null }],
+                }),
+            })),
+        );
+
+        const message = await messageFrom({});
+
+        expect(message).toContain('non-JSON output');
+        expect(message).toContain('modlens config set openai.structuredOutput true');
+    });
+
     it('calls a truncated answer truncated rather than a schema problem', async () => {
         // A cut-off answer can still be parseable JSON, so it lands here rather
         // than on the non-JSON path that already handles finish_reason.

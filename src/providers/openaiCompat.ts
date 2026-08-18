@@ -47,6 +47,17 @@ function requestShapeAdvice(settings: OpenaiSettings): string {
 }
 
 /**
+ * The declared response type claims finish_reason is a string, but it arrives
+ * from JSON: null is the streaming-chunk spelling of the field and compat
+ * gateways that reuse one response model send it in non-streaming answers too.
+ * Anything that is not a string is treated as the field being absent, since
+ * quoting a null through redaction crashed the very diagnosis it was part of.
+ */
+function stringOrAbsent(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined;
+}
+
+/**
  * Unusable output has several causes that look alike, and each has a different
  * knob. Naming only one of them sent a user off an endpoint that a single
  * config line would have fixed, after concluding the model could not do it
@@ -180,7 +191,7 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
         // to look identical (issue #45). The tail is where the damage is, so
         // the message ends with it rather than with the opening summary.
         const advice = unusableOutputAdvice(
-            payload.choices?.[0]?.finish_reason,
+            stringOrAbsent(payload.choices?.[0]?.finish_reason),
             options.settings,
             (reason) => quote(reason, (clipped) => truncate(clipped, 80)),
             'The answer ended normally but no complete JSON object could be read from it.',
@@ -199,7 +210,7 @@ ${JSON_TEMPLATE_INSTRUCTION}`;
     const missing = missingSchemaFields(result);
     if (missing.length > 0) {
         const advice = unusableOutputAdvice(
-            payload.choices?.[0]?.finish_reason,
+            stringOrAbsent(payload.choices?.[0]?.finish_reason),
             options.settings,
             (reason) => quote(reason, (clipped) => truncate(clipped, 80)),
             'The answer ended normally and parsed, but not into the contract.',
