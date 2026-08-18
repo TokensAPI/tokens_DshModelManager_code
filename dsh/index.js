@@ -590,7 +590,9 @@ function registerVisionProvider(ctx, config, ownProviders) {
           // Older preview builds exposed registration before this runtime
           // query, so keep their former default only when the query itself is
           // absent. A current runtime that cannot resolve `upstream` throws,
-          // and the registration boundary below fails closed instead.
+          // and the registration boundary below fails closed instead; the
+          // ordinary not-mounted-yet case never reaches this method, because
+          // reconcile waits for the upstream before registering (#66).
           if (typeof ctx.llm.providerRetryPolicy !== 'function') return undefined
           const policy = ctx.llm.providerRetryPolicy(upstream)
           state.retryPolicyKey = policyKey(policy)
@@ -721,6 +723,7 @@ function registerVisionProvider(ctx, config, ownProviders) {
       }
     }
     let reconciling = false
+    let waitingLogged = false
     const reconcile = () => {
       if (reconciling) return
       reconciling = true
@@ -730,6 +733,24 @@ function registerVisionProvider(ctx, config, ownProviders) {
           typeof ctx.llm.listProviders !== 'function' ||
           ctx.llm.listProviders().some((info) => (typeof info === 'string' ? info : info?.id) === upstream)
         if (!current) {
+          if (!available) {
+            // A pinned upstream that mounts after this plugin is ordinary
+            // startup order (llm-pi-ai mounts its providers once settings
+            // load), not an error. Registering against the absence cannot
+            // succeed: dsh snapshots the retry policy synchronously inside
+            // registerAdapter, the upstream lookup throws NO_ADAPTER, and the
+            // doomed attempt landed in the log as a skipped registration that
+            // read fatal while the next adapters-updated quietly healed it
+            // (issue #66). So wait for the event instead, and say so once: a
+            // typo'd upstream never arrives, and this line is then the
+            // breadcrumb naming exactly what was waited on.
+            if (!waitingLogged) {
+              waitingLogged = true
+              console.error(`[modlens] vision provider waiting for upstream "${upstream}" to register`)
+            }
+            return
+          }
+          waitingLogged = false
           registerWrapper(upstream, providerId, `${upstreamName()} (modlens vision)`)
           return
         }
