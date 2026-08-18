@@ -482,6 +482,97 @@ describe('dsh plugin vision provider (phase 3)', () => {
         },
     );
 
+    it('waits for a pinned upstream instead of failing registration against its absence (#66)', async () => {
+        // llm-pi-ai mounts its providers after settings load, so a pinned
+        // upstream arriving later than this plugin is ordinary startup order,
+        // not an error. Registering against the absence cannot succeed: dsh
+        // snapshots the retry policy synchronously inside registerAdapter and
+        // the upstream lookup throws NO_ADAPTER, so the old behaviour burned
+        // one doomed attempt per event and logged each as a skipped
+        // registration that read fatal while the next event quietly healed it.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const handlers: Record<string, () => void> = {};
+        const captured: number[] = [];
+        let attempts = 0;
+        let mounted = false;
+        const upstreamPolicy = {
+            mode: 'normal',
+            maxRetries: 50,
+            retryableCodes: ['RATE_LIMIT'],
+            initialDelayMs: 1,
+            maxDelayMs: 2,
+            jitterRatio: 0,
+        };
+        const llm = {
+            listProviders: () => (mounted ? [{ id: 'lanz', name: 'Lanz' }] : []),
+            providerRetryPolicy: () => {
+                if (!mounted) {
+                    // The exact shape dsh-llm throws for an unmounted route.
+                    const failure = new Error('no adapter registered for provider "lanz"');
+                    (failure as Error & { code: string }).code = 'NO_ADAPTER';
+                    throw failure;
+                }
+                return upstreamPolicy;
+            },
+            registerAdapter: (ids: string[], adapter: Record<string, CallableFunction>) => {
+                // Real dsh captures both synchronously inside registerAdapter,
+                // which is where the doomed attempt used to blow up.
+                attempts += 1;
+                adapter.providerInfo(ids[0]);
+                const policy = adapter.providerRetryPolicy(ids[0]) as { maxRetries: number };
+                captured.push(policy.maxRetries);
+                const handle = () => {};
+                handle.replace = () => {};
+                return handle;
+            },
+            listModels: async () => [],
+            resolveModelInfo: async () => ({}),
+            stream: () => (async function* () {})(),
+        };
+        const errors: string[] = [];
+        const original = console.error;
+        console.error = (value?: unknown) => errors.push(String(value));
+        try {
+            plugin.apply(
+                {
+                    tools: { register: () => {} },
+                    attachments: {},
+                    on: (event: string, fn: () => void) => {
+                        handlers[event] = fn;
+                    },
+                    llm,
+                } as never,
+                { upstream: 'lanz', providerId: 'house-lanz' },
+            );
+
+            // Nothing to register against yet: no attempt, no failure line,
+            // one calm sentence naming what is being waited on, which is also
+            // the breadcrumb a typo'd upstream leaves behind.
+            expect(attempts).toBe(0);
+            expect(errors.join('\n')).not.toContain('registration skipped');
+            expect(errors.join('\n')).toContain('waiting for upstream "lanz"');
+
+            // Another event while still absent stays quiet: the wait is
+            // already on record.
+            handlers['llm/adapters-updated']();
+            expect(attempts).toBe(0);
+            expect(errors.filter((line) => line.includes('waiting for upstream')).length).toBe(1);
+
+            // The upstream mounts. The first real attempt happens now and
+            // snapshots the upstream's own policy, not a placeholder.
+            mounted = true;
+            handlers['llm/adapters-updated']();
+            expect(attempts).toBe(1);
+            expect(captured).toEqual([50]);
+            expect(errors.join('\n')).not.toContain('registration skipped');
+        } finally {
+            console.error = original;
+        }
+    });
+
     it('refreshes retry policy in explicit single-route mode too', async () => {
         // @ts-expect-error untyped on purpose
         const plugin = (await import('../dsh/index.js')) as {
@@ -2843,7 +2934,9 @@ describe('the wrapper keeps upstream replay state reachable (#49)', () => {
             registerAdapter: (_p: string[], a: Record<string, CallableFunction>) => {
                 adapter = a;
             },
-            listProviders: () => ['deepseek-official'],
+            // The wired upstream is mounted by premise: these scenarios stream
+            // through it, and reconcile registers nothing for an absent one (#66).
+            listProviders: () => [wiring.upstream ?? 'deepseek-official'],
             listModels: async () => [{ provider: 'deepseek-official', id: 'deepseek-v4-flash' }],
             resolveModelInfo: async (_p: string, model: string) => ({
                 provider: 'deepseek-official',
@@ -2933,7 +3026,9 @@ async function wrapperStreamFor(
         registerAdapter: (_p: string[], a: Record<string, CallableFunction>) => {
             adapter = a;
         },
-        listProviders: () => ['deepseek-official'],
+        // The wired upstream is mounted by premise: these scenarios stream
+        // through it, and reconcile registers nothing for an absent one (#66).
+        listProviders: () => [wiring.upstream ?? 'deepseek-official'],
         listModels: async () => [{ provider: 'deepseek-official', id: 'deepseek-v4-flash' }],
         resolveModelInfo: async (_p: string, model: string) => ({
             provider: 'deepseek-official',
