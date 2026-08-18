@@ -9,7 +9,10 @@
 // invariant structural: the option is written after the caller's options, so it
 // cannot be dropped by a spread or a stale copy, and it cannot be forgotten by
 // whoever adds the next child, because there is nothing to remember. `Omit`
-// makes trying to pass it a type error rather than a silent contest.
+// rejects the option in a fresh object literal; through a variable or a
+// spread it compiles anyway (excess-property checks stop at literals), which
+// is why the runtime write after the spread is the guarantee and the type is
+// only a hint.
 import {
     type ChildProcessByStdio,
     type ExecFileSyncOptionsWithStringEncoding,
