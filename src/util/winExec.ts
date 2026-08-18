@@ -37,6 +37,7 @@ import * as path from 'path';
 import { findOnPath } from '../providers/availability.ts';
 import {
     canonicalWindowsEnv,
+    envValue,
     withoutWindowsEnvVariable,
     withWindowsEnvAssignment,
 } from './winEnv.ts';
@@ -338,6 +339,15 @@ const NPM_EXEC_LEGACY = /^"%_prog%"(.*)\s%\*$/;
 /** 9.0.2 onwards: the PATHEXT edit rides the execution line, after endLocal. */
 const NPM_EXEC_CURRENT = /^set PATHEXT=%PATHEXT:;\.([A-Z]+);=;% & "%_prog%"(.*)\s%\*$/;
 const NPM_NATIVE_EXEC = /^"([^"]*)"\s+%\*$/;
+// pnpm's optional NODE_PATH preamble, four lines between @SETLOCAL and the
+// rest, emitted whenever extendNodePath is on, which is pnpm's default with
+// the isolated linker. The value is taken verbatim and only ever placed into
+// the child's environment, exactly where the shim itself puts it; %% is
+// refused because a surviving expansion is one cmd would perform and this
+// module does not reimplement cmd's expansion.
+const PNPM_NODE_PATH_IF = /^@IF NOT DEFINED NODE_PATH \($/;
+const PNPM_NODE_PATH_SET = /^@SET "NODE_PATH=([^"%]+)"$/;
+const PNPM_NODE_PATH_PREPEND = /^@SET "NODE_PATH=([^"%]+);%NODE_PATH%"$/;
 const PNPM_IF = /^@IF EXIST "([^"]*)" \($/;
 const PNPM_ARM = /^"([^"]*)"(.*)\s%\*$/;
 const PNPM_BARE_ARM = /^node(.*)\s%\*$/;
@@ -452,7 +462,32 @@ function matchPnpm(
     if (lines[0] !== '@SETLOCAL') {
         return null;
     }
-    const body = lines.slice(1).filter((line) => line !== '');
+    let body = lines.slice(1).filter((line) => line !== '');
+
+    // The optional NODE_PATH preamble applies to whichever arm runs, so it
+    // is peeled off here and folded into the base environment both arms
+    // inherit. cmd's DEFINED cannot see an empty variable (SET NAME= deletes
+    // it), so an empty value reads as not defined and is replaced, not
+    // prepended. A preamble that starts like this shape but does not finish
+    // it declines the shim: half a template is not a smaller template.
+    let baseEnv = env;
+    if (body.length > 0 && PNPM_NODE_PATH_IF.test(body[0])) {
+        if (body.length < 5) return null;
+        const set = PNPM_NODE_PATH_SET.exec(body[1]);
+        const prepend = PNPM_NODE_PATH_PREPEND.exec(body[3]);
+        if (!set || body[2] !== ') ELSE (' || !prepend || body[4] !== ')') return null;
+        // Both branches must name the same directories, or the branch
+        // changes more than whether a prepend happens.
+        if (set[1] !== prepend[1]) return null;
+        const currentValue = envValue(env, 'NODE_PATH', 'win32');
+        const defined = currentValue !== undefined && currentValue !== '';
+        baseEnv = withWindowsEnvAssignment(
+            env,
+            'NODE_PATH',
+            defined ? `${set[1]};${currentValue}` : set[1],
+        );
+        body = body.slice(5);
+    }
 
     // Native, or a pinned absolute Node: one line, no branch.
     if (body.length === 1) {
@@ -464,13 +499,14 @@ function matchPnpm(
         if (program === null) {
             return null;
         }
+        const onelineEnv = baseEnv === env ? {} : { env: baseEnv };
         if (one[2].trim() === '') {
-            return /\.exe$/i.test(program) ? { command: program, args: [] } : null;
+            return /\.exe$/i.test(program) ? { command: program, args: [], ...onelineEnv } : null;
         }
         const tail = interpreterTail(one[2], shimDir);
         return tail === null || /\.(cmd|bat)$/i.test(program)
             ? null
-            : { command: program, args: tail };
+            : { command: program, args: tail, ...onelineEnv };
     }
 
     // The Node choice.
@@ -510,7 +546,7 @@ function matchPnpm(
     return nodeRecipe(
         shimDir,
         tail,
-        { present: env, absent: withPathextEdit(env, edit[1]) },
+        { present: baseEnv, absent: withPathextEdit(baseEnv, edit[1]) },
         env,
         cwd,
         deps,
