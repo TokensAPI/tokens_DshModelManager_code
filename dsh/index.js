@@ -730,7 +730,17 @@ function registerVisionProvider(ctx, config, ownProviders) {
 
   if (config.upstream) {
     const upstream = config.upstream
-    const providerId = config.providerId || 'deepseek-modlens'
+    // The default id encodes its upstream, the same minting rule the sweep
+    // uses, because #49's relabelling trusts only ids that prove their
+    // upstream. The old flat default, deepseek-modlens for every pinned
+    // upstream, was also the id auto-discovery mints for deepseek-official,
+    // so history recorded under a pinned foreign upstream became
+    // indistinguishable from DeepSeek history, and switching to
+    // auto-discovery could hand that foreign replay state to the DeepSeek
+    // adapter. An explicit config.providerId is honoured as before, and a
+    // pinned deepseek-official keeps the name existing setups know.
+    const providerId =
+      config.providerId || (upstream === 'deepseek-official' ? 'deepseek-modlens' : `modlens-${upstream}`)
     // Named after the route it actually wraps. This used to say DeepSeek
     // whatever `upstream` was, so anyone pointing it at another route got a
     // model group labelled for a provider they were not using. The refresh
