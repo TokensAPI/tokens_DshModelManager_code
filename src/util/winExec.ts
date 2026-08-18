@@ -444,13 +444,11 @@ function matchNpm(
 }
 
 /**
- * pnpm's two shapes, without its optional PATH and NODE_PATH preambles.
- * Shims carrying those are declined today, and honesty about why matters: the
- * NODE_PATH form is a conditional assignment a plan's env could reproduce, so
- * this is an unrecognised template, not an unreproducible one. It is also the
- * DEFAULT pnpm layout (extendNodePath with the isolated linker), so declining
- * leaves those shims to the spawn EINVAL this module exists to remove; a
- * recogniser for them is the known gap here.
+ * pnpm's two shapes, each optionally led by the NODE_PATH preamble peeled
+ * off below (the default isolated-linker layout). Still declined: the
+ * optional PATH preamble prependToPath emits, a non-default option whose
+ * reproduction would also have to interpolate %PATH%; that decline is the
+ * one recorded gap left here, and it is a smaller one than NODE_PATH was.
  */
 function matchPnpm(
     lines: string[],
