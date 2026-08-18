@@ -812,6 +812,42 @@ describe('a throwaway directory never costs the answer (#50)', () => {
     );
 });
 
+describe('an isolation that fails to set up leaves nothing behind', () => {
+    it.skipIf(onWindows)(
+        'removes the fresh workdir when the image cannot be copied in',
+        async () => {
+            // The run's finally only cleans directories that were returned, so a
+            // copy failure between mkdtemp and the return used to leak one
+            // directory per failover attempt.
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-leak-'));
+            const image = path.join(dir, 'x.png');
+            fs.writeFileSync(image, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+            fs.chmodSync(image, 0o000);
+            const before = fs
+                .readdirSync(os.tmpdir())
+                .filter((name) => name.startsWith('modlens-work-')).length;
+
+            await expect(
+                analyzeImage({
+                    input: image,
+                    providerBin: '/bin/true',
+                    timeoutMs: 5_000,
+                    config: {},
+                }),
+            ).rejects.toThrow();
+            // The removal is awaited inside the catch before the throw travels,
+            // so the count is stable by the time the rejection lands.
+            const after = fs
+                .readdirSync(os.tmpdir())
+                .filter((name) => name.startsWith('modlens-work-')).length;
+
+            expect(after).toBe(before);
+            fs.chmodSync(image, 0o600);
+            fs.rmSync(dir, { recursive: true, force: true });
+        },
+    );
+});
+
 describe('cleaning up a throwaway directory never aborts the process (#58)', () => {
     // On Node 24.0.0 through 24.13.0, fs.rmSync reaches a C++ path that aborts
     // the process outright (0xC0000409) instead of throwing, when the top-level
