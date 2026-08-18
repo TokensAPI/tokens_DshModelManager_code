@@ -19,13 +19,18 @@ modlens config set <provider>.<field> <value>   # fields: apiKey, baseUrl, model
 
 ## The file's exact shape
 
-Everything lives under five top-level keys, all optional. This example shows every supported key and field at once (a real file only needs what you use). A missing file means all defaults. Provider settings sit under `providers.<name>`, not at the top level, which is the mistake hand-editors make most.
+Everything lives under six top-level keys, all optional. This example shows every supported key and field at once (a real file only needs what you use). A missing file means all defaults. Provider settings sit under `providers.<name>`, not at the top level, which is the mistake hand-editors make most.
 
 ```json
 {
   "provider": "gemini-api",
   "proxy": "http://127.0.0.1:7890",
   "reuse": { "claude": true, "codex": true, "opencode": false, "pi": true, "grok": true },
+  "saved": {
+    "openai": {
+      "dashscope": { "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1", "apiKey": "sk-...", "model": "qwen3-vl-plus" }
+    }
+  },
   "guards": {
     "allowModels": ["deepseek-v4-*", "glm-5.*", "minimax-m2.5*", "qwen3-coder*"],
     "denyModels": ["glm-*v*", "deepseek-vl*"],

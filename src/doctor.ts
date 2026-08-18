@@ -6,6 +6,7 @@ import { createRequire } from 'module';
 import { composeChain } from './analyzer.ts';
 import { type DiscoverOptions, discoverAuto, type HarnessProbe } from './auto/discover.ts';
 import {
+    assertReadableConfig,
     CONFIG_PATH,
     type ModlensConfig,
     providerConfiguredInFile,
@@ -280,6 +281,9 @@ function inspectConfigFile(configPath: string): DoctorReport['config'] {
 export function buildDoctorReport(input: DoctorInput): DoctorReport {
     const env = input.env ?? process.env;
     const configPath = input.configPath ?? CONFIG_PATH;
+    // Same execute-boundary as a read: a malformed file fails in a sentence
+    // naming the path, not as a TypeError inside a probe.
+    assertReadableConfig(input.config, configPath);
     // Detect once and hand the result to the guard's model detection, which
     // would otherwise spawn a second `ps` walk for the same answer. Unlike the
     // fast-path runGuard, doctor always detects the model, so "why did it

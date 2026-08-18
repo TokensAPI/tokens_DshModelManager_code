@@ -89,7 +89,10 @@ const PROVIDERS: Record<string, VisionProvider> = {
 
 export function resolveProvider(providerName = 'antigravity-cli'): VisionProvider {
     const normalized = providerName.trim().toLowerCase();
-    const provider = PROVIDERS[normalized];
+    // Own properties only: a bare lookup walks the prototype chain, so the
+    // name "constructor" came back as Object's constructor, truthy, and
+    // passed for a provider all the way into config writes.
+    const provider = Object.hasOwn(PROVIDERS, normalized) ? PROVIDERS[normalized] : undefined;
 
     if (!provider) {
         throw new Error(

@@ -6,6 +6,7 @@ import { discoverAuto } from './auto/discover.ts';
 import { type AutoRouteOptions, reuseProviders } from './auto/routes.ts';
 import {
     assertNoRetiredEndpointBinding,
+    assertReadableConfig,
     loadConfigFile,
     type ModlensConfig,
     resolveProviderSettings,
@@ -89,6 +90,9 @@ export async function analyzeImage(options: AnalyzeOptions): Promise<AnalyzeResu
     }
 
     const config = options.config ?? loadConfigFile();
+    // The config file is hand-editable input; a wrong shape fails here in a
+    // sentence instead of as a raw TypeError deep inside a provider.
+    assertReadableConfig(config);
     // An explicit -p pins exactly one provider with no fallback (like
     // modsearch's -e). The providerBin test double pins the agent the same
     // way. Otherwise the failover chain: every provider that is set up on

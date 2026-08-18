@@ -241,8 +241,12 @@ config
     )
     .action((slot: string, label: string) => {
         try {
-            saveProviderBundle(slot, label);
-            process.stdout.write(`Saved the ${slot} slot as "${label}" in ${CONFIG_PATH}\n`);
+            const replaced = saveProviderBundle(slot, label);
+            process.stdout.write(
+                replaced
+                    ? `Saved the ${slot} slot as "${label}", replacing the previous snapshot (${CONFIG_PATH})\n`
+                    : `Saved the ${slot} slot as "${label}" in ${CONFIG_PATH}\n`,
+            );
         } catch (error) {
             process.stderr.write(
                 `Error: ${error instanceof Error ? error.message : String(error)}\n`,
