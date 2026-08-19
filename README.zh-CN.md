@@ -31,6 +31,10 @@
 `https://tokensapi.ai/v1`。用户只需在“设置 → 模型”填写一次 API Key；Key 由 DSH 凭据服务保存，
 不会写入仓库、模型配置、浏览器响应或日志。
 
+Desktop 启动时采用 fail-closed 全屏门禁：认证状态未知、没有 Key、旧 Key 尚未验证或状态接口失败时，
+聊天主界面不会放行。提交后由插件后端请求 TokensAPI `GET /v1/models` 验证；仅 HTTP 200 才保存
+Key 并进入 Desktop，401/403、网络失败和上游错误均保持锁定。
+
 视觉识别内核基于开源项目 [ModLens](https://github.com/liustack/modlens)，保留其 MIT 许可与原作者声明。
 下方保留 ModLens 引擎的技术资料，便于维护和理解底层能力；本插件安装后的提供方和模型选择由上述产品层固定。
 

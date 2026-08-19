@@ -882,6 +882,14 @@ window.__ModuleLoader__.load({
         main: 'Main model',
         vision: 'Vision model',
         endpoint: 'Endpoint',
+        gateTitle: 'Enter your TokensAPI API key',
+        gateIntro: 'The key is verified before Desktop opens. Chat and vision stay locked until verification succeeds.',
+        gateReverify: 'A key is stored but was not verified by this version. Enter it again to continue.',
+        checking: 'Checking sign-in status...',
+        verify: 'Verify and continue',
+        verifying: 'Verifying...',
+        show: 'Show',
+        hide: 'Hide',
       },
       zh: {
         nav: '模型',
@@ -896,12 +904,194 @@ window.__ModuleLoader__.load({
         main: '主模型',
         vision: '视觉模型',
         endpoint: '接口地址',
+        gateTitle: '请输入 TokensAPI API Key',
+        gateIntro: 'Desktop 会先验证 Key；验证成功前，聊天和识图功能保持锁定。',
+        gateReverify: '检测到旧版本保存的 Key，但尚未经过本版本验证。请重新输入后继续。',
+        checking: '正在检查登录状态…',
+        verify: '验证并进入',
+        verifying: '正在验证…',
+        show: '显示',
+        hide: '隐藏',
       },
     }
 
     function managerLabels() {
       var lang = (document.documentElement.lang || navigator.language || 'en').toLowerCase()
       return lang.indexOf('zh') === 0 ? MANAGER_TEXT.zh : MANAGER_TEXT.en
+    }
+
+    /**
+     * Full-screen, fail-closed Desktop gate. It is deliberately plain DOM so
+     * it mounts before React slots and cannot briefly expose the chat shell.
+     * The API key lives only in the password input and the one POST request.
+     */
+    function registerAccessGate() {
+      var root = document.body || document.documentElement
+      if (!root || typeof document.createElement !== 'function' || typeof root.appendChild !== 'function')
+        return () => {}
+      var previous = document.getElementById?.('tokens-model-manager-gate')
+      if (previous) previous.remove()
+      var t = managerLabels()
+      var overlay = document.createElement('div')
+      overlay.id = 'tokens-model-manager-gate'
+      overlay.setAttribute('role', 'dialog')
+      overlay.setAttribute('aria-modal', 'true')
+      overlay.style.cssText =
+        'position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:linear-gradient(145deg,#f4f7ff,#eef2ff 45%,#f8fafc);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111827'
+      var oldOverflow = document.documentElement?.style?.overflow || ''
+      if (document.documentElement?.style) document.documentElement.style.overflow = 'hidden'
+      root.appendChild(overlay)
+      var closed = false
+
+      function close() {
+        if (closed) return
+        closed = true
+        overlay.remove()
+        if (document.documentElement?.style) document.documentElement.style.overflow = oldOverflow
+      }
+
+      function node(tag, text, css) {
+        var element = document.createElement(tag)
+        if (text !== undefined) element.textContent = text
+        if (css) element.style.cssText = css
+        return element
+      }
+
+      function cardShell() {
+        overlay.replaceChildren()
+        var card = node(
+          'div',
+          undefined,
+          'width:min(440px,100%);box-sizing:border-box;padding:32px;border:1px solid #dbe3f0;border-radius:20px;background:rgba(255,255,255,.96);box-shadow:0 24px 70px rgba(30,64,175,.16)',
+        )
+        var brand = node(
+          'div',
+          'TokensAPI',
+          'font-size:14px;font-weight:750;letter-spacing:.12em;color:#3157d5;margin-bottom:16px',
+        )
+        card.appendChild(brand)
+        overlay.appendChild(card)
+        return card
+      }
+
+      function renderChecking() {
+        var card = cardShell()
+        card.appendChild(node('h1', t.gateTitle, 'font-size:25px;line-height:1.25;margin:0 0 12px'))
+        card.appendChild(node('p', t.checking, 'margin:0;color:#64748b;line-height:1.6'))
+      }
+
+      function renderForm(status, errorMessage) {
+        var card = cardShell()
+        card.appendChild(node('h1', t.gateTitle, 'font-size:25px;line-height:1.25;margin:0 0 12px'))
+        card.appendChild(
+          node(
+            'p',
+            status?.configured && !status?.authenticated ? t.gateReverify : t.gateIntro,
+            'margin:0 0 22px;color:#64748b;line-height:1.6',
+          ),
+        )
+        var form = node('form')
+        var label = node('label', t.key, 'display:block;font-size:14px;font-weight:650;margin-bottom:8px')
+        label.setAttribute('for', 'tokens-model-manager-key')
+        var inputRow = node('div', undefined, 'display:flex;gap:8px')
+        var input = node(
+          'input',
+          undefined,
+          'min-width:0;flex:1;box-sizing:border-box;padding:12px 13px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:#0f172a;font:inherit;outline:none',
+        )
+        input.id = 'tokens-model-manager-key'
+        input.name = 'apiKey'
+        input.type = 'password'
+        input.autocomplete = 'off'
+        input.spellcheck = false
+        var reveal = node(
+          'button',
+          t.show,
+          'padding:0 13px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:#334155;cursor:pointer',
+        )
+        reveal.type = 'button'
+        reveal.addEventListener('click', () => {
+          var visible = input.type === 'text'
+          input.type = visible ? 'password' : 'text'
+          reveal.textContent = visible ? t.show : t.hide
+          input.focus()
+        })
+        inputRow.appendChild(input)
+        inputRow.appendChild(reveal)
+        var message = node(
+          'p',
+          errorMessage || '',
+          `min-height:21px;margin:10px 0;color:${errorMessage ? '#b42318' : '#64748b'};font-size:13px;line-height:1.5`,
+        )
+        message.setAttribute(errorMessage ? 'role' : 'aria-live', errorMessage ? 'alert' : 'polite')
+        var submit = node(
+          'button',
+          t.verify,
+          'width:100%;padding:12px 16px;border:0;border-radius:10px;background:#3157d5;color:#fff;font:inherit;font-weight:700;cursor:pointer',
+        )
+        submit.type = 'submit'
+        form.appendChild(label)
+        form.appendChild(inputRow)
+        form.appendChild(message)
+        form.appendChild(submit)
+        form.addEventListener('submit', (event) => {
+          event.preventDefault()
+          var apiKey = input.value.trim()
+          if (!apiKey) {
+            message.textContent = t.missing
+            message.style.color = '#b42318'
+            return
+          }
+          input.disabled = true
+          reveal.disabled = true
+          submit.disabled = true
+          submit.textContent = t.verifying
+          message.textContent = ''
+          fetch('/tokens/model-manager', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ apiKey: apiKey }),
+          })
+            .then((response) =>
+              response
+                .json()
+                .catch(() => ({}))
+                .then((body) => ({ response: response, body: body })),
+            )
+            .then(({ response, body }) => {
+              input.value = ''
+              if (!response.ok || body?.authenticated !== true) throw new Error(body?.error || t.missing)
+              close()
+            })
+            .catch((error) => {
+              message.textContent = String(error.message || error)
+              message.style.color = '#b42318'
+              input.disabled = false
+              reveal.disabled = false
+              submit.disabled = false
+              submit.textContent = t.verify
+              input.focus()
+            })
+        })
+        card.appendChild(form)
+        setTimeout(() => input.focus(), 0)
+      }
+
+      renderChecking()
+      fetch('/tokens/model-manager', { cache: 'no-store' })
+        .then((response) =>
+          response
+            .json()
+            .catch(() => ({}))
+            .then((body) => ({ response: response, body: body })),
+        )
+        .then(({ response, body }) => {
+          if (!response.ok) throw new Error(body?.error || 'status unavailable')
+          if (body?.authenticated === true) close()
+          else renderForm(body, '')
+        })
+        .catch((error) => renderForm(null, String(error.message || error)))
+      return close
     }
 
     function ModelManagerSection(react) {
@@ -1010,8 +1200,8 @@ window.__ModuleLoader__.load({
               h('strong', null, t.key),
               h(
                 'span',
-                { style: { color: state?.configured ? '#34a853' : '#d93025' } },
-                state?.configured ? t.ready : t.missing,
+                { style: { color: state?.authenticated ? '#34a853' : '#d93025' } },
+                state?.authenticated ? t.ready : t.missing,
               ),
             ),
             h(
@@ -1093,6 +1283,7 @@ window.__ModuleLoader__.load({
     }
 
     function apply(ctx) {
+      var disposeGate = registerAccessGate()
       registerCard(ctx)
       registerManagerSection(ctx)
       document.addEventListener('paste', onPaste, true)
@@ -1103,6 +1294,7 @@ window.__ModuleLoader__.load({
           () => () => {
             document.removeEventListener('paste', onPaste, true)
             document.removeEventListener('focusin', onFocusIn, true)
+            disposeGate()
           },
           'modlens: paste-to-path listener',
         )
@@ -1117,6 +1309,7 @@ window.__ModuleLoader__.load({
       secretFieldProps: secretFieldProps,
       ConfigCard: ConfigCard,
     }
+    exports.__manager = { registerAccessGate: registerAccessGate }
     // `slots` is optional, so it is not required here: registerCard checks.
     exports.inject = []
     return module.exports

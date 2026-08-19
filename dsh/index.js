@@ -10,6 +10,8 @@
 // Loaded via the cordis.patch.yml row `@liustack/modlens/dsh` (see the
 // package.json `dsh.bundle` manifest). Providers, reuse grants, and guard
 // rules keep living in ~/.modlens/config.json, shared with every harness.
+
+import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -28,6 +30,7 @@ const CLI_TIMEOUT_MS = 180_000
 // tests share one source of truth without ever serializing a secret.
 export const TOKENSAPI = Object.freeze({
   credentialRef: 'TOKENSAPI_API_KEY',
+  verificationRef: 'TOKENSAPI_API_KEY_VERIFIED_SHA256',
   baseURL: 'https://tokensapi.ai/v1',
   mainModel: 'deepseek-v4-flash',
   visionModel: 'qwen3.6-35b-a3b',
@@ -1345,15 +1348,20 @@ async function runManagedVision(ctx, args, signal) {
   if (typeof ctx.credentials?.resolve !== 'function') {
     return run(process.execPath, args, signal)
   }
-  const credential = await ctx.credentials.resolve(TOKENSAPI.credentialRef)
-  if (credential === undefined || typeof credential.value !== 'string' || credential.value.trim() === '') {
-    const error = new Error('请先在“设置 → 模型”中填写 TokensAPI API Key。')
+  const [credential, verification] = await Promise.all([
+    ctx.credentials.resolve(TOKENSAPI.credentialRef),
+    ctx.credentials.resolve(TOKENSAPI.verificationRef),
+  ])
+  const apiKey = resolvedCredentialValue(credential).trim()
+  const fingerprint = resolvedCredentialValue(verification)
+  if (apiKey === '' || fingerprint !== managedCredentialFingerprint(apiKey)) {
+    const error = new Error('请先通过启动页验证 TokensAPI API Key。')
     error.code = 'TOKENSAPI_MISSING_CREDENTIAL'
     throw error
   }
   return run(process.execPath, args, signal, {
     TOKENS_MODEL_MANAGER: '1',
-    TOKENSAPI_API_KEY: credential.value,
+    TOKENSAPI_API_KEY: apiKey,
     TOKENSAPI_BASE_URL: TOKENSAPI.baseURL,
     TOKENSAPI_VISION_MODEL: TOKENSAPI.visionModel,
   })
@@ -1924,11 +1932,33 @@ async function directorySize(dir) {
   return bytes
 }
 
-/** Public status for the branded model page. It intentionally contains no key. */
+function managedCredentialFingerprint(apiKey) {
+  return `sha256:${createHash('sha256').update(apiKey, 'utf8').digest('hex')}`
+}
+
+function resolvedCredentialValue(result) {
+  return typeof result?.value === 'string' ? result.value : ''
+}
+
+/** Public gate status. It intentionally contains neither the key nor its fingerprint. */
 async function modelManagerStatus(ctx) {
-  const credential = await ctx.credentials.describe(TOKENSAPI.credentialRef)
+  const [credential, verification] = await Promise.all([
+    ctx.credentials.describe(TOKENSAPI.credentialRef),
+    ctx.credentials.describe(TOKENSAPI.verificationRef),
+  ])
+  let authenticated = false
+  if (credential.configured === true && verification.configured === true) {
+    const [storedKey, storedVerification] = await Promise.all([
+      ctx.credentials.resolve(TOKENSAPI.credentialRef),
+      ctx.credentials.resolve(TOKENSAPI.verificationRef),
+    ])
+    const apiKey = resolvedCredentialValue(storedKey)
+    const fingerprint = resolvedCredentialValue(storedVerification)
+    authenticated = apiKey.length > 0 && fingerprint === managedCredentialFingerprint(apiKey)
+  }
   return {
     configured: credential.configured === true,
+    authenticated,
     writable: credential.writable === true,
     provider: 'TokensAPI',
     mainModel: TOKENSAPI.mainModel,
@@ -1938,12 +1968,11 @@ async function modelManagerStatus(ctx) {
   }
 }
 
-/** Validate and persist the one user-owned value in this product surface. */
-async function setManagedCredential(ctx, value) {
+function normalizeManagedCredential(value) {
   if (typeof value !== 'string') throw new TypeError('apiKey must be a string')
   const apiKey = value.trim()
   if (apiKey.length === 0) throw new Error('API Key 不能为空')
-  if (apiKey.length > 16 * 1024) throw new Error('API Key 过长')
+  if (apiKey.length > 512) throw new Error('API Key 过长')
   if (
     [...apiKey].some((character) => {
       const code = character.charCodeAt(0)
@@ -1951,7 +1980,53 @@ async function setManagedCredential(ctx, value) {
     })
   )
     throw new Error('API Key 不能包含控制字符')
+  return apiKey
+}
+
+class ManagedCredentialError extends Error {
+  constructor(code, message) {
+    super(message)
+    this.code = code
+  }
+}
+
+/**
+ * Validate against the same immutable TokensAPI endpoint used by the models.
+ * Only the HTTP status is classified; response bodies are intentionally never
+ * surfaced because gateways sometimes echo request metadata in error text.
+ */
+async function validateManagedCredential(apiKey, request = globalThis.fetch) {
+  if (typeof request !== 'function') {
+    throw new ManagedCredentialError('unreachable', '无法连接 TokensAPI，请检查网络后重试')
+  }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 20_000)
+  let response
+  try {
+    response = await request(`${TOKENSAPI.baseURL}/models`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json' },
+      redirect: 'error',
+      signal: controller.signal,
+    })
+  } catch {
+    throw new ManagedCredentialError('unreachable', '无法连接 TokensAPI，请检查网络后重试')
+  } finally {
+    clearTimeout(timeout)
+  }
+  if (response?.status === 200) return
+  if (response?.status === 401 || response?.status === 403) {
+    throw new ManagedCredentialError('invalid_key', 'API Key 无效，请检查后重试')
+  }
+  throw new ManagedCredentialError('upstream', 'TokensAPI 服务暂时不可用，请稍后重试')
+}
+
+/** Validate first, then persist the key and its non-reversible verification marker. */
+async function setManagedCredential(ctx, value, request = globalThis.fetch) {
+  const apiKey = normalizeManagedCredential(value)
+  await validateManagedCredential(apiKey, request)
   await ctx.credentials.set(TOKENSAPI.credentialRef, apiKey)
+  await ctx.credentials.set(TOKENSAPI.verificationRef, managedCredentialFingerprint(apiKey))
   return modelManagerStatus(ctx)
 }
 
@@ -1999,7 +2074,9 @@ function registerModelManagerRoute(ctx, host) {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         send(200, await setManagedCredential(host, body?.apiKey))
       } catch (error) {
-        send(400, { error: String(error?.message ?? error) })
+        const code = typeof error?.code === 'string' ? error.code : 'invalid_input'
+        const status = code === 'invalid_key' ? 401 : code === 'unreachable' ? 503 : code === 'upstream' ? 502 : 400
+        send(status, { error: String(error?.message ?? error), code })
       }
     },
   })
@@ -2073,6 +2150,9 @@ function registerConfigRoute(ctx) {
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
 export const __modelManager = {
   modelManagerStatus,
+  normalizeManagedCredential,
+  validateManagedCredential,
+  managedCredentialFingerprint,
   setManagedCredential,
   readImageBlock,
   runManagedVision,

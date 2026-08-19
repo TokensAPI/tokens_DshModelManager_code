@@ -32,6 +32,11 @@ DSH model-provider editor, pins `deepseek-v4-flash` for chat,
 The user enters only one API key in Settings → Models. DSH's credential service
 stores it; the key is never committed, returned to the browser, or logged.
 
+Desktop starts behind a fail-closed full-screen gate. Unknown auth state, a
+missing key, an unverified legacy key, or a failed status request keeps the
+chat shell locked. The Host validates submissions with TokensAPI `GET
+/v1/models`; only HTTP 200 stores the key and opens Desktop.
+
 The vision engine is based on [ModLens](https://github.com/liustack/modlens).
 Its MIT license and original attribution are preserved. The remaining ModLens
 documentation is retained below as implementation reference; installed product

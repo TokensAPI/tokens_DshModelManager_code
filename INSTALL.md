@@ -33,6 +33,11 @@ skill folder to copy. The explicit `--allow-build` is required because pnpm
 blocks prepare scripts from Git dependencies unless the exact resolved source
 is approved.
 
+On first launch, a full-screen API-key gate replaces the chat shell. The Host
+validates the submitted key with TokensAPI `GET /v1/models` and stores it only
+after HTTP 200. HTTP 401/403, network failure, timeout, or upstream failure
+keeps Desktop locked and returns a non-secret error message.
+
 For every other harness, the whole install is four steps:
 
 1. Find the skill directory for your harness.
