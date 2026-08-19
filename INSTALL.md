@@ -14,22 +14,24 @@ alone leaves the user without the `modlens_read_image` tool and without the
 [#32](https://github.com/liustack/modlens/issues/32)).
 
 You are on dsh if `~/.dsh/` exists, or the conversation runs in the DeepSeek
-Harness web or desktop app. One command installs the plugin:
+Harness desktop app. In PowerShell, resolve `main` to an immutable commit and
+authorize that exact Git package to run its required build:
 
-```sh
-npx -y @deepseek-ai/dsh plugin --profile web add @tokens/dsh-model-manager@0.1.0
+Current package identity: `@tokens/dsh-model-manager@0.1.0`.
+
+```powershell
+$repo = 'TokensAPI/tokens_DshModelManager_code'
+$sha = (Invoke-RestMethod "https://api.github.com/repos/$repo/commits/main").sha
+$build = "@tokens/dsh-model-manager@https://codeload.github.com/${repo}/tar.gz/${sha}"
+npx -y @deepseek-ai/dsh plugin --profile desktop add "github:${repo}#${sha}" "--allow-build=$build"
 ```
 
-Then tell the user to restart dsh and look at the model selector: entries
-suffixed `(modlens vision)` mean the plugin is live. Pasting also works on the
-plain text-only entries, where the image becomes a file path. Engines are
-configured exactly as below (`~/.modlens/config.json` is shared), so continue
-at step 3 for the engine, then verify with `doctor`. Skip steps 1 and 2: there
-is no skill folder to copy. If `dsh` warns `declares no dsh.bundle`, the
-release-age gate installed an old version. `@latest` does not avoid that: name
-the version instead (`npm view @tokens/dsh-model-manager version` prints it), which
-pnpm treats as a deliberate request rather than a resolution. See
-[updating](docs/harness-setup.md#keeping-it-up-to-date).
+Then restart dsh. Settings → Models must show the fixed endpoint, main model,
+vision model, and one API-key field. The key is stored by DSH's credential
+service and is never returned to the browser. Skip steps 1 and 2: there is no
+skill folder to copy. The explicit `--allow-build` is required because pnpm
+blocks prepare scripts from Git dependencies unless the exact resolved source
+is approved.
 
 For every other harness, the whole install is four steps:
 

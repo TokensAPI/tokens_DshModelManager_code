@@ -40,7 +40,7 @@
 
 ## 亮点
 
-**🥇 全网最强的 DeepSeek Harness（dsh）外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @tokens/dsh-model-manager@0.1.0`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `modlens_read_image` 工具读图。更新就是再跑一遍同一条命令。这里点名版本号而不用 `@latest` 是有意的：pnpm 11 会扣住最近 24 小时内发布的版本，dist-tag 只在剩下的里面解析，用 `@latest` 装到的会是一天前发布的那个（[细节](docs/harness-setup.zh-CN.md#保持更新)）。
+**🥇 面向 DeepSeek Harness Desktop 的受管模型插件：**从 GitHub 安装后，DSH 只展示固定的 TokensAPI 主模型和视觉包装模型；用户在“设置 → 模型”填写 API Key 后即可聊天和识图。
 
 DeepSeek Harness 粘贴识图有两种玩法。
 
@@ -72,13 +72,24 @@ agy                                                           # 浏览器完成�
 
 安装还会盘点本机其他 harness CLI（Codex、OpenCode、Pi）里可触达的视觉能力，并逐个询问是否允许 modlens 复用。获准的登录态与你自己配的引擎平级入池，每次复用都会在结果里标明花的是谁的额度。
 
-**DeepSeek Harness（dsh）用户不走 skill 流程**，本包就是原生 dsh 插件：
+**DeepSeek Harness Desktop 用户不走 skill 流程**，本包就是原生 dsh 插件。在 PowerShell 中运行：
 
-```sh
-npx -y @deepseek-ai/dsh plugin --profile web add @tokens/dsh-model-manager@0.1.0
+当前包标识：`@tokens/dsh-model-manager@0.1.0`。
+
+```powershell
+$repo = 'TokensAPI/tokens_DshModelManager_code'
+$sha = (Invoke-RestMethod "https://api.github.com/repos/$repo/commits/main").sha
+$build = "@tokens/dsh-model-manager@https://codeload.github.com/${repo}/tar.gz/${sha}"
+npx -y @deepseek-ai/dsh plugin --profile desktop add "github:${repo}#${sha}" "--allow-build=$build"
 ```
 
-装完即有 `modlens_read_image` 工具，选「(modlens vision)」模型变体即可直接粘贴识图。引擎配置同样在 `~/.modlens`，详见[宿主接入](docs/harness-setup.zh-CN.md)。
+`--allow-build` 只授权这个已解析到具体提交号的插件执行 `prepare`，用于生成视觉 CLI。安装后重启 Desktop，在“设置 → 模型”填写 TokensAPI API Key。
+
+卸载：
+
+```powershell
+npx -y @deepseek-ai/dsh plugin --profile desktop remove @tokens/dsh-model-manager
+```
 
 ## 用法
 

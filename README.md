@@ -43,7 +43,7 @@ Issues are welcome any time: [open one](https://github.com/liustack/modlens/issu
 
 ## Highlights
 
-**🥇 The most capable vision plugin for DeepSeek Harness (dsh):** one command, `npx -y @deepseek-ai/dsh plugin --profile web add @tokens/dsh-model-manager@0.1.0`, and the text-only DeepSeek model behind dsh reads images through a native `modlens_read_image` tool. Updating is the same command again. The version is named rather than `@latest` on purpose: pnpm 11 holds back releases published in the last 24 hours and resolves the tag against what survives, so `@latest` would install whatever shipped a day ago ([details](docs/harness-setup.md#keeping-it-up-to-date)).
+**🥇 A managed model plugin for DeepSeek Harness Desktop:** after installation from GitHub, DSH exposes only the fixed TokensAPI main model and vision wrapper. Chat and vision become available after the user enters an API key under Settings → Models.
 
 Pasting an image works two ways. **① Just paste.** On a text-only model the pasted image lands as a private temp file and its path enters the composer — the same interaction OpenCode and Pi ship — and the `modlens_read_image` tool takes it from there. **② Pick a `(modlens vision)` entry** in the model selector (it remembers your choice, so once is enough), then paste: the thumbnail stays visible in your message, closer to the Codex app feel, and the image is converted to structured evidence at request time, answered by the same underlying route. The plugin auto-discovers every provider route carrying text-only DeepSeek or GLM models and adds a wrapped entry per route (a stock install gets **`DeepSeek-V4-Flash (modlens vision)`** and **`DeepSeek-V4-Pro (modlens vision)`**; extra routes like opencode-go or zai get their own); the two families' own vision models are excluded automatically. Which paste route applies is the host's per-model call: only a model its metadata positively confirms text-only is taken over, anything unconfirmed is left alone, so vision models keep their native paste ([details](docs/harness-setup.md)).
 
@@ -55,6 +55,28 @@ Pasting an image works two ways. **① Just paste.** On a text-only model the pa
 - **Install once, use everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
 
 ## Installation
+
+**DeepSeek Harness Desktop:** run this in PowerShell. The command resolves
+`main` to an immutable commit and authorizes only that exact Git package to run
+the build required by pnpm:
+
+Current package identity: `@tokens/dsh-model-manager@0.1.0`.
+
+```powershell
+$repo = 'TokensAPI/tokens_DshModelManager_code'
+$sha = (Invoke-RestMethod "https://api.github.com/repos/$repo/commits/main").sha
+$build = "@tokens/dsh-model-manager@https://codeload.github.com/${repo}/tar.gz/${sha}"
+npx -y @deepseek-ai/dsh plugin --profile desktop add "github:${repo}#${sha}" "--allow-build=$build"
+```
+
+Restart Desktop, then enter the TokensAPI API key under Settings → Models. To uninstall:
+
+```powershell
+npx -y @deepseek-ai/dsh plugin --profile desktop remove @tokens/dsh-model-manager
+```
+
+The remaining instructions describe the upstream ModLens skill workflow for
+other harnesses and are kept as engine-maintenance reference.
 
 **Step 1, hand it to your AI.** Send it this line:
 
