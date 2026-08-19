@@ -26,9 +26,10 @@
   <img src="https://img.shields.io/badge/users-unknown-lightgrey?style=flat-square" alt="Users unknown">
 </p>
 
-本插件是面向 DSH Desktop 的 TokensAPI 产品层：隐藏 DSH 官方模型入口和通用提供方编辑器，固定主模型
-`deepseek-v4-flash`、视觉模型 `qwen3.6-35b-a3b` 与接口
-`https://tokensapi.ai/v1`。用户只需在“设置 → 模型”填写一次 API Key；Key 由 DSH 凭据服务保存，
+本插件是面向 DSH Desktop 的 TokensAPI 产品层：隐藏 DSH 官方模型入口和通用提供方编辑器，固定接口
+`https://tokensapi.ai/v1`。主模型默认 `deepseek-v4-flash`，视觉模型默认
+`qwen3.6-35b-a3b`；验证 API Key 后，两者都可以在“设置 → 模型”从 TokensAPI
+`GET /v1/models` 返回的实时列表中独立选择。Key 由 DSH 凭据服务保存，
 不会写入仓库、模型配置、浏览器响应或日志。
 
 Desktop 启动时采用 fail-closed 全屏门禁：认证状态未知、没有 Key、旧 Key 尚未验证或状态接口失败时，
@@ -36,7 +37,7 @@ Desktop 启动时采用 fail-closed 全屏门禁：认证状态未知、没有 K
 Key 并进入 Desktop，401/403、网络失败和上游错误均保持锁定。
 
 视觉识别内核基于开源项目 [ModLens](https://github.com/liustack/modlens)，保留其 MIT 许可与原作者声明。
-下方保留 ModLens 引擎的技术资料，便于维护和理解底层能力；本插件安装后的提供方和模型选择由上述产品层固定。
+下方保留 ModLens 引擎的技术资料，便于维护和理解底层能力；本插件安装后的提供方和模型选择由上述产品层统一管理。
 
 ## 交流
 
@@ -44,7 +45,7 @@ Key 并进入 Desktop，401/403、网络失败和上游错误均保持锁定。
 
 ## 亮点
 
-**🥇 面向 DeepSeek Harness Desktop 的受管模型插件：**从 GitHub 安装后，DSH 只展示固定的 TokensAPI 主模型和视觉包装模型；用户在“设置 → 模型”填写 API Key 后即可聊天和识图。
+**🥇 面向 DeepSeek Harness Desktop 的受管模型插件：**从 GitHub 安装后，DSH 只展示 TokensAPI 模型；主模型和视觉模型保留产品默认值，也能在“设置 → 模型”从已认证的模型列表中分别切换。
 
 DeepSeek Harness 粘贴识图有两种玩法。
 

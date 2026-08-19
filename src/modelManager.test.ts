@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error The DSH entry is deliberately dependency-free plain JS.
-import { __modelManager, TOKENSAPI } from '../dsh/index.js';
+import { __modelManager, apply, TOKENSAPI } from '../dsh/index.js';
 import { resolveProviderSettings } from './config.ts';
 
 interface CredentialHarness {
@@ -52,7 +52,16 @@ function credentialHarness(initial?: string, verified = false): CredentialHarnes
     return harness;
 }
 
-const VALID_RESPONSE = async () => ({ status: 200 });
+const API_MODELS = [
+    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+    { id: 'qwen3.6-35b-a3b', name: 'Qwen 3.6 Vision' },
+    { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
+];
+
+const VALID_RESPONSE = async () => ({
+    status: 200,
+    json: async () => ({ data: API_MODELS }),
+});
 
 const VALID_KEYS = Array.from({ length: 50 }, (_, index) => {
     const serial = String(index + 1).padStart(2, '0');
@@ -113,6 +122,8 @@ describe('TokensAPI credential gate: 50 positive cases', () => {
                 provider: 'TokensAPI',
                 mainModel: 'deepseek-v4-flash',
                 visionModel: 'qwen3.6-35b-a3b',
+                models: API_MODELS,
+                modelsAvailable: true,
                 baseURL: 'https://tokensapi.ai/v1',
             });
             expect(JSON.stringify(status)).not.toContain(testCase.stored);
@@ -174,7 +185,7 @@ describe('TokensAPI managed vision configuration', () => {
 
     it('never exposes a stored key in status', async () => {
         const harness = credentialHarness('super-secret-key', true);
-        const status = await __modelManager.modelManagerStatus(harness.ctx);
+        const status = await __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE);
         expect(status.configured).toBe(true);
         expect(status.authenticated).toBe(true);
         expect(JSON.stringify(status)).not.toContain('super-secret-key');
@@ -191,7 +202,7 @@ describe('TokensAPI remote API-key verification', () => {
             async (url: unknown, init: { headers?: { authorization?: string } } | undefined) => {
                 capturedUrl = String(url);
                 capturedAuth = String(init?.headers?.authorization ?? '');
-                return { status: 200 };
+                return { status: 200, json: async () => ({ data: API_MODELS }) };
             },
         );
         expect(capturedUrl).toBe('https://tokensapi.ai/v1/models');
@@ -243,6 +254,168 @@ describe('TokensAPI remote API-key verification', () => {
         expect(await __modelManager.modelManagerStatus(legacy.ctx)).toMatchObject({
             configured: true,
             authenticated: false,
+        });
+    });
+});
+
+describe('TokensAPI model discovery and selection', () => {
+    it('parses, trims and deduplicates the OpenAI-compatible model list', async () => {
+        const models = await __modelManager.parseManagedModels({
+            json: async () => ({
+                data: [
+                    { id: ' deepseek-v4-flash ', name: ' DeepSeek V4 Flash ' },
+                    { id: 'deepseek-v4-flash', name: 'duplicate' },
+                    { id: '' },
+                    null,
+                    { id: 'qwen3.6-35b-a3b' },
+                ],
+            }),
+        });
+        expect(models).toEqual([
+            { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+            { id: 'qwen3.6-35b-a3b', name: 'qwen3.6-35b-a3b' },
+        ]);
+    });
+
+    it('rejects a malformed successful response', async () => {
+        await expect(
+            __modelManager.parseManagedModels({ json: async () => ({ models: [] }) }),
+        ).rejects.toMatchObject({ code: 'upstream' });
+    });
+
+    it('rejects an empty usable model list', async () => {
+        await expect(
+            __modelManager.parseManagedModels({ json: async () => ({ data: [{ id: '' }, {}] }) }),
+        ).rejects.toMatchObject({ code: 'upstream' });
+    });
+
+    it('rejects an implausibly large model list', async () => {
+        await expect(
+            __modelManager.parseManagedModels({
+                json: async () => ({
+                    data: Array.from({ length: 1001 }, (_, id) => ({ id: String(id) })),
+                }),
+            }),
+        ).rejects.toMatchObject({ code: 'upstream' });
+    });
+
+    it('keeps both documented defaults after the first verified key', async () => {
+        const harness = credentialHarness();
+        const status = await __modelManager.setManagedCredential(
+            harness.ctx,
+            'tk-default-models',
+            VALID_RESPONSE,
+        );
+        expect(status.mainModel).toBe(TOKENSAPI.mainModel);
+        expect(status.visionModel).toBe(TOKENSAPI.visionModel);
+    });
+
+    it('accepts two choices from the discovered list', async () => {
+        const harness = credentialHarness();
+        await __modelManager.setManagedCredential(harness.ctx, 'tk-model-choice', VALID_RESPONSE);
+        const status = await __modelManager.setManagedModels(
+            harness.ctx,
+            { mainModel: 'deepseek-v3.2', visionModel: 'qwen3.6-35b-a3b' },
+            VALID_RESPONSE,
+        );
+        expect(status).toMatchObject({
+            mainModel: 'deepseek-v3.2',
+            visionModel: 'qwen3.6-35b-a3b',
+            modelsAvailable: true,
+        });
+        expect(__modelManager.selectedVisionModel(harness.ctx)).toBe('qwen3.6-35b-a3b');
+    });
+
+    it('rejects a model id that was not returned by TokensAPI', async () => {
+        const harness = credentialHarness();
+        await __modelManager.setManagedCredential(harness.ctx, 'tk-model-choice', VALID_RESPONSE);
+        await expect(
+            __modelManager.setManagedModels(
+                harness.ctx,
+                { mainModel: 'attacker/model', visionModel: TOKENSAPI.visionModel },
+                VALID_RESPONSE,
+            ),
+        ).rejects.toMatchObject({ code: 'invalid_model' });
+    });
+
+    it('does not return the key while returning public model metadata', async () => {
+        const harness = credentialHarness();
+        const status = await __modelManager.setManagedCredential(
+            harness.ctx,
+            'tk-never-return-this',
+            VALID_RESPONSE,
+        );
+        expect(status.models).toEqual(API_MODELS);
+        expect(JSON.stringify(status)).not.toContain('tk-never-return-this');
+    });
+
+    it('persists choices and updates the live chat provider plus Agent default', async () => {
+        const credential = credentialHarness();
+        const values = new Map<string, Record<string, unknown>>();
+        const updates: Array<{ namespace: string; patch: Record<string, unknown> }> = [];
+        const selections: Array<{ provider: string; model: string }> = [];
+        const settings = {
+            register: (
+                namespace: string,
+                _schema: unknown,
+                options?: { base?: Record<string, unknown> },
+            ) => {
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Record<string, unknown>) => {
+                updates.push({ namespace, patch });
+                values.set(namespace, { ...(values.get(namespace) ?? {}), ...patch });
+            },
+        };
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) callback({ settings });
+                if (services.includes('agentDefaultModel')) {
+                    callback({
+                        agentDefaultModel: {
+                            saveSelection: async (selection: {
+                                provider: string;
+                                model: string;
+                            }) => {
+                                selections.push(selection);
+                            },
+                        },
+                    });
+                }
+            },
+        };
+        apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
+        await Promise.resolve();
+        await __modelManager.setManagedCredential(ctx, 'tk-live-settings', VALID_RESPONSE);
+        await __modelManager.setManagedModels(
+            ctx,
+            { mainModel: 'deepseek-v3.2', visionModel: 'qwen3.6-35b-a3b' },
+            VALID_RESPONSE,
+        );
+
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            mainModel: 'deepseek-v3.2',
+            visionModel: 'qwen3.6-35b-a3b',
+        });
+        expect(
+            [...updates]
+                .reverse()
+                .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch,
+        ).toMatchObject({
+            providers: {
+                tokensapi: {
+                    baseURL: TOKENSAPI.baseURL,
+                    models: API_MODELS,
+                },
+            },
+        });
+        expect(selections.at(-1)).toEqual({
+            provider: TOKENSAPI.agentProviderId,
+            model: 'deepseek-v3.2',
         });
     });
 });

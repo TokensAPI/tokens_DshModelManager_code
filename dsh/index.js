@@ -31,12 +31,32 @@ const CLI_TIMEOUT_MS = 180_000
 export const TOKENSAPI = Object.freeze({
   credentialRef: 'TOKENSAPI_API_KEY',
   verificationRef: 'TOKENSAPI_API_KEY_VERIFIED_SHA256',
+  settingsNamespace: 'tokens-model-manager',
+  llmSettingsNamespace: 'llm-pi-ai',
+  providerId: 'tokensapi',
+  agentProviderId: 'modlens-tokensapi',
   baseURL: 'https://tokensapi.ai/v1',
   mainModel: 'deepseek-v4-flash',
   visionModel: 'qwen3.6-35b-a3b',
 })
 
 let lastVisionFailure = null
+const managerRuntimes = new WeakMap()
+
+function managerRuntime(ctx) {
+  let runtime = managerRuntimes.get(ctx)
+  if (!runtime) {
+    runtime = {
+      mainModel: TOKENSAPI.mainModel,
+      visionModel: TOKENSAPI.visionModel,
+      models: [],
+      settings: null,
+      agentDefaultModel: null,
+    }
+    managerRuntimes.set(ctx, runtime)
+  }
+  return runtime
+}
 
 export const name = 'modlens'
 export const inject = ['tools', 'agents', 'attachments', 'llm', 'credentials']
@@ -51,6 +71,7 @@ export const MEDIA_EXT = {
 }
 
 export function apply(ctx, config = {}) {
+  managerRuntime(ctx)
   // One evidence cache for the whole plugin: every wrapper route and the
   // auto-read path share it, so the same pasted attachment is read once,
   // whichever surface asks first (issue #68; auto-read used to bypass
@@ -139,6 +160,55 @@ export function apply(ctx, config = {}) {
       }
     })
   }
+  // Model choices are ordinary DSH settings, not credentials. Keeping them in
+  // a separate namespace makes the selections survive Desktop restarts while
+  // the API key remains exclusively in the credential service.
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['settings'], (scope) => {
+      if (typeof scope.settings?.register !== 'function' || typeof scope.settings?.get !== 'function') return
+      try {
+        const modelSettings = (value) => ({ ...(value ?? {}) })
+        modelSettings.toJSON = () => ({
+          uid: 0,
+          refs: {
+            0: {
+              type: 'object',
+              meta: { default: { mainModel: TOKENSAPI.mainModel, visionModel: TOKENSAPI.visionModel } },
+              dict: {},
+            },
+          },
+        })
+        scope.settings.register(TOKENSAPI.settingsNamespace, modelSettings, {
+          base: { mainModel: TOKENSAPI.mainModel, visionModel: TOKENSAPI.visionModel },
+        })
+        const runtime = managerRuntime(ctx)
+        runtime.settings = scope.settings
+        const saved = scope.settings.get(TOKENSAPI.settingsNamespace) ?? {}
+        runtime.mainModel = normalizeModelId(saved.mainModel, TOKENSAPI.mainModel)
+        runtime.visionModel = normalizeModelId(saved.visionModel, TOKENSAPI.visionModel)
+        Promise.resolve(
+          synchronizeMainModel(ctx, runtime.mainModel, [{ id: runtime.mainModel, name: runtime.mainModel }]),
+        ).catch((error) => {
+          console.error(`[tokens-model-manager] saved main model activation skipped: ${error}`)
+        })
+      } catch (error) {
+        console.error(`[tokens-model-manager] model settings namespace skipped: ${error}`)
+      }
+    })
+    ctx.inject(['agentDefaultModel'], (scope) => {
+      if (typeof scope.agentDefaultModel?.saveSelection !== 'function') return
+      const runtime = managerRuntime(ctx)
+      runtime.agentDefaultModel = scope.agentDefaultModel
+      Promise.resolve(
+        runtime.agentDefaultModel.saveSelection({
+          provider: TOKENSAPI.agentProviderId,
+          model: runtime.mainModel,
+        }),
+      ).catch((error) => {
+        console.error(`[tokens-model-manager] saved Agent model activation skipped: ${error}`)
+      })
+    })
+  }
   // Registered as a raw JSON-Schema tool definition (no dsh package imports:
   // the developer-preview registry accepts these and out-of-tree resolution
   // of @deepseek-ai/dsh-tools is not yet reliable), so this plugin owns its
@@ -194,7 +264,7 @@ export function apply(ctx, config = {}) {
         '--provider',
         'openai',
         '--model',
-        TOKENSAPI.visionModel,
+        selectedVisionModel(ctx),
         '--timeout',
         String(CLI_TIMEOUT_MS),
       ]
@@ -1299,7 +1369,17 @@ async function readImageBlock(ctx, block, signal) {
     const cli = process.env.MODLENS_DSH_CLI || CLI_PATH
     const { stdout, stderr, code } = await runManagedVision(
       ctx,
-      [cli, '-i', file, '--provider', 'openai', '--model', TOKENSAPI.visionModel, '--timeout', String(CLI_TIMEOUT_MS)],
+      [
+        cli,
+        '-i',
+        file,
+        '--provider',
+        'openai',
+        '--model',
+        selectedVisionModel(ctx),
+        '--timeout',
+        String(CLI_TIMEOUT_MS),
+      ],
       signal,
     )
     if (code !== 0) {
@@ -1363,7 +1443,7 @@ async function runManagedVision(ctx, args, signal) {
     TOKENS_MODEL_MANAGER: '1',
     TOKENSAPI_API_KEY: apiKey,
     TOKENSAPI_BASE_URL: TOKENSAPI.baseURL,
-    TOKENSAPI_VISION_MODEL: TOKENSAPI.visionModel,
+    TOKENSAPI_VISION_MODEL: selectedVisionModel(ctx),
   })
 }
 
@@ -1940,8 +2020,84 @@ function resolvedCredentialValue(result) {
   return typeof result?.value === 'string' ? result.value : ''
 }
 
+const MAX_MODEL_COUNT = 1000
+const MAX_MODEL_ID_LENGTH = 160
+
+function normalizeModelId(value, fallback) {
+  if (typeof value !== 'string') return fallback
+  const model = value.trim()
+  if (model.length === 0 || model.length > MAX_MODEL_ID_LENGTH) return fallback
+  if ([...model].some((character) => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f)) {
+    return fallback
+  }
+  return model
+}
+
+function selectedVisionModel(ctx) {
+  return managerRuntime(ctx).visionModel
+}
+
+function publicModels(runtime) {
+  const models = [...runtime.models]
+  for (const id of [runtime.mainModel, runtime.visionModel]) {
+    if (!models.some((model) => model.id === id)) models.push({ id, name: id })
+  }
+  return models
+}
+
+async function parseManagedModels(response) {
+  let payload
+  try {
+    payload = await response.json()
+  } catch {
+    throw new ManagedCredentialError('upstream', 'TokensAPI 返回了无法识别的模型列表')
+  }
+  if (!Array.isArray(payload?.data)) {
+    throw new ManagedCredentialError('upstream', 'TokensAPI 返回了无法识别的模型列表')
+  }
+  if (payload.data.length > MAX_MODEL_COUNT) {
+    throw new ManagedCredentialError('upstream', 'TokensAPI 返回的模型数量异常')
+  }
+  const models = []
+  const seen = new Set()
+  for (const entry of payload.data) {
+    const id = normalizeModelId(entry?.id, '')
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    const name = normalizeModelId(entry?.name, id)
+    models.push({ id, name })
+  }
+  if (models.length === 0) {
+    throw new ManagedCredentialError('upstream', 'TokensAPI 没有返回可用模型')
+  }
+  return models
+}
+
+async function synchronizeMainModel(ctx, mainModel, models) {
+  const runtime = managerRuntime(ctx)
+  if (runtime.settings?.update) {
+    await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
+      providers: {
+        [TOKENSAPI.providerId]: {
+          displayName: 'TokensAPI',
+          apiKeyEnv: TOKENSAPI.credentialRef,
+          api: 'openai-responses',
+          baseURL: TOKENSAPI.baseURL,
+          models: models.map((model) => ({ id: model.id, name: model.name })),
+        },
+      },
+    })
+  }
+  if (typeof runtime.agentDefaultModel?.saveSelection === 'function') {
+    await runtime.agentDefaultModel.saveSelection({
+      provider: TOKENSAPI.agentProviderId,
+      model: mainModel,
+    })
+  }
+}
+
 /** Public gate status. It intentionally contains neither the key nor its fingerprint. */
-async function modelManagerStatus(ctx) {
+async function modelManagerStatus(ctx, request = globalThis.fetch) {
   const [credential, verification] = await Promise.all([
     ctx.credentials.describe(TOKENSAPI.credentialRef),
     ctx.credentials.describe(TOKENSAPI.verificationRef),
@@ -1956,13 +2112,29 @@ async function modelManagerStatus(ctx) {
     const fingerprint = resolvedCredentialValue(storedVerification)
     authenticated = apiKey.length > 0 && fingerprint === managedCredentialFingerprint(apiKey)
   }
+  const runtime = managerRuntime(ctx)
+  let modelListError = ''
+  if (authenticated && runtime.models.length === 0) {
+    try {
+      runtime.models = await validateManagedCredential(
+        resolvedCredentialValue(await ctx.credentials.resolve(TOKENSAPI.credentialRef)),
+        request,
+      )
+      await synchronizeMainModel(ctx, runtime.mainModel, runtime.models)
+    } catch (error) {
+      modelListError = String(error?.message ?? error)
+    }
+  }
   return {
     configured: credential.configured === true,
     authenticated,
     writable: credential.writable === true,
     provider: 'TokensAPI',
-    mainModel: TOKENSAPI.mainModel,
-    visionModel: TOKENSAPI.visionModel,
+    mainModel: runtime.mainModel,
+    visionModel: runtime.visionModel,
+    models: publicModels(runtime),
+    modelsAvailable: authenticated && runtime.models.length > 0,
+    ...(modelListError === '' ? {} : { modelListError }),
     baseURL: TOKENSAPI.baseURL,
     ...(lastVisionFailure === null ? {} : { visionDiagnostic: lastVisionFailure }),
   }
@@ -1992,8 +2164,8 @@ class ManagedCredentialError extends Error {
 
 /**
  * Validate against the same immutable TokensAPI endpoint used by the models.
- * Only the HTTP status is classified; response bodies are intentionally never
- * surfaced because gateways sometimes echo request metadata in error text.
+ * Error bodies are never surfaced because gateways sometimes echo request
+ * metadata. A successful body is reduced to bounded public model metadata.
  */
 async function validateManagedCredential(apiKey, request = globalThis.fetch) {
   if (typeof request !== 'function') {
@@ -2014,7 +2186,7 @@ async function validateManagedCredential(apiKey, request = globalThis.fetch) {
   } finally {
     clearTimeout(timeout)
   }
-  if (response?.status === 200) return
+  if (response?.status === 200) return parseManagedModels(response)
   if (response?.status === 401 || response?.status === 403) {
     throw new ManagedCredentialError('invalid_key', 'API Key 无效，请检查后重试')
   }
@@ -2024,10 +2196,44 @@ async function validateManagedCredential(apiKey, request = globalThis.fetch) {
 /** Validate first, then persist the key and its non-reversible verification marker. */
 async function setManagedCredential(ctx, value, request = globalThis.fetch) {
   const apiKey = normalizeManagedCredential(value)
-  await validateManagedCredential(apiKey, request)
+  const models = await validateManagedCredential(apiKey, request)
+  const runtime = managerRuntime(ctx)
+  const previousModels = runtime.models
+  runtime.models = models
+  try {
+    await synchronizeMainModel(ctx, runtime.mainModel, models)
+  } catch (error) {
+    runtime.models = previousModels
+    throw error
+  }
   await ctx.credentials.set(TOKENSAPI.credentialRef, apiKey)
   await ctx.credentials.set(TOKENSAPI.verificationRef, managedCredentialFingerprint(apiKey))
-  return modelManagerStatus(ctx)
+  return modelManagerStatus(ctx, request)
+}
+
+async function setManagedModels(ctx, value, request = globalThis.fetch) {
+  const status = await modelManagerStatus(ctx, request)
+  if (!status.authenticated) {
+    throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
+  }
+  if (!status.modelsAvailable) {
+    throw new ManagedCredentialError('unreachable', status.modelListError || '暂时无法获取模型列表')
+  }
+  const runtime = managerRuntime(ctx)
+  const mainModel = normalizeModelId(value?.mainModel, '')
+  const visionModel = normalizeModelId(value?.visionModel, '')
+  if (!mainModel || !visionModel) throw new TypeError('mainModel 和 visionModel 必须是有效的模型 ID')
+  const allowed = new Set(runtime.models.map((model) => model.id))
+  if (!allowed.has(mainModel) || !allowed.has(visionModel)) {
+    throw new ManagedCredentialError('invalid_model', '所选模型不在 TokensAPI 可用列表中')
+  }
+  await synchronizeMainModel(ctx, mainModel, runtime.models)
+  if (runtime.settings?.update) {
+    await runtime.settings.update(TOKENSAPI.settingsNamespace, { mainModel, visionModel })
+  }
+  runtime.mainModel = mainModel
+  runtime.visionModel = visionModel
+  return modelManagerStatus(ctx, request)
 }
 
 function registerModelManagerRoute(ctx, host) {
@@ -2072,10 +2278,23 @@ function registerModelManagerRoute(ctx, host) {
           chunks.push(chunk)
         }
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        send(200, await setManagedCredential(host, body?.apiKey))
+        if (Object.hasOwn(body ?? {}, 'apiKey')) {
+          send(200, await setManagedCredential(host, body?.apiKey))
+        } else {
+          send(200, await setManagedModels(host, body))
+        }
       } catch (error) {
         const code = typeof error?.code === 'string' ? error.code : 'invalid_input'
-        const status = code === 'invalid_key' ? 401 : code === 'unreachable' ? 503 : code === 'upstream' ? 502 : 400
+        const status =
+          code === 'invalid_key'
+            ? 401
+            : code === 'unauthenticated'
+              ? 401
+              : code === 'unreachable'
+                ? 503
+                : code === 'upstream'
+                  ? 502
+                  : 400
         send(status, { error: String(error?.message ?? error), code })
       }
     },
@@ -2154,6 +2373,9 @@ export const __modelManager = {
   validateManagedCredential,
   managedCredentialFingerprint,
   setManagedCredential,
+  setManagedModels,
+  parseManagedModels,
+  selectedVisionModel,
   readImageBlock,
   runManagedVision,
 }

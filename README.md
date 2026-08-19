@@ -27,8 +27,10 @@
 </p>
 
 This package is the TokensAPI product layer for DSH Desktop. It hides the stock
-DSH model-provider editor, pins `deepseek-v4-flash` for chat,
-`qwen3.6-35b-a3b` for vision, and `https://tokensapi.ai/v1` as the endpoint.
+DSH model-provider editor and fixes `https://tokensapi.ai/v1` as the endpoint.
+Chat defaults to `deepseek-v4-flash` and vision defaults to
+`qwen3.6-35b-a3b`; after authentication, both can be selected from the live
+TokensAPI `GET /v1/models` catalog under Settings → Models.
 The user enters only one API key in Settings → Models. DSH's credential service
 stores it; the key is never committed, returned to the browser, or logged.
 
@@ -48,7 +50,7 @@ Issues are welcome any time: [open one](https://github.com/liustack/modlens/issu
 
 ## Highlights
 
-**🥇 A managed model plugin for DeepSeek Harness Desktop:** after installation from GitHub, DSH exposes only the fixed TokensAPI main model and vision wrapper. Chat and vision become available after the user enters an API key under Settings → Models.
+**🥇 A managed model plugin for DeepSeek Harness Desktop:** after installation from GitHub, DSH exposes only TokensAPI models. Chat and vision keep product defaults but can be changed independently from the authenticated model catalog under Settings → Models.
 
 Pasting an image works two ways. **① Just paste.** On a text-only model the pasted image lands as a private temp file and its path enters the composer — the same interaction OpenCode and Pi ship — and the `modlens_read_image` tool takes it from there. **② Pick a `(modlens vision)` entry** in the model selector (it remembers your choice, so once is enough), then paste: the thumbnail stays visible in your message, closer to the Codex app feel, and the image is converted to structured evidence at request time, answered by the same underlying route. The plugin auto-discovers every provider route carrying text-only DeepSeek or GLM models and adds a wrapped entry per route (a stock install gets **`DeepSeek-V4-Flash (modlens vision)`** and **`DeepSeek-V4-Pro (modlens vision)`**; extra routes like opencode-go or zai get their own); the two families' own vision models are excluded automatically. Which paste route applies is the host's per-model call: only a model its metadata positively confirms text-only is taken over, anything unconfirmed is left alone, so vision models keep their native paste ([details](docs/harness-setup.md)).
 

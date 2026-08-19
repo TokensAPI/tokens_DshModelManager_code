@@ -877,7 +877,10 @@ window.__ModuleLoader__.load({
         missing: 'Not configured',
         ready: 'Configured',
         save: 'Save API key',
+        saveModels: 'Save model choices',
         saving: 'Saving...',
+        modelsSaved: 'Model choices saved',
+        modelsUnavailable: 'The model list is temporarily unavailable.',
         stored: 'The saved key is never returned to the browser. Leave this field empty unless replacing it.',
         main: 'Main model',
         vision: 'Vision model',
@@ -899,7 +902,10 @@ window.__ModuleLoader__.load({
         missing: '未配置',
         ready: '已配置',
         save: '保存 API Key',
+        saveModels: '保存模型选择',
         saving: '保存中…',
+        modelsSaved: '模型选择已保存',
+        modelsUnavailable: '暂时无法获取模型列表。',
         stored: '已保存的 Key 永远不会返回浏览器。只有需要替换时才重新填写。',
         main: '主模型',
         vision: '视觉模型',
@@ -1099,10 +1105,16 @@ window.__ModuleLoader__.load({
       return function TokensModelManager() {
         var statePair = react.useState(null)
         var keyPair = react.useState('')
+        var mainPair = react.useState('')
+        var visionPair = react.useState('')
+        var revealPair = react.useState(false)
         var notePair = react.useState('')
         var busyPair = react.useState(false)
         var state = statePair[0]
         var apiKey = keyPair[0]
+        var mainModel = mainPair[0]
+        var visionModel = visionPair[0]
+        var keyVisible = revealPair[0]
         var note = notePair[0]
         var busy = busyPair[0]
         var t = managerLabels()
@@ -1118,6 +1130,8 @@ window.__ModuleLoader__.load({
               )
               .then((body) => {
                 statePair[1](body)
+                mainPair[1](body.mainModel || '')
+                visionPair[1](body.visionModel || '')
                 notePair[1]('')
               })
               .catch((error) => {
@@ -1148,7 +1162,10 @@ window.__ModuleLoader__.load({
             )
             .then((body) => {
               statePair[1](body)
+              mainPair[1](body.mainModel || '')
+              visionPair[1](body.visionModel || '')
               keyPair[1]('')
+              revealPair[1](false)
               notePair[1](t.ready)
             })
             .catch((error) => {
@@ -1159,12 +1176,68 @@ window.__ModuleLoader__.load({
             })
         }
 
+        var saveModels = (event) => {
+          event.preventDefault()
+          if (!mainModel || !visionModel || busy || !state?.modelsAvailable) return
+          busyPair[1](true)
+          notePair[1]('')
+          fetch('/tokens/model-manager', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ mainModel: mainModel, visionModel: visionModel }),
+          })
+            .then((response) =>
+              response.json().then((body) => {
+                if (!response.ok) throw new Error(body.error || 'save failed')
+                return body
+              }),
+            )
+            .then((body) => {
+              statePair[1](body)
+              mainPair[1](body.mainModel || '')
+              visionPair[1](body.visionModel || '')
+              notePair[1](t.modelsSaved)
+            })
+            .catch((error) => notePair[1](String(error.message || error)))
+            .finally(() => busyPair[1](false))
+        }
+
         var row = (label, value) =>
           h(
             'div',
             { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, padding: '8px 0' } },
             h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)' } }, label),
             h('code', null, value || '—'),
+          )
+
+        var modelRow = (label, value, setValue) =>
+          h(
+            'label',
+            { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, padding: '8px 0' } },
+            h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)' } }, label),
+            h(
+              'select',
+              {
+                value: value,
+                disabled: busy || !state?.modelsAvailable,
+                onChange: (event) => {
+                  setValue(event.target.value)
+                  notePair[1]('')
+                },
+                style: {
+                  minWidth: 0,
+                  width: '100%',
+                  padding: '9px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                  background: 'var(--dsw-alias-background-layer-1, #fff)',
+                  color: 'inherit',
+                },
+              },
+              ...(state?.models || []).map((model) =>
+                h('option', { key: model.id, value: model.id }, model.name || model.id),
+              ),
+            ),
           )
 
         return h(
@@ -1184,8 +1257,31 @@ window.__ModuleLoader__.load({
                   },
                 },
                 row(t.endpoint, state.baseURL),
-                row(t.main, state.mainModel),
-                row(t.vision, state.visionModel),
+                h(
+                  'form',
+                  { onSubmit: saveModels },
+                  modelRow(t.main, mainModel, mainPair[1]),
+                  modelRow(t.vision, visionModel, visionPair[1]),
+                  !state.modelsAvailable
+                    ? h(
+                        'p',
+                        { style: { margin: '8px 0', color: '#d93025', fontSize: 13 } },
+                        state.modelListError || t.modelsUnavailable,
+                      )
+                    : null,
+                  h(
+                    'button',
+                    {
+                      type: 'submit',
+                      disabled:
+                        busy ||
+                        !state.modelsAvailable ||
+                        (mainModel === state.mainModel && visionModel === state.visionModel),
+                      style: { marginTop: 10, padding: '9px 16px', border: 0, borderRadius: 8, cursor: 'pointer' },
+                    },
+                    busy ? t.saving : t.saveModels,
+                  ),
+                ),
               )
             : null,
           h(
@@ -1205,26 +1301,48 @@ window.__ModuleLoader__.load({
               ),
             ),
             h(
-              'input',
-              Object.assign(
+              'div',
+              { style: { display: 'flex', gap: 8, marginBottom: 10 } },
+              h('input', {
+                value: apiKey,
+                disabled: busy || (state && state.writable === false),
+                placeholder: state?.configured ? t.stored : t.key,
+                onChange: (event) => {
+                  keyPair[1](event.target.value)
+                  notePair[1]('')
+                },
+                style: {
+                  width: '100%',
+                  minWidth: 0,
+                  flex: 1,
+                  boxSizing: 'border-box',
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                  ...(keyVisible ? { WebkitTextSecurity: 'none' } : secretFieldProps().style || {}),
+                },
+                type: keyVisible ? 'text' : secretFieldProps().type,
+                autoComplete: 'off',
+                autoCorrect: 'off',
+                autoCapitalize: 'off',
+                spellCheck: false,
+              }),
+              h(
+                'button',
                 {
-                  value: apiKey,
-                  disabled: busy || (state && state.writable === false),
-                  placeholder: state?.configured ? t.stored : t.key,
-                  onChange: (event) => {
-                    keyPair[1](event.target.value)
-                    notePair[1]('')
-                  },
+                  type: 'button',
+                  disabled: busy,
+                  onClick: () => revealPair[1](!keyVisible),
                   style: {
-                    width: '100%',
-                    boxSizing: 'border-box',
-                    padding: '10px 12px',
-                    borderRadius: 8,
+                    padding: '0 13px',
                     border: '1px solid var(--dsw-alias-border-l2, #ccc)',
-                    marginBottom: 10,
+                    borderRadius: 8,
+                    background: 'var(--dsw-alias-background-layer-1, #fff)',
+                    color: 'inherit',
+                    cursor: 'pointer',
                   },
                 },
-                secretFieldProps(),
+                keyVisible ? t.hide : t.show,
               ),
             ),
             h(

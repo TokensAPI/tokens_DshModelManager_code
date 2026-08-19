@@ -139,6 +139,25 @@ describe('Desktop startup API-key gate', () => {
         expect(harness.body.find((element) => element.tagName === 'FORM')).toBeTruthy();
     });
 
+    it('masks the key by default and lets the user show and hide only the current input', async () => {
+        const harness = gateHarness([
+            { status: 200, body: { configured: true, authenticated: false } },
+        ]);
+        await harness.settle();
+        const input = harness.body.find((element) => element.id === 'tokens-model-manager-key');
+        const reveal = harness.body.find(
+            (element) => element.tagName === 'BUTTON' && /Show|显示/.test(element.textContent),
+        );
+        if (!input || !reveal) throw new Error('masked key controls did not render');
+        expect(input.type).toBe('password');
+        expect(input.value).toBe('');
+        reveal.dispatch('click');
+        expect(input.type).toBe('text');
+        expect(reveal.textContent).toMatch(/Hide|隐藏/);
+        reveal.dispatch('click');
+        expect(input.type).toBe('password');
+    });
+
     it('submits the key once and unlocks after backend verification succeeds', async () => {
         const harness = gateHarness([
             { status: 200, body: { configured: false, authenticated: false } },
@@ -187,5 +206,22 @@ describe('Desktop startup API-key gate', () => {
             harness.body.find((element) => element.id === 'tokens-model-manager-gate'),
         ).toBeTruthy();
         expect(harness.body.find((element) => element.tagName === 'FORM')).toBeTruthy();
+    });
+});
+
+describe('Desktop model-manager settings section', () => {
+    it('renders two model selects populated from the backend model list', () => {
+        expect(SOURCE.match(/modelRow\(t\.(?:main|vision)/g)).toHaveLength(2);
+        expect(SOURCE).toContain('...(state?.models || []).map');
+        expect(SOURCE).toContain(
+            'body: JSON.stringify({ mainModel: mainModel, visionModel: visionModel })',
+        );
+    });
+
+    it('keeps the saved key out of the browser and provides a visibility toggle for new input', () => {
+        expect(SOURCE).toContain("type: keyVisible ? 'text' : secretFieldProps().type");
+        expect(SOURCE).toContain('keyVisible ? t.hide : t.show');
+        expect(SOURCE).toContain('placeholder: state?.configured ? t.stored : t.key');
+        expect(SOURCE).not.toContain('state.apiKey');
     });
 });
