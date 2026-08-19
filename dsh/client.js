@@ -757,8 +757,8 @@ window.__ModuleLoader__.load({
                       border: '1px solid transparent',
                       borderRadius: '8px',
                       padding: '5px 14px',
-                      background: 'var(--dsw-alias-label-primary, currentColor)',
-                      color: 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.05))',
+                      background: 'var(--dsw-alias-state-business-primary, currentColor)',
+                      color: 'var(--dsw-alias-bg-layer-2, rgba(127,127,127,0.05))',
                       opacity: dirty ? 1 : 0.4,
                     },
                   },
@@ -915,7 +915,7 @@ window.__ModuleLoader__.load({
       overlay.setAttribute('role', 'dialog')
       overlay.setAttribute('aria-modal', 'true')
       overlay.style.cssText =
-        'position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:linear-gradient(145deg,#f4f7ff,#eef2ff 45%,#f8fafc);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111827'
+        'position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;padding:24px;box-sizing:border-box;background:linear-gradient(145deg,var(--dsw-alias-bg-layer-1),var(--dsw-alias-bg-layer-1) 45%,var(--dsw-alias-bg-layer-2));font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--dsw-alias-label-primary)'
       var oldOverflow = document.documentElement?.style?.overflow || ''
       if (document.documentElement?.style) document.documentElement.style.overflow = 'hidden'
       root.appendChild(overlay)
@@ -940,12 +940,12 @@ window.__ModuleLoader__.load({
         var card = node(
           'div',
           undefined,
-          'width:min(440px,100%);box-sizing:border-box;padding:32px;border:1px solid #dbe3f0;border-radius:20px;background:rgba(255,255,255,.96);box-shadow:0 24px 70px rgba(30,64,175,.16)',
+          'width:min(440px,100%);box-sizing:border-box;padding:32px;border:1px solid var(--dsw-alias-bg-layer-3);border-radius:20px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 24px 70px rgba(30,64,175,.16)',
         )
         var brand = node(
           'div',
           'TokensAPI',
-          'font-size:14px;font-weight:750;letter-spacing:.12em;color:#3157d5;margin-bottom:16px',
+          'font-size:14px;font-weight:750;letter-spacing:.12em;color:var(--dsw-alias-state-business-primary);margin-bottom:16px',
         )
         card.appendChild(brand)
         overlay.appendChild(card)
@@ -955,7 +955,7 @@ window.__ModuleLoader__.load({
       function renderChecking() {
         var card = cardShell()
         card.appendChild(node('h1', t.gateTitle, 'font-size:25px;line-height:1.25;margin:0 0 12px'))
-        card.appendChild(node('p', t.checking, 'margin:0;color:#64748b;line-height:1.6'))
+        card.appendChild(node('p', t.checking, 'margin:0;color:var(--dsw-alias-label-secondary);line-height:1.6'))
       }
 
       function renderForm(status, errorMessage) {
@@ -965,7 +965,7 @@ window.__ModuleLoader__.load({
           node(
             'p',
             status?.configured && !status?.authenticated ? t.gateReverify : t.gateIntro,
-            'margin:0 0 22px;color:#64748b;line-height:1.6',
+            'margin:0 0 22px;color:var(--dsw-alias-label-secondary);line-height:1.6',
           ),
         )
         var form = node('form')
@@ -975,7 +975,7 @@ window.__ModuleLoader__.load({
         var input = node(
           'input',
           undefined,
-          'min-width:0;flex:1;box-sizing:border-box;padding:12px 13px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:#0f172a;font:inherit;outline:none',
+          'min-width:0;flex:1;box-sizing:border-box;padding:12px 13px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;outline:none',
         )
         input.id = 'tokens-model-manager-key'
         input.name = 'apiKey'
@@ -985,7 +985,7 @@ window.__ModuleLoader__.load({
         var reveal = node(
           'button',
           t.show,
-          'padding:0 13px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:#334155;cursor:pointer',
+          'padding:0 13px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);cursor:pointer',
         )
         reveal.type = 'button'
         reveal.addEventListener('click', () => {
@@ -999,13 +999,13 @@ window.__ModuleLoader__.load({
         var message = node(
           'p',
           errorMessage || '',
-          `min-height:21px;margin:10px 0;color:${errorMessage ? '#b42318' : '#64748b'};font-size:13px;line-height:1.5`,
+          `min-height:21px;margin:10px 0;color:${errorMessage ? 'var(--dsw-alias-state-error-primary)' : 'var(--dsw-alias-label-secondary)'};font-size:13px;line-height:1.5`,
         )
         message.setAttribute(errorMessage ? 'role' : 'aria-live', errorMessage ? 'alert' : 'polite')
         var submit = node(
           'button',
           t.verify,
-          'width:100%;padding:12px 16px;border:0;border-radius:10px;background:#3157d5;color:#fff;font:inherit;font-weight:700;cursor:pointer',
+          'width:100%;padding:12px 16px;border:0;border-radius:10px;background:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-bg-layer-2);font:inherit;font-weight:700;cursor:pointer',
         )
         submit.type = 'submit'
         form.appendChild(label)
@@ -1017,7 +1017,7 @@ window.__ModuleLoader__.load({
           var apiKey = input.value.trim()
           if (!apiKey) {
             message.textContent = t.missing
-            message.style.color = '#b42318'
+            message.style.color = 'var(--dsw-alias-state-error-primary)'
             return
           }
           input.disabled = true
@@ -1043,7 +1043,7 @@ window.__ModuleLoader__.load({
             })
             .catch((error) => {
               message.textContent = String(error.message || error)
-              message.style.color = '#b42318'
+              message.style.color = 'var(--dsw-alias-state-error-primary)'
               input.disabled = false
               reveal.disabled = false
               submit.disabled = false
@@ -1265,8 +1265,8 @@ window.__ModuleLoader__.load({
                     gap: 12,
                     padding: '9px 12px',
                     borderRadius: 10,
-                    border: `1px solid ${expanded ? 'var(--dsw-alias-primary, #3157d5)' : 'var(--dsw-alias-border-l2, #d8dce5)'}`,
-                    background: 'var(--dsw-alias-background-layer-1, #fff)',
+                    border: `1px solid ${expanded ? 'var(--dsw-alias-primary, var(--dsw-alias-state-business-primary))' : 'var(--dsw-alias-border-l2, var(--dsw-alias-border-l2))'}`,
+                    background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
                     color: 'inherit',
                     font: 'inherit',
                     textAlign: 'left',
@@ -1303,9 +1303,9 @@ window.__ModuleLoader__.load({
                         left: 0,
                         right: 0,
                         padding: 8,
-                        border: '1px solid var(--dsw-alias-border-l2, #d8dce5)',
+                        border: '1px solid var(--dsw-alias-border-l2, var(--dsw-alias-border-l2))',
                         borderRadius: 12,
-                        background: 'var(--dsw-alias-background-layer-1, #fff)',
+                        background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
                         boxShadow: '0 14px 36px rgba(15,23,42,.14)',
                       },
                     },
@@ -1318,9 +1318,9 @@ window.__ModuleLoader__.load({
                         boxSizing: 'border-box',
                         padding: '9px 10px',
                         marginBottom: 6,
-                        border: '1px solid var(--dsw-alias-border-l2, #d8dce5)',
+                        border: '1px solid var(--dsw-alias-border-l2, var(--dsw-alias-border-l2))',
                         borderRadius: 8,
-                        background: 'var(--dsw-alias-background-layer-1, #fff)',
+                        background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
                         color: 'inherit',
                         font: 'inherit',
                         outline: 'none',
@@ -1355,7 +1355,7 @@ window.__ModuleLoader__.load({
                                   borderRadius: 8,
                                   background:
                                     model.id === value
-                                      ? 'var(--dsw-alias-background-selected, #eef2ff)'
+                                      ? 'var(--dsw-alias-background-selected, var(--dsw-alias-bg-layer-1))'
                                       : 'transparent',
                                   color: 'inherit',
                                   font: 'inherit',
@@ -1409,7 +1409,7 @@ window.__ModuleLoader__.load({
                   !state.modelsAvailable
                     ? h(
                         'p',
-                        { style: { margin: '8px 0', color: '#d93025', fontSize: 13 } },
+                        { style: { margin: '8px 0', color: 'var(--dsw-alias-state-error-primary)', fontSize: 13 } },
                         state.modelListError || t.modelsUnavailable,
                       )
                     : null,
@@ -1421,7 +1421,22 @@ window.__ModuleLoader__.load({
                         busy ||
                         !state.modelsAvailable ||
                         (mainModel === state.mainModel && visionModel === state.visionModel),
-                      style: { marginTop: 10, padding: '9px 16px', border: 0, borderRadius: 8, cursor: 'pointer' },
+                      style: {
+                        marginTop: 10,
+                        padding: '9px 16px',
+                        border: 0,
+                        borderRadius: 8,
+                        cursor: 'pointer',
+                        background: 'var(--dsw-alias-state-business-primary)',
+                        color: 'var(--dsw-alias-bg-layer-2)',
+                        fontWeight: 700,
+                        opacity:
+                          busy ||
+                          !state.modelsAvailable ||
+                          (mainModel === state.mainModel && visionModel === state.visionModel)
+                            ? 0.5
+                            : 1,
+                      },
                     },
                     busy ? t.saving : t.saveModels,
                   ),
@@ -1440,7 +1455,7 @@ window.__ModuleLoader__.load({
               h('strong', null, t.key),
               h(
                 'span',
-                { style: { color: state?.authenticated ? '#34a853' : '#d93025' } },
+                { style: { color: state?.authenticated ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } },
                 state?.authenticated ? t.ready : t.missing,
               ),
             ),
@@ -1481,7 +1496,7 @@ window.__ModuleLoader__.load({
                     padding: '0 13px',
                     border: '1px solid var(--dsw-alias-border-l2, #ccc)',
                     borderRadius: 8,
-                    background: 'var(--dsw-alias-background-layer-1, #fff)',
+                    background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
                     color: 'inherit',
                     cursor: 'pointer',
                   },
@@ -1498,7 +1513,7 @@ window.__ModuleLoader__.load({
                     padding: '0 13px',
                     border: '1px solid var(--dsw-alias-border-l2, #ccc)',
                     borderRadius: 8,
-                    background: 'var(--dsw-alias-background-layer-1, #fff)',
+                    background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
                     color: 'inherit',
                     cursor: 'pointer',
                   },
@@ -1537,7 +1552,16 @@ window.__ModuleLoader__.load({
               {
                 type: 'submit',
                 disabled: busy || !apiKey.trim() || (state && state.writable === false),
-                style: { padding: '9px 16px', border: 0, borderRadius: 8, cursor: 'pointer' },
+                style: {
+                  padding: '9px 16px',
+                  border: 0,
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  background: 'var(--dsw-alias-state-business-primary)',
+                  color: 'var(--dsw-alias-bg-layer-2)',
+                  fontWeight: 700,
+                  opacity: busy || !apiKey.trim() || (state && state.writable === false) ? 0.5 : 1,
+                },
               },
               busy ? t.saving : t.save,
             ),
