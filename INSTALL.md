@@ -14,24 +14,20 @@ alone leaves the user without the `modlens_read_image` tool and without the
 [#32](https://github.com/liustack/modlens/issues/32)).
 
 You are on dsh if `~/.dsh/` exists, or the conversation runs in the DeepSeek
-Harness desktop app. In PowerShell, resolve `main` to an immutable commit and
-authorize that exact Git package to run its required build:
+Harness desktop app. The repository commits its runnable vision CLI, so a
+GitHub install needs no dependency lifecycle script or build allowlist:
 
 Current package identity: `@tokens/dsh-model-manager@0.1.0`.
 
 ```powershell
-$repo = 'TokensAPI/tokens_DshModelManager_code'
-$sha = (Invoke-RestMethod "https://api.github.com/repos/$repo/commits/main").sha
-$build = "@tokens/dsh-model-manager@https://codeload.github.com/${repo}/tar.gz/${sha}"
-npx -y @deepseek-ai/dsh plugin --profile desktop add "github:${repo}#${sha}" "--allow-build=$build"
+npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"
 ```
 
 Then restart dsh. Settings → Models must show the fixed endpoint, main model,
 vision model, and one API-key field. The key is stored by DSH's credential
 service and is never returned to the browser. Skip steps 1 and 2: there is no
-skill folder to copy. The explicit `--allow-build` is required because pnpm
-blocks prepare scripts from Git dependencies unless the exact resolved source
-is approved.
+skill folder to copy. The committed bundle means pnpm does not need to execute
+an install-time build for the Git dependency.
 
 On first launch, a full-screen API-key gate replaces the chat shell. The Host
 validates the submitted key with TokensAPI `GET /v1/models` and stores it only

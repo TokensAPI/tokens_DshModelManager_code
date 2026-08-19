@@ -1,5 +1,8 @@
-# build output
-dist/
+# The distributable CLI bundle is committed so DSH can install this repository
+# directly from GitHub without running lifecycle scripts. Ignore any other
+# accidental build output under dist/.
+dist/*
+!dist/main.js
 # coverage reports
 coverage/
 # generated types

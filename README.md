@@ -61,17 +61,14 @@ Pasting an image works two ways. **① Just paste.** On a text-only model the pa
 
 ## Installation
 
-**DeepSeek Harness Desktop:** run this in PowerShell. The command resolves
-`main` to an immutable commit and authorizes only that exact Git package to run
-the build required by pnpm:
+**DeepSeek Harness Desktop:** run this in PowerShell. The repository includes
+the built vision CLI, so GitHub installation does not run dependency lifecycle
+scripts or need a build allowlist:
 
 Current package identity: `@tokens/dsh-model-manager@0.1.0`.
 
 ```powershell
-$repo = 'TokensAPI/tokens_DshModelManager_code'
-$sha = (Invoke-RestMethod "https://api.github.com/repos/$repo/commits/main").sha
-$build = "@tokens/dsh-model-manager@https://codeload.github.com/${repo}/tar.gz/${sha}"
-npx -y @deepseek-ai/dsh plugin --profile desktop add "github:${repo}#${sha}" "--allow-build=$build"
+npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"
 ```
 
 Restart Desktop, then enter the TokensAPI API key under Settings → Models. To uninstall:

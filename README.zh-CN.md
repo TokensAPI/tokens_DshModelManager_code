@@ -81,13 +81,10 @@ agy                                                           # 浏览器完成�
 当前包标识：`@tokens/dsh-model-manager@0.1.0`。
 
 ```powershell
-$repo = 'TokensAPI/tokens_DshModelManager_code'
-$sha = (Invoke-RestMethod "https://api.github.com/repos/$repo/commits/main").sha
-$build = "@tokens/dsh-model-manager@https://codeload.github.com/${repo}/tar.gz/${sha}"
-npx -y @deepseek-ai/dsh plugin --profile desktop add "github:${repo}#${sha}" "--allow-build=$build"
+npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"
 ```
 
-`--allow-build` 只授权这个已解析到具体提交号的插件执行 `prepare`，用于生成视觉 CLI。安装后重启 Desktop，在“设置 → 模型”填写 TokensAPI API Key。
+仓库已经提交可直接运行的视觉 CLI，GitHub 安装不会执行依赖生命周期脚本，也不需要配置构建白名单。安装后重启 Desktop，在“设置 → 模型”填写 TokensAPI API Key。
 
 卸载：
 

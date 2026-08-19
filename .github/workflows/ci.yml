@@ -33,3 +33,5 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Verify committed Git distribution bundle
+        run: git diff --exit-code -- dist/main.js

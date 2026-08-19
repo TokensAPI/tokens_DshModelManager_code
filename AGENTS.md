@@ -81,6 +81,11 @@ modlens config show
 ## .gitignore must include
 
 - `node_modules/`
-- `dist/`
+- all `dist/` output except the committed `dist/main.js` Git distribution bundle
 - `skills/**/outputs/`
 - common logs/cache/system files
+
+`dist/main.js` is an intentional versioned runtime input, not disposable local
+output. Git-hosted DSH installs must never need a dependency lifecycle script.
+After changing CLI sources, rebuild it and commit the matching bundle; CI checks
+that a clean rebuild leaves it unchanged.

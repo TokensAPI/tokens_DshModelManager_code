@@ -9,7 +9,7 @@
     "scripts": {
         "dev": "vite build --watch",
         "build": "vite build",
-        "prepare": "pnpm build",
+        "prepublishOnly": "pnpm build",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "coverage": "vitest run --coverage",
@@ -17,7 +17,6 @@
         "format": "biome check --write src scripts",
         "eval": "node evals/run.mjs",
         "release": "node scripts/release.mjs",
-        "prepublishOnly": "pnpm build",
         "docs:list": "node scripts/docs-list.js"
     },
     "files": [

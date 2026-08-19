@@ -58,6 +58,8 @@ jobs:
           fi
       - run: pnpm test
       - run: pnpm build
+      - name: Verify committed Git distribution bundle
+        run: git diff --exit-code -- dist/main.js
       # Everything that can refuse the release must run before the one
       # irreversible step. A hand-pushed tag with no CHANGELOG section used to
       # publish to npm first and only then fail on the notes; now the notes are
