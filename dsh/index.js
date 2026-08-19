@@ -2236,6 +2236,20 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
   return modelManagerStatus(ctx, request)
 }
 
+/** Return the key only for an explicit same-origin POST from the settings UI. */
+async function revealManagedCredential(ctx) {
+  const [credential, verification] = await Promise.all([
+    ctx.credentials.resolve(TOKENSAPI.credentialRef),
+    ctx.credentials.resolve(TOKENSAPI.verificationRef),
+  ])
+  const apiKey = resolvedCredentialValue(credential).trim()
+  const fingerprint = resolvedCredentialValue(verification)
+  if (!apiKey || fingerprint !== managedCredentialFingerprint(apiKey)) {
+    throw new ManagedCredentialError('unauthenticated', '没有可查看的已验证 API Key')
+  }
+  return { apiKey }
+}
+
 function registerModelManagerRoute(ctx, host) {
   ctx.webServer.register({
     name: 'tokens-model-manager',
@@ -2278,7 +2292,9 @@ function registerModelManagerRoute(ctx, host) {
           chunks.push(chunk)
         }
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        if (Object.hasOwn(body ?? {}, 'apiKey')) {
+        if (body?.action === 'revealApiKey') {
+          send(200, await revealManagedCredential(host))
+        } else if (Object.hasOwn(body ?? {}, 'apiKey')) {
           send(200, await setManagedCredential(host, body?.apiKey))
         } else {
           send(200, await setManagedModels(host, body))
@@ -2374,6 +2390,7 @@ export const __modelManager = {
   managedCredentialFingerprint,
   setManagedCredential,
   setManagedModels,
+  revealManagedCredential,
   parseManagedModels,
   selectedVisionModel,
   readImageBlock,

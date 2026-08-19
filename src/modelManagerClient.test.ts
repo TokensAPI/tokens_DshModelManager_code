@@ -210,18 +210,31 @@ describe('Desktop startup API-key gate', () => {
 });
 
 describe('Desktop model-manager settings section', () => {
-    it('renders two model selects populated from the backend model list', () => {
+    it('renders two searchable custom model pickers populated from the backend list', () => {
         expect(SOURCE.match(/modelRow\(t\.(?:main|vision)/g)).toHaveLength(2);
-        expect(SOURCE).toContain('...(state?.models || []).map');
+        expect(SOURCE).toContain('maxHeight: 260');
+        expect(SOURCE).toContain('placeholder: t.searchModels');
+        const pickerSource = SOURCE.slice(
+            SOURCE.indexOf('var modelRow'),
+            SOURCE.indexOf('{ style: { maxWidth: 760', SOURCE.indexOf('var modelRow')),
+        );
+        expect(pickerSource).not.toContain("'select'");
         expect(SOURCE).toContain(
             'body: JSON.stringify({ mainModel: mainModel, visionModel: visionModel })',
         );
     });
 
-    it('keeps the saved key out of the browser and provides a visibility toggle for new input', () => {
+    it('reveals and copies a saved key only after an explicit user action', () => {
         expect(SOURCE).toContain("type: keyVisible ? 'text' : secretFieldProps().type");
         expect(SOURCE).toContain('keyVisible ? t.hide : t.show');
         expect(SOURCE).toContain('placeholder: state?.configured ? t.stored : t.key');
+        expect(SOURCE).toContain("body: JSON.stringify({ action: 'revealApiKey' })");
+        expect(SOURCE).toContain('navigator.clipboard.writeText(value)');
         expect(SOURCE).not.toContain('state.apiKey');
+        expect(SOURCE).not.toContain('返回浏览器');
+    });
+
+    it('does not mount the redundant legacy vision-engine plugin card', () => {
+        expect(SOURCE).not.toContain('registerCard(ctx)');
     });
 });

@@ -32,7 +32,8 @@ Chat defaults to `deepseek-v4-flash` and vision defaults to
 `qwen3.6-35b-a3b`; after authentication, both can be selected from the live
 TokensAPI `GET /v1/models` catalog under Settings → Models.
 The user enters only one API key in Settings → Models. DSH's credential service
-stores it; the key is never committed, returned to the browser, or logged.
+stores it; normal status responses and logs never contain the key. The settings
+page reads it only after an explicit Show or Copy action.
 
 Desktop starts behind a fail-closed full-screen gate. Unknown auth state, a
 missing key, an unverified legacy key, or a failed status request keeps the

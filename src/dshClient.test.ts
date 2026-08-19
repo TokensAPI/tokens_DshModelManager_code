@@ -325,7 +325,7 @@ describe('dsh paste-to-path browser half', () => {
     });
 });
 
-describe('settings card (#39)', () => {
+describe('legacy settings-card helpers (#39)', () => {
     // The card half, loaded the same way the paste half is: the script with
     // browser globals handed in. What matters here is that it never mounts
     // where its route is off, and that pending grants survive an engine
@@ -408,25 +408,18 @@ describe('settings card (#39)', () => {
         expect(off.slotRegistrations).toEqual([]);
     });
 
-    it('mounts when the route answers', async () => {
+    it('does not mount the legacy ModLens card when its route answers', async () => {
         const on = loadCard(200);
         await new Promise((resolve) => setTimeout(resolve, 10));
-        expect(on.slotRegistrations).toEqual(['modlens']);
+        expect(on.slotRegistrations).toEqual([]);
     });
 
-    it('registers under the key rc.7 dispatches by and the id rc.6 lists by (#61, #65)', async () => {
-        // rc.7 made settings.plugin.item a keyed slot: register throws without
-        // options.key, and the card renders only when the key matches a
-        // settings namespace the host serves. The host half registers that
-        // namespace as 'modlens' (see dshPlugin.test.ts), so the two literals
-        // must stay equal. rc.6's list slot required options.id instead, and
-        // one client.js serves both, so both ride along.
+    it('leaves no settings.plugin.item entry behind', async () => {
         const on = loadCard(200);
         await new Promise((resolve) => setTimeout(resolve, 10));
 
         const spec = on.slotSpecs.find((entry) => entry.name === 'settings.plugin.item');
-        expect(spec?.key).toBe('modlens');
-        expect(spec?.id).toBe('modlens');
+        expect(spec).toBeUndefined();
     });
 
     it('sends only what the save is about', async () => {

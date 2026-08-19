@@ -349,6 +349,17 @@ describe('TokensAPI model discovery and selection', () => {
         expect(JSON.stringify(status)).not.toContain('tk-never-return-this');
     });
 
+    it('reveals a saved key only through the explicit verified-key action', async () => {
+        const harness = credentialHarness('tk-explicit-reveal', true);
+        await expect(__modelManager.revealManagedCredential(harness.ctx)).resolves.toEqual({
+            apiKey: 'tk-explicit-reveal',
+        });
+        harness.verification = 'sha256:not-the-key';
+        await expect(__modelManager.revealManagedCredential(harness.ctx)).rejects.toMatchObject({
+            code: 'unauthenticated',
+        });
+    });
+
     it('persists choices and updates the live chat provider plus Agent default', async () => {
         const credential = credentialHarness();
         const values = new Map<string, Record<string, unknown>>();

@@ -828,51 +828,11 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function registerCard(ctx) {
-      // Reaching for an undeclared service throws in cordis, so the optional
-      // dependency rides a scoped ctx.inject: the closure runs where slots
-      // exists and never runs where it does not, exactly as the host half
-      // takes webServer.
-      if (typeof ctx.inject !== 'function') return
-      ctx.inject(['slots'], (scope) => {
-        // The card and its route live and die together: with the host route
-        // off (settingsCard: false, or no web profile) a card would only
-        // render an error, which is not what turning a feature off means.
-        // Any response at all proves the route exists; only a 404 or a
-        // network failure reads as absent.
-        fetch('/modlens/config')
-          .then((response) => {
-            if (response.status === 404) return
-            try {
-              mountCard(scope)
-            } catch (error) {
-              console.error(`[modlens] settings card skipped: ${error}`)
-            }
-          })
-          .catch(() => {})
-      })
-    }
-
-    function mountCard(ctx) {
-      var react
-      try {
-        react = require('react')
-      } catch (error) {
-        console.error(`[modlens] settings card skipped: ${error}`)
-        return
-      }
-      var ui = require('@deepseek-ai/dsh-client-ui-primitives')
-      var Card = ConfigCard(react, ui)
-      ctx.slots.inject('settings.plugin.item', function* () {
-        yield ctx.slots.register({ name: 'settings.plugin.item', id: 'modlens', key: 'modlens', order: 30 }, Card)
-      })
-    }
-
     var MANAGER_TEXT = {
       en: {
         nav: 'Models',
         title: 'TokensAPI models',
-        intro: 'The endpoint and models are managed by this plugin. Enter your API key to enable chat and vision.',
+        intro: 'Manage the TokensAPI endpoint, chat model, vision model, and API key in one place.',
         key: 'API key',
         missing: 'Not configured',
         ready: 'Configured',
@@ -881,7 +841,13 @@ window.__ModuleLoader__.load({
         saving: 'Saving...',
         modelsSaved: 'Model choices saved',
         modelsUnavailable: 'The model list is temporarily unavailable.',
-        stored: 'The saved key is never returned to the browser. Leave this field empty unless replacing it.',
+        stored: 'Saved API key',
+        keyHint: 'Use Show or Copy, or type a new key to replace the saved value.',
+        copy: 'Copy',
+        copied: 'API key copied',
+        copyFailed: 'Unable to copy the API key',
+        searchModels: 'Search models',
+        noModels: 'No matching models',
         main: 'Main model',
         vision: 'Vision model',
         endpoint: 'Endpoint',
@@ -897,7 +863,7 @@ window.__ModuleLoader__.load({
       zh: {
         nav: '模型',
         title: 'TokensAPI 模型',
-        intro: '接口地址和模型由插件统一管理。填写 API Key 后，聊天和识图能力才可使用。',
+        intro: '在这里统一管理 TokensAPI 接口、主模型、视觉模型和 API Key。',
         key: 'API Key',
         missing: '未配置',
         ready: '已配置',
@@ -906,7 +872,13 @@ window.__ModuleLoader__.load({
         saving: '保存中…',
         modelsSaved: '模型选择已保存',
         modelsUnavailable: '暂时无法获取模型列表。',
-        stored: '已保存的 Key 永远不会返回浏览器。只有需要替换时才重新填写。',
+        stored: 'API Key 已保存',
+        keyHint: '可点击“显示”或“复制”，也可以直接输入新 Key 进行替换。',
+        copy: '复制',
+        copied: 'API Key 已复制',
+        copyFailed: '无法复制 API Key',
+        searchModels: '搜索模型',
+        noModels: '没有匹配的模型',
         main: '主模型',
         vision: '视觉模型',
         endpoint: '接口地址',
@@ -1108,6 +1080,8 @@ window.__ModuleLoader__.load({
         var mainPair = react.useState('')
         var visionPair = react.useState('')
         var revealPair = react.useState(false)
+        var pickerPair = react.useState('')
+        var queryPair = react.useState('')
         var notePair = react.useState('')
         var busyPair = react.useState(false)
         var state = statePair[0]
@@ -1115,6 +1089,8 @@ window.__ModuleLoader__.load({
         var mainModel = mainPair[0]
         var visionModel = visionPair[0]
         var keyVisible = revealPair[0]
+        var openPicker = pickerPair[0]
+        var modelQuery = queryPair[0]
         var note = notePair[0]
         var busy = busyPair[0]
         var t = managerLabels()
@@ -1202,6 +1178,47 @@ window.__ModuleLoader__.load({
             .finally(() => busyPair[1](false))
         }
 
+        var fetchStoredKey = () =>
+          fetch('/tokens/model-manager', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'revealApiKey' }),
+          }).then((response) =>
+            response.json().then((body) => {
+              if (!response.ok || typeof body.apiKey !== 'string') throw new Error(body.error || 'load failed')
+              keyPair[1](body.apiKey)
+              return body.apiKey
+            }),
+          )
+
+        var toggleKey = () => {
+          if (busy) return
+          if (apiKey) {
+            revealPair[1](!keyVisible)
+            return
+          }
+          busyPair[1](true)
+          notePair[1]('')
+          fetchStoredKey()
+            .then(() => revealPair[1](true))
+            .catch((error) => notePair[1](String(error.message || error)))
+            .finally(() => busyPair[1](false))
+        }
+
+        var copyKey = () => {
+          if (busy) return
+          busyPair[1](true)
+          notePair[1]('')
+          Promise.resolve(apiKey || fetchStoredKey())
+            .then((value) => {
+              if (typeof navigator.clipboard?.writeText !== 'function') throw new Error(t.copyFailed)
+              return navigator.clipboard.writeText(value)
+            })
+            .then(() => notePair[1](t.copied))
+            .catch((error) => notePair[1](String(error.message || error)))
+            .finally(() => busyPair[1](false))
+        }
+
         var row = (label, value) =>
           h(
             'div',
@@ -1210,35 +1227,162 @@ window.__ModuleLoader__.load({
             h('code', null, value || '—'),
           )
 
-        var modelRow = (label, value, setValue) =>
-          h(
-            'label',
+        var modelRow = (label, value, setValue, pickerId) => {
+          var expanded = openPicker === pickerId
+          var query = modelQuery.trim().toLowerCase()
+          var models = (state?.models || []).filter((model) => {
+            if (!query) return true
+            return `${model.id} ${model.name || ''}`.toLowerCase().includes(query)
+          })
+          return h(
+            'div',
             { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, padding: '8px 0' } },
-            h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)' } }, label),
+            h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)', paddingTop: 10 } }, label),
             h(
-              'select',
+              'div',
               {
-                value: value,
-                disabled: busy || !state?.modelsAvailable,
-                onChange: (event) => {
-                  setValue(event.target.value)
-                  notePair[1]('')
-                },
-                style: {
-                  minWidth: 0,
-                  width: '100%',
-                  padding: '9px 10px',
-                  borderRadius: 8,
-                  border: '1px solid var(--dsw-alias-border-l2, #ccc)',
-                  background: 'var(--dsw-alias-background-layer-1, #fff)',
-                  color: 'inherit',
+                style: { position: 'relative', minWidth: 0 },
+                onBlur: (event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) pickerPair[1]('')
                 },
               },
-              ...(state?.models || []).map((model) =>
-                h('option', { key: model.id, value: model.id }, model.name || model.id),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  disabled: busy || !state?.modelsAvailable,
+                  'aria-expanded': expanded,
+                  onClick: () => {
+                    pickerPair[1](expanded ? '' : pickerId)
+                    queryPair[1]('')
+                  },
+                  style: {
+                    width: '100%',
+                    minHeight: 44,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    padding: '9px 12px',
+                    borderRadius: 10,
+                    border: `1px solid ${expanded ? 'var(--dsw-alias-primary, #3157d5)' : 'var(--dsw-alias-border-l2, #d8dce5)'}`,
+                    background: 'var(--dsw-alias-background-layer-1, #fff)',
+                    color: 'inherit',
+                    font: 'inherit',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    boxShadow: expanded ? '0 0 0 3px rgba(49,87,213,.10)' : 'none',
+                  },
+                },
+                h(
+                  'span',
+                  { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                  value || '—',
+                ),
+                h(
+                  'span',
+                  {
+                    'aria-hidden': 'true',
+                    style: {
+                      color: 'var(--dsw-alias-label-secondary, #666)',
+                      transform: expanded ? 'rotate(180deg)' : 'none',
+                      transition: 'transform .15s ease',
+                    },
+                  },
+                  '⌄',
+                ),
               ),
+              expanded
+                ? h(
+                    'div',
+                    {
+                      style: {
+                        position: 'absolute',
+                        zIndex: 50,
+                        top: 'calc(100% + 6px)',
+                        left: 0,
+                        right: 0,
+                        padding: 8,
+                        border: '1px solid var(--dsw-alias-border-l2, #d8dce5)',
+                        borderRadius: 12,
+                        background: 'var(--dsw-alias-background-layer-1, #fff)',
+                        boxShadow: '0 14px 36px rgba(15,23,42,.14)',
+                      },
+                    },
+                    h('input', {
+                      value: modelQuery,
+                      placeholder: t.searchModels,
+                      onChange: (event) => queryPair[1](event.target.value),
+                      style: {
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        padding: '9px 10px',
+                        marginBottom: 6,
+                        border: '1px solid var(--dsw-alias-border-l2, #d8dce5)',
+                        borderRadius: 8,
+                        background: 'var(--dsw-alias-background-layer-1, #fff)',
+                        color: 'inherit',
+                        font: 'inherit',
+                        outline: 'none',
+                      },
+                    }),
+                    h(
+                      'div',
+                      { style: { maxHeight: 260, overflowY: 'auto', padding: '2px 0' } },
+                      models.length === 0
+                        ? h(
+                            'div',
+                            { style: { padding: '12px 10px', color: 'var(--dsw-alias-label-secondary, #666)' } },
+                            t.noModels,
+                          )
+                        : models.map((model) =>
+                            h(
+                              'button',
+                              {
+                                key: model.id,
+                                type: 'button',
+                                onClick: () => {
+                                  setValue(model.id)
+                                  pickerPair[1]('')
+                                  queryPair[1]('')
+                                  notePair[1]('')
+                                },
+                                style: {
+                                  width: '100%',
+                                  display: 'block',
+                                  padding: '9px 10px',
+                                  border: 0,
+                                  borderRadius: 8,
+                                  background:
+                                    model.id === value
+                                      ? 'var(--dsw-alias-background-selected, #eef2ff)'
+                                      : 'transparent',
+                                  color: 'inherit',
+                                  font: 'inherit',
+                                  textAlign: 'left',
+                                  cursor: 'pointer',
+                                },
+                              },
+                              model.name && model.name !== model.id
+                                ? h(
+                                    'span',
+                                    null,
+                                    h('span', { style: { display: 'block' } }, model.name),
+                                    h(
+                                      'code',
+                                      { style: { color: 'var(--dsw-alias-label-secondary, #666)', fontSize: 12 } },
+                                      model.id,
+                                    ),
+                                  )
+                                : model.id,
+                            ),
+                          ),
+                    ),
+                  )
+                : null,
             ),
           )
+        }
 
         return h(
           'div',
@@ -1260,8 +1404,8 @@ window.__ModuleLoader__.load({
                 h(
                   'form',
                   { onSubmit: saveModels },
-                  modelRow(t.main, mainModel, mainPair[1]),
-                  modelRow(t.vision, visionModel, visionPair[1]),
+                  modelRow(t.main, mainModel, mainPair[1], 'main'),
+                  modelRow(t.vision, visionModel, visionPair[1], 'vision'),
                   !state.modelsAvailable
                     ? h(
                         'p',
@@ -1331,8 +1475,8 @@ window.__ModuleLoader__.load({
                 'button',
                 {
                   type: 'button',
-                  disabled: busy,
-                  onClick: () => revealPair[1](!keyVisible),
+                  disabled: busy || !state?.configured,
+                  onClick: toggleKey,
                   style: {
                     padding: '0 13px',
                     border: '1px solid var(--dsw-alias-border-l2, #ccc)',
@@ -1344,7 +1488,37 @@ window.__ModuleLoader__.load({
                 },
                 keyVisible ? t.hide : t.show,
               ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  disabled: busy || !state?.configured,
+                  onClick: copyKey,
+                  style: {
+                    padding: '0 13px',
+                    border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                    borderRadius: 8,
+                    background: 'var(--dsw-alias-background-layer-1, #fff)',
+                    color: 'inherit',
+                    cursor: 'pointer',
+                  },
+                },
+                t.copy,
+              ),
             ),
+            state?.configured
+              ? h(
+                  'p',
+                  {
+                    style: {
+                      margin: '-2px 0 8px',
+                      fontSize: 13,
+                      color: 'var(--dsw-alias-label-secondary, #666)',
+                    },
+                  },
+                  t.keyHint,
+                )
+              : null,
             h(
               'p',
               {
@@ -1402,7 +1576,10 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       var disposeGate = registerAccessGate()
-      registerCard(ctx)
+      // The branded Models section owns endpoint, key, chat model, and vision
+      // model now. Do not also mount the legacy ModLens engine card under
+      // Plugins: it duplicates the same product settings and its route is
+      // intentionally disabled by the TokensAPI bundle.
       registerManagerSection(ctx)
       document.addEventListener('paste', onPaste, true)
       document.addEventListener('focusin', onFocusIn, true)
@@ -1428,7 +1605,7 @@ window.__ModuleLoader__.load({
       ConfigCard: ConfigCard,
     }
     exports.__manager = { registerAccessGate: registerAccessGate }
-    // `slots` is optional, so it is not required here: registerCard checks.
+    // `slots` is optional, so it is acquired through registerManagerSection.
     exports.inject = []
     return module.exports
   },

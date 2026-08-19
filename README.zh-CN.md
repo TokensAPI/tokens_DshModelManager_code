@@ -29,8 +29,8 @@
 本插件是面向 DSH Desktop 的 TokensAPI 产品层：隐藏 DSH 官方模型入口和通用提供方编辑器，固定接口
 `https://tokensapi.ai/v1`。主模型默认 `deepseek-v4-flash`，视觉模型默认
 `qwen3.6-35b-a3b`；验证 API Key 后，两者都可以在“设置 → 模型”从 TokensAPI
-`GET /v1/models` 返回的实时列表中独立选择。Key 由 DSH 凭据服务保存，
-不会写入仓库、模型配置、浏览器响应或日志。
+`GET /v1/models` 返回的实时列表中独立选择。Key 由 DSH 凭据服务保存，不会写入仓库、模型配置、
+常规状态响应或日志；只有用户明确点击“显示”或“复制”时，设置页才会读取它。
 
 Desktop 启动时采用 fail-closed 全屏门禁：认证状态未知、没有 Key、旧 Key 尚未验证或状态接口失败时，
 聊天主界面不会放行。提交后由插件后端请求 TokensAPI `GET /v1/models` 验证；仅 HTTP 200 才保存
