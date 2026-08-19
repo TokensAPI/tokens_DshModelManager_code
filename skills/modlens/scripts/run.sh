@@ -20,9 +20,9 @@ set -eu
 # --- Version constants: stamped by scripts/release.mjs at release time. --------
 # Do not edit PINNED by hand; scripts/stamp.test.mjs asserts it equals the
 # package.json version, and the release script rewrites it on every bump.
-PKG="@liustack/modlens"
+PKG="@tokens/dsh-model-manager"
 BIN="modlens"
-PINNED="3.21.1"
+PINNED="0.1.0"
 # -------------------------------------------------------------------------------
 
 NATIVE_NOTE="no native artifact is published for this tool yet; phase A ships npm launch paths only"

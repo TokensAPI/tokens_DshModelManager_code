@@ -1,7 +1,7 @@
 {
-    "name": "@liustack/modlens",
-    "version": "3.21.1",
-    "description": "Plug-in vision for text-only LLMs, powered by the free Antigravity CLI",
+    "name": "@tokens/dsh-model-manager",
+    "version": "0.1.0",
+    "description": "TokensAPI managed model and vision provider for DeepSeek Harness Desktop",
     "type": "module",
     "bin": {
         "modlens": "./dist/main.js"
@@ -28,7 +28,9 @@
         "CHANGELOG.md",
         "SECURITY.md",
         "dsh",
-        "cordis.patch.yml"
+        "cordis.patch.yml",
+        "LICENSE",
+        "THIRD_PARTY_NOTICES.md"
     ],
     "keywords": [
         "cli",
@@ -42,16 +44,16 @@
         "multimodal",
         "modlens"
     ],
-    "author": "Leon Liu",
+    "author": "TokensAPI contributors; based on ModLens by Leon Liu",
     "license": "MIT",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/liustack/modlens.git"
+        "url": "git+https://github.com/TokensAPI/tokens_DshModelManager_code.git"
     },
     "bugs": {
-        "url": "https://github.com/liustack/modlens/issues"
+        "url": "https://github.com/TokensAPI/tokens_DshModelManager_code/issues"
     },
-    "homepage": "https://github.com/liustack/modlens#readme",
+    "homepage": "https://github.com/TokensAPI/tokens_DshModelManager_code#readme",
     "engines": {
         "node": ">=22.19"
     },
@@ -74,6 +76,7 @@
         "./client": "./dsh/client.js"
     },
     "dsh": {
+        "skillDirectory": "modlens",
         "bundle": {
             "patch": "./cordis.patch.yml"
         },

@@ -14,7 +14,7 @@
 // imports from dsh client packages — the same zero-dependency stance as the
 // host half.
 window.__ModuleLoader__.load({
-  id: '@liustack/modlens',
+  id: '@tokens/dsh-model-manager',
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
@@ -868,8 +868,233 @@ window.__ModuleLoader__.load({
       })
     }
 
+    var MANAGER_TEXT = {
+      en: {
+        nav: 'Models',
+        title: 'TokensAPI models',
+        intro: 'The endpoint and models are managed by this plugin. Enter your API key to enable chat and vision.',
+        key: 'API key',
+        missing: 'Not configured',
+        ready: 'Configured',
+        save: 'Save API key',
+        saving: 'Saving...',
+        stored: 'The saved key is never returned to the browser. Leave this field empty unless replacing it.',
+        main: 'Main model',
+        vision: 'Vision model',
+        endpoint: 'Endpoint',
+      },
+      zh: {
+        nav: '模型',
+        title: 'TokensAPI 模型',
+        intro: '接口地址和模型由插件统一管理。填写 API Key 后，聊天和识图能力才可使用。',
+        key: 'API Key',
+        missing: '未配置',
+        ready: '已配置',
+        save: '保存 API Key',
+        saving: '保存中…',
+        stored: '已保存的 Key 永远不会返回浏览器。只有需要替换时才重新填写。',
+        main: '主模型',
+        vision: '视觉模型',
+        endpoint: '接口地址',
+      },
+    }
+
+    function managerLabels() {
+      var lang = (document.documentElement.lang || navigator.language || 'en').toLowerCase()
+      return lang.indexOf('zh') === 0 ? MANAGER_TEXT.zh : MANAGER_TEXT.en
+    }
+
+    function ModelManagerSection(react) {
+      var h = react.createElement
+      return function TokensModelManager() {
+        var statePair = react.useState(null)
+        var keyPair = react.useState('')
+        var notePair = react.useState('')
+        var busyPair = react.useState(false)
+        var state = statePair[0]
+        var apiKey = keyPair[0]
+        var note = notePair[0]
+        var busy = busyPair[0]
+        var t = managerLabels()
+
+        var load = react.useCallback(
+          () =>
+            fetch('/tokens/model-manager', { cache: 'no-store' })
+              .then((response) =>
+                response.json().then((body) => {
+                  if (!response.ok) throw new Error(body.error || 'load failed')
+                  return body
+                }),
+              )
+              .then((body) => {
+                statePair[1](body)
+                notePair[1]('')
+              })
+              .catch((error) => {
+                notePair[1](String(error.message || error))
+              }),
+          [],
+        )
+
+        react.useEffect(() => {
+          load()
+        }, [load])
+
+        var save = (event) => {
+          event.preventDefault()
+          if (!apiKey.trim() || busy) return
+          busyPair[1](true)
+          notePair[1]('')
+          fetch('/tokens/model-manager', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ apiKey: apiKey }),
+          })
+            .then((response) =>
+              response.json().then((body) => {
+                if (!response.ok) throw new Error(body.error || 'save failed')
+                return body
+              }),
+            )
+            .then((body) => {
+              statePair[1](body)
+              keyPair[1]('')
+              notePair[1](t.ready)
+            })
+            .catch((error) => {
+              notePair[1](String(error.message || error))
+            })
+            .finally(() => {
+              busyPair[1](false)
+            })
+        }
+
+        var row = (label, value) =>
+          h(
+            'div',
+            { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, padding: '8px 0' } },
+            h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)' } }, label),
+            h('code', null, value || '—'),
+          )
+
+        return h(
+          'div',
+          { style: { maxWidth: 760, padding: '8px 0 32px' } },
+          h('h2', { style: { margin: '0 0 8px' } }, t.title),
+          h('p', { style: { margin: '0 0 20px', color: 'var(--dsw-alias-label-secondary, #666)' } }, t.intro),
+          state
+            ? h(
+                'div',
+                {
+                  style: {
+                    border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+                    borderRadius: 12,
+                    padding: 16,
+                    marginBottom: 16,
+                  },
+                },
+                row(t.endpoint, state.baseURL),
+                row(t.main, state.mainModel),
+                row(t.vision, state.visionModel),
+              )
+            : null,
+          h(
+            'form',
+            {
+              onSubmit: save,
+              style: { border: '1px solid var(--dsw-alias-border-l2, #ddd)', borderRadius: 12, padding: 16 },
+            },
+            h(
+              'div',
+              { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 } },
+              h('strong', null, t.key),
+              h(
+                'span',
+                { style: { color: state?.configured ? '#34a853' : '#d93025' } },
+                state?.configured ? t.ready : t.missing,
+              ),
+            ),
+            h(
+              'input',
+              Object.assign(
+                {
+                  value: apiKey,
+                  disabled: busy || (state && state.writable === false),
+                  placeholder: state?.configured ? t.stored : t.key,
+                  onChange: (event) => {
+                    keyPair[1](event.target.value)
+                    notePair[1]('')
+                  },
+                  style: {
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                    marginBottom: 10,
+                  },
+                },
+                secretFieldProps(),
+              ),
+            ),
+            h(
+              'p',
+              {
+                style: {
+                  minHeight: 20,
+                  margin: '0 0 10px',
+                  fontSize: 13,
+                  color: note ? 'var(--dsw-alias-label-secondary, #666)' : 'transparent',
+                },
+                role: 'status',
+              },
+              note || '.',
+            ),
+            h(
+              'button',
+              {
+                type: 'submit',
+                disabled: busy || !apiKey.trim() || (state && state.writable === false),
+                style: { padding: '9px 16px', border: 0, borderRadius: 8, cursor: 'pointer' },
+              },
+              busy ? t.saving : t.save,
+            ),
+          ),
+        )
+      }
+    }
+
+    function registerManagerSection(ctx) {
+      if (typeof ctx.inject !== 'function') return
+      ctx.inject(['slots'], (scope) => {
+        fetch('/tokens/model-manager', { cache: 'no-store' })
+          .then((response) => response.json().then((body) => ({ response, body })))
+          .then(({ response, body }) => {
+            if (!response.ok || body?.provider !== 'TokensAPI') return
+            var react = require('react')
+            var Section = ModelManagerSection(react)
+            scope.slots.inject('settings.section', function* () {
+              yield scope.slots.register(
+                {
+                  name: 'settings.section',
+                  id: 'models',
+                  order: 10,
+                  label: () => managerLabels().nav,
+                  inject: () => ({}),
+                },
+                Section,
+              )
+            })
+          })
+          .catch((error) => {
+            console.error(`[tokens-model-manager] settings section skipped: ${error}`)
+          })
+      })
+    }
+
     function apply(ctx) {
       registerCard(ctx)
+      registerManagerSection(ctx)
       document.addEventListener('paste', onPaste, true)
       document.addEventListener('focusin', onFocusIn, true)
       // cordis effect: unregister on plugin disposal (HMR, profile reload).

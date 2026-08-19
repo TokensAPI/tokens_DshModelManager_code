@@ -23,8 +23,20 @@ const OUTPUT_SCHEMA = JSON.parse(readFileSync(new URL('./vision-schema.json', im
 
 const CLI_TIMEOUT_MS = 180_000
 
+// Product-owned route facts. Users supply only the credential; keeping these
+// constants here makes the Host route, spawned vision CLI, and regression
+// tests share one source of truth without ever serializing a secret.
+export const TOKENSAPI = Object.freeze({
+  credentialRef: 'TOKENSAPI_API_KEY',
+  baseURL: 'https://tokensapi.ai/v1',
+  mainModel: 'deepseek-v4-flash',
+  visionModel: 'qwen3.6-35b-a3b',
+})
+
+let lastVisionFailure = null
+
 export const name = 'modlens'
-export const inject = ['tools', 'agents', 'attachments', 'llm']
+export const inject = ['tools', 'agents', 'attachments', 'llm', 'credentials']
 
 export const MEDIA_EXT = {
   'image/png': '.png',
@@ -89,6 +101,13 @@ export function apply(ctx, config = {}) {
         } catch (error) {
           console.error(`[modlens] settings card route skipped: ${error}`)
         }
+      }
+      // Register the branded route last so existing ModLens routes keep their
+      // stable order and remain independently testable.
+      try {
+        registerModelManagerRoute(scope, ctx)
+      } catch (error) {
+        console.error(`[tokens-model-manager] settings route skipped: ${error}`)
       }
     })
   }
@@ -165,11 +184,21 @@ export function apply(ctx, config = {}) {
       if (typeof args?.path !== 'string' || args.path.trim() === '') {
         throw new Error(`${toolName} needs a non-empty string "path".`)
       }
-      const cliArgs = [CLI_PATH, '-i', args.path, '--timeout', String(CLI_TIMEOUT_MS)]
+      const cliArgs = [
+        CLI_PATH,
+        '-i',
+        args.path,
+        '--provider',
+        'openai',
+        '--model',
+        TOKENSAPI.visionModel,
+        '--timeout',
+        String(CLI_TIMEOUT_MS),
+      ]
       if (args.prompt) {
         cliArgs.push('--prompt', args.prompt)
       }
-      const { stdout, stderr, code } = await run(process.execPath, cliArgs, exec.signal)
+      const { stdout, stderr, code } = await runManagedVision(ctx, cliArgs, exec.signal)
       if (code !== 0) {
         throw new Error(`modlens failed (exit ${code}): ${(stderr || stdout).trim().slice(0, 500)}`)
       }
@@ -1265,15 +1294,16 @@ async function readImageBlock(ctx, block, signal) {
     const file = join(dir, `paste${ext}`)
     await writeFile(file, Buffer.from(stored.data), { mode: 0o600 })
     const cli = process.env.MODLENS_DSH_CLI || CLI_PATH
-    const { stdout, stderr, code } = await run(
-      process.execPath,
-      [cli, '-i', file, '--timeout', String(CLI_TIMEOUT_MS)],
+    const { stdout, stderr, code } = await runManagedVision(
+      ctx,
+      [cli, '-i', file, '--provider', 'openai', '--model', TOKENSAPI.visionModel, '--timeout', String(CLI_TIMEOUT_MS)],
       signal,
     )
     if (code !== 0) {
       throw new Error((stderr || stdout).trim().slice(0, 300))
     }
     const parsed = JSON.parse(stdout)
+    lastVisionFailure = null
     return {
       ok: true,
       // Frozen: the same object rides every later step from the cache, and a
@@ -1285,6 +1315,14 @@ async function readImageBlock(ctx, block, signal) {
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message.slice(0, 300) : String(error)
+    lastVisionFailure = {
+      stage,
+      // Operational diagnostics must never echo a bearer credential. The
+      // managed key is not interpolated by this code; the conservative token
+      // scrub also covers a provider or subprocess that includes one anyway.
+      message: detail.replace(/(?:sk|tk|key)-[A-Za-z0-9._-]{8,}/gi, '<redacted>'),
+      at: new Date().toISOString(),
+    }
     console.error(`[modlens] image read failed (${stage}): ${detail}`)
     return {
       ok: false,
@@ -1300,14 +1338,35 @@ async function readImageBlock(ctx, block, signal) {
   }
 }
 
-function run(command, args, signal) {
+async function runManagedVision(ctx, args, signal) {
+  // Production DSH activation requires credentials through inject. The
+  // compatibility path preserves the explicit MODLENS_DSH_CLI embedding and
+  // test hook used by upstream ModLens.
+  if (typeof ctx.credentials?.resolve !== 'function') {
+    return run(process.execPath, args, signal)
+  }
+  const credential = await ctx.credentials.resolve(TOKENSAPI.credentialRef)
+  if (credential === undefined || typeof credential.value !== 'string' || credential.value.trim() === '') {
+    const error = new Error('请先在“设置 → 模型”中填写 TokensAPI API Key。')
+    error.code = 'TOKENSAPI_MISSING_CREDENTIAL'
+    throw error
+  }
+  return run(process.execPath, args, signal, {
+    TOKENS_MODEL_MANAGER: '1',
+    TOKENSAPI_API_KEY: credential.value,
+    TOKENSAPI_BASE_URL: TOKENSAPI.baseURL,
+    TOKENSAPI_VISION_MODEL: TOKENSAPI.visionModel,
+  })
+}
+
+function run(command, args, signal, environment = {}) {
   return new Promise((resolve, reject) => {
     const child = spawnHidden(command, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       signal,
       // In the packaged desktop app process.execPath is the Electron binary;
       // this makes it behave as plain node for the spawned CLI (issue #25).
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      env: { ...process.env, ...environment, ELECTRON_RUN_AS_NODE: '1' },
     })
     let stdout = ''
     let stderr = ''
@@ -1865,6 +1924,87 @@ async function directorySize(dir) {
   return bytes
 }
 
+/** Public status for the branded model page. It intentionally contains no key. */
+async function modelManagerStatus(ctx) {
+  const credential = await ctx.credentials.describe(TOKENSAPI.credentialRef)
+  return {
+    configured: credential.configured === true,
+    writable: credential.writable === true,
+    provider: 'TokensAPI',
+    mainModel: TOKENSAPI.mainModel,
+    visionModel: TOKENSAPI.visionModel,
+    baseURL: TOKENSAPI.baseURL,
+    ...(lastVisionFailure === null ? {} : { visionDiagnostic: lastVisionFailure }),
+  }
+}
+
+/** Validate and persist the one user-owned value in this product surface. */
+async function setManagedCredential(ctx, value) {
+  if (typeof value !== 'string') throw new TypeError('apiKey must be a string')
+  const apiKey = value.trim()
+  if (apiKey.length === 0) throw new Error('API Key 不能为空')
+  if (apiKey.length > 16 * 1024) throw new Error('API Key 过长')
+  if (
+    [...apiKey].some((character) => {
+      const code = character.charCodeAt(0)
+      return code <= 0x1f || code === 0x7f
+    })
+  )
+    throw new Error('API Key 不能包含控制字符')
+  await ctx.credentials.set(TOKENSAPI.credentialRef, apiKey)
+  return modelManagerStatus(ctx)
+}
+
+function registerModelManagerRoute(ctx, host) {
+  ctx.webServer.register({
+    name: 'tokens-model-manager',
+    kind: 'exact',
+    path: '/tokens/model-manager',
+    handler: async (req, res) => {
+      const send = (status, body) => {
+        res.writeHead(status, {
+          'content-type': 'application/json',
+          'cache-control': 'no-store',
+        })
+        res.end(JSON.stringify(body))
+      }
+      if (!isTrustedRequest(req)) {
+        send(403, { error: 'request refused: this route answers same-origin loopback only' })
+        return
+      }
+      if (req.method === 'GET') {
+        try {
+          send(200, await modelManagerStatus(host))
+        } catch (error) {
+          send(409, { error: String(error?.message ?? error) })
+        }
+        return
+      }
+      if (req.method !== 'POST') {
+        res.writeHead(405, { allow: 'GET, POST' }).end()
+        return
+      }
+      try {
+        const chunks = []
+        let total = 0
+        for await (const chunk of req) {
+          total += chunk.length
+          if (total > 20 * 1024) {
+            send(413, { error: 'payload too large' })
+            req.destroy()
+            return
+          }
+          chunks.push(chunk)
+        }
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        send(200, await setManagedCredential(host, body?.apiKey))
+      } catch (error) {
+        send(400, { error: String(error?.message ?? error) })
+      }
+    },
+  })
+}
+
 function registerConfigRoute(ctx) {
   ctx.webServer.register({
     name: 'modlens-config',
@@ -1931,6 +2071,12 @@ function registerConfigRoute(ctx) {
 // and write a real file and a real environment, so they are tested against
 // both rather than through the HTTP route.
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
+export const __modelManager = {
+  modelManagerStatus,
+  setManagedCredential,
+  readImageBlock,
+  runManagedVision,
+}
 
 // The paste sweeper, reachable from the test suite the way __config is.
 export const __paste = {

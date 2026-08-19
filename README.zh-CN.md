@@ -2,9 +2,9 @@
   <img src="https://raw.githubusercontent.com/liustack/modlens/main/assets/banner.jpg" width="100%" alt="ModLens" />
 </p>
 
-<h1 align="center">ModLens</h1>
+<h1 align="center">Tokens DSH Model Manager</h1>
 
-<p align="center"><b>为纯文本模型补上视觉能力，直接粘贴图片就能识别。</b></p>
+<p align="center"><b>一个 API Key，统一启用 TokensAPI 主模型与视觉模型。</b></p>
 
 <p align="center">🥇 <b>全网最强的 DeepSeek Harness（dsh）视觉插件</b> 🥇</p>
 
@@ -19,14 +19,20 @@
 
 <p align="center">
   <a href="https://x.com/liustack"><img src="https://img.shields.io/badge/follow-%40liustack-black?style=flat-square&logo=x&logoColor=white" alt="Follow @liustack on X"></a>
-  <a href="https://www.npmjs.com/package/@liustack/modlens"><img src="https://img.shields.io/npm/v/@liustack/modlens?style=flat-square&label=npm&color=cb3837" alt="npm"></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/@liustack/modlens?style=flat-square" alt="Node.js"></a>
+  <a href="https://www.npmjs.com/package/@tokens/dsh-model-manager"><img src="https://img.shields.io/npm/v/@tokens/dsh-model-manager?style=flat-square&label=npm&color=cb3837" alt="npm"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/@tokens/dsh-model-manager?style=flat-square" alt="Node.js"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/Not%20backed%20by-Y%20Combinator-FF6600?style=flat-square&logo=ycombinator&logoColor=white" alt="Not backed by Y Combinator">
   <img src="https://img.shields.io/badge/users-unknown-lightgrey?style=flat-square" alt="Users unknown">
 </p>
 
-DeepSeek 和 GLM 的主力对话模型是纯文本的，无法进行图片识别。ModLens 借助外挂视觉引擎，为纯文本模型补上视觉能力。**ModLens 支持直接粘贴图片识别**，无需先保存成文件再提供路径。
+本插件是面向 DSH Desktop 的 TokensAPI 产品层：隐藏 DSH 官方模型入口和通用提供方编辑器，固定主模型
+`deepseek-v4-flash`、视觉模型 `qwen3.6-35b-a3b` 与接口
+`https://tokensapi.ai/v1`。用户只需在“设置 → 模型”填写一次 API Key；Key 由 DSH 凭据服务保存，
+不会写入仓库、模型配置、浏览器响应或日志。
+
+视觉识别内核基于开源项目 [ModLens](https://github.com/liustack/modlens)，保留其 MIT 许可与原作者声明。
+下方保留 ModLens 引擎的技术资料，便于维护和理解底层能力；本插件安装后的提供方和模型选择由上述产品层固定。
 
 ## 交流
 
@@ -34,7 +40,7 @@ DeepSeek 和 GLM 的主力对话模型是纯文本的，无法进行图片识别
 
 ## 亮点
 
-**🥇 全网最强的 DeepSeek Harness（dsh）外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@3.21.1`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `modlens_read_image` 工具读图。更新就是再跑一遍同一条命令。这里点名版本号而不用 `@latest` 是有意的：pnpm 11 会扣住最近 24 小时内发布的版本，dist-tag 只在剩下的里面解析，用 `@latest` 装到的会是一天前发布的那个（[细节](docs/harness-setup.zh-CN.md#保持更新)）。
+**🥇 全网最强的 DeepSeek Harness（dsh）外挂视觉识别插件：**一条命令 `npx -y @deepseek-ai/dsh plugin --profile web add @tokens/dsh-model-manager@0.1.0`，dsh 背后的纯文本 DeepSeek 模型即可通过原生 `modlens_read_image` 工具读图。更新就是再跑一遍同一条命令。这里点名版本号而不用 `@latest` 是有意的：pnpm 11 会扣住最近 24 小时内发布的版本，dist-tag 只在剩下的里面解析，用 `@latest` 装到的会是一天前发布的那个（[细节](docs/harness-setup.zh-CN.md#保持更新)）。
 
 DeepSeek Harness 粘贴识图有两种玩法。
 
@@ -69,7 +75,7 @@ agy                                                           # 浏览器完成�
 **DeepSeek Harness（dsh）用户不走 skill 流程**，本包就是原生 dsh 插件：
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@3.21.1
+npx -y @deepseek-ai/dsh plugin --profile web add @tokens/dsh-model-manager@0.1.0
 ```
 
 装完即有 `modlens_read_image` 工具，选「(modlens vision)」模型变体即可直接粘贴识图。引擎配置同样在 `~/.modlens`，详见[宿主接入](docs/harness-setup.zh-CN.md)。

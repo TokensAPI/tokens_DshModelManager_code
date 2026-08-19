@@ -22,7 +22,8 @@ export function readPackageVersion(root = repoRoot) {
 
 /** The skill directory name, derived from the scoped package name. */
 export function skillName(root = repoRoot) {
-    return readPackage(root).name.split('/').pop();
+    const pkg = readPackage(root);
+    return pkg.dsh?.skillDirectory ?? pkg.name.split('/').pop();
 }
 
 /**

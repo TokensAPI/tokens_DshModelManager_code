@@ -55,7 +55,7 @@ OpenCode 接 DeepSeek：执行 `opencode auth login`，选择 DeepSeek 并粘贴
 dsh 与其他 harness 不同：modlens 以原生工具的形式接入，而不是靠提示词触发的 skill。本包自身就是一个 dsh bundle，一条命令即可装进某个 profile：
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@3.21.1
+npx -y @deepseek-ai/dsh plugin --profile web add @tokens/dsh-model-manager@0.1.0
 ```
 
 这会注册一个 `modlens_read_image` 工具，它的 schema 随每次请求抵达模型（不靠触发启发式），运行同一个包里自带的 modlens CLI，并把结构化证据作为工具的标准 JSON 输出返回。引擎、复用授权和 guard 规则仍在 `~/.modlens/config.json` 里，与其他所有 harness 共享。dsh 还在开发者预览阶段，插件接口可能变化。这个插件刻意保持很小的接触面（原生工具注册、视觉变体所用的 llm 适配层、附件读取器，以及一个 agent 执行前钩子），其中任何一处变动，它都会大声报错而不是无声退化。
@@ -71,10 +71,10 @@ dsh 的网页用户面前没有终端，所以引擎设置有一张卡片，在*
 modlens 发布很频繁，而两种安装形态都会冻结在装进来的那个版本上。dsh 上重跑一遍安装即可，版本号要点名：
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.21.1
+npx -y @deepseek-ai/dsh plugin --profile <name> add @tokens/dsh-model-manager@0.1.0
 ```
 
-`npm view @liustack/modlens version` 可以查到当前版本号，本页的版本号则由发布流程自动写入。
+`npm view @tokens/dsh-model-manager version` 可以查到当前版本号，本页的版本号则由发布流程自动写入。
 
 这条命令里有两处是刻意的。用 `add` 而不是 `update`，因为 `update` 只在已记录的 semver 范围内挪动，而普通安装写进去的是 caret 范围，所以一个当初装到 2.7.1 的 profile 只会更新到 2.8.0，永远进不了 3.x。点名版本号而不用 `@latest`，则是因为 pnpm 11 会扣住最近 24 小时内发布的版本（`minimumReleaseAge`，默认开启），dist-tag 只在通过过滤的候选里解析：`@latest` 会落到更旧的版本上，而不是跳过冷静期。代价是一天的自然时间，不是一个版本，发布密集的一周里就是好几个版本。点名版本是一次明确的指定，所以 pnpm 会装上它，11.1.3 起还会把这一个版本作为已批准的例外写进该 profile 的 `pnpm-workspace.yaml`，其余一切仍留在窗口后面。
 

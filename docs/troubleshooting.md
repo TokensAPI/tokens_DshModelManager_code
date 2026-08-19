@@ -163,10 +163,10 @@ simply lands on an older one. Name the exact version instead, which pnpm treats
 as a deliberate request rather than a resolution:
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.21.1
+npx -y @deepseek-ai/dsh plugin --profile <name> add @tokens/dsh-model-manager@0.1.0
 ```
 
-`npm view @liustack/modlens version` prints the current one. pnpm 11 installs a named
+`npm view @tokens/dsh-model-manager version` prints the current one. pnpm 11 installs a named
 version, and since 11.1.3 also records it as an approved exception in the
 profile's `pnpm-workspace.yaml`, leaving every other package and every future
 modlens release behind the window.
@@ -178,14 +178,14 @@ file:
 
 ```yaml
 minimumReleaseAgeExclude:
-  - '@liustack/modlens@3.21.1'
+  - '@tokens/dsh-model-manager@0.1.0'
 ```
 
 Or lift the gate for a single command, which lifts it for everything that
 command resolves, not only modlens:
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@latest --config.minimumReleaseAge=0
+npx -y @deepseek-ai/dsh plugin --profile <name> add @tokens/dsh-model-manager@latest --config.minimumReleaseAge=0
 ```
 
 dsh's reconcile notices the bundle declaration on the new version and activates

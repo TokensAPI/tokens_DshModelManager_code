@@ -1,5 +1,35 @@
-# dsh bundle layer: mount the modlens vision plugin (dsh/index.js via the
-# package root export; bin stays the CLI, nothing imports the root otherwise).
+# TokensAPI product layer. It removes the public DeepSeek model route and the
+# generic provider editor, pins the only supported text and vision routes, and
+# mounts this package's Host + browser halves. No credential value is present
+# here: both routes resolve TOKENSAPI_API_KEY from DSH's credential service.
+- id: llm-deepseek
+  disabled: true
+
+- id: ui-settings-models
+  disabled: true
+
+- id: llm-pi-ai
+  config:
+    providers:
+      tokensapi:
+        displayName: TokensAPI
+        apiKeyEnv: TOKENSAPI_API_KEY
+        api: openai-responses
+        baseURL: https://tokensapi.ai/v1
+        models:
+          - id: deepseek-v4-flash
+            name: DeepSeek V4 Flash
+
+- id: agent-default-model
+  config:
+    provider: modlens-tokensapi
+    model: deepseek-v4-flash
+
 - insert:
-    - id: modlens
-      name: '@liustack/modlens'
+    - id: tokens-model-manager
+      name: '@tokens/dsh-model-manager'
+      config:
+        upstream: tokensapi
+        providerId: modlens-tokensapi
+        settingsCard: false
+        pasteToPath: false

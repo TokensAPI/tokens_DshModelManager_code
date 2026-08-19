@@ -22,9 +22,9 @@ $ErrorActionPreference = 'Stop'
 # --- Version constants: stamped by scripts/release.mjs at release time. --------
 # Do not edit $Pinned by hand; scripts/stamp.test.mjs asserts it equals the
 # package.json version, and the release script rewrites it on every bump.
-$Package = '@liustack/modlens'
+$Package = '@tokens/dsh-model-manager'
 $Bin = 'modlens'
-$Pinned = '3.21.1'
+$Pinned = '0.1.0'
 # -------------------------------------------------------------------------------
 
 $NativeNote = 'no native artifact is published for this tool yet; phase A ships npm launch paths only'
