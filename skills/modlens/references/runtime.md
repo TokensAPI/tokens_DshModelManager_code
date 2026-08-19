@@ -8,8 +8,8 @@ shell syntax.
 
 ## Pinned version
 
-- Pinned CLI version: 3.21.1
-- npm package: `@liustack/modlens`
+- Pinned CLI version: 0.1.0
+- npm package: `@tokens/dsh-model-manager`
 - CLI binary name: `modlens`
 
 The pinned version line above and the constants inside both launchers are
@@ -22,8 +22,8 @@ launcher/reference copies ever drift from `package.json`.
 Each call resolves a way to run the CLI, in this order:
 
 1. **A compatible `modlens` already on `PATH`** — run it directly, by name.
-2. **`npx` present, and `node` meets the CLI's 22.19 floor** — `npx --yes --package @liustack/modlens@<pinned> modlens <args>`. An npx sitting on an older node is skipped: it would select a path known to fail at run time.
-3. **`bunx` present** — `bunx --bun @liustack/modlens@<pinned> <args>`.
+2. **`npx` present, and `node` meets the CLI's 22.19 floor** — `npx --yes --package @tokens/dsh-model-manager@<pinned> modlens <args>`. An npx sitting on an older node is skipped: it would select a path known to fail at run time.
+3. **`bunx` present** — `bunx --bun @tokens/dsh-model-manager@<pinned> <args>`.
 4. **A native artifact** — reserved for phase B. None is published yet, so this
    branch reports `nativeArtifact.available: false` and moves on.
 5. **Nothing usable** — print a structured diagnosis and exit `78` (`EX_CONFIG`).

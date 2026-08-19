@@ -1,0 +1,4 @@
+allowBuilds:
+  # Vite and Vitest both require esbuild's platform binary. Pinning the only
+  # approved lifecycle script keeps dependency installation non-interactive.
+  esbuild: true

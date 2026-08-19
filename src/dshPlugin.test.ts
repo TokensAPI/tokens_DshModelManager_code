@@ -52,7 +52,7 @@ describe('dsh plugin bundle', () => {
         expect(pkg.files).toContain('dsh');
         expect(pkg.files).toContain('cordis.patch.yml');
         const patch = fs.readFileSync(path.join(__dirname, '..', 'cordis.patch.yml'), 'utf-8');
-        expect(patch).toContain("name: '@liustack/modlens'");
+        expect(patch).toContain("name: '@tokens/dsh-model-manager'");
     });
 });
 
@@ -1760,9 +1760,12 @@ describe('dsh paste-to-path host route', () => {
         // nothing about whether the engine can be configured, so the settings
         // card's route stays and only this one goes.
         const withoutPaste = await routeOf({ pasteToPath: false });
-        expect(withoutPaste.map((route) => route.name)).toEqual(['modlens-config']);
+        expect(withoutPaste.map((route) => route.name)).toEqual([
+            'modlens-config',
+            'tokens-model-manager',
+        ]);
         const withoutBoth = await routeOf({ pasteToPath: false, settingsCard: false });
-        expect(withoutBoth).toEqual([]);
+        expect(withoutBoth.map((route) => route.name)).toEqual(['tokens-model-manager']);
     });
 
     it('sniffs to the CLI table: near-miss magic bytes are refused, real brands pass', async () => {

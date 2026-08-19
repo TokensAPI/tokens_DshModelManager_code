@@ -224,6 +224,21 @@ export function resolveProviderSettings(
     config: ModlensConfig,
     env: NodeJS.ProcessEnv = process.env,
 ): ProviderSettings {
+    // The branded DSH plugin resolves one managed credential from DSH and
+    // passes it only to the child process that performs the image read. This
+    // explicit mode wins over ~/.modlens/config.json so an older ModLens setup
+    // cannot pair the managed key with an unrelated endpoint or model.
+    if (providerName === 'openai' && env.TOKENS_MODEL_MANAGER === '1') {
+        const apiKey = env.TOKENSAPI_API_KEY?.trim();
+        if (!apiKey) {
+            return {};
+        }
+        return {
+            apiKey,
+            baseUrl: env.TOKENSAPI_BASE_URL?.trim() || 'https://tokensapi.ai/v1',
+            model: env.TOKENSAPI_VISION_MODEL?.trim() || 'qwen3.6-35b-a3b',
+        };
+    }
     // Settings saved under an alias (config set gemini.apiKey) count as the
     // file naming this provider: they were invisible once the name resolved to
     // its canonical form.

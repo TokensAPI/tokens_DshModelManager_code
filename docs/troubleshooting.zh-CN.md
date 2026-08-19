@@ -144,22 +144,22 @@ dsh profile 装到的是旧版 modlens。`dsh.bundle` 声明从 3.9.0 起才存�
 `@latest` 绕不开这一层，本页早先的说法是错的。冷静期先把候选版本过滤掉，dist-tag 才在剩下的里面解析，于是它直接落到了更旧的那个上。改成写死精确版本号，pnpm 会把它当作一次明确的指定，而不是一次解析：
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@3.21.1
+npx -y @deepseek-ai/dsh plugin --profile <name> add @tokens/dsh-model-manager@0.1.0
 ```
 
-`npm view @liustack/modlens version` 可以查到当前版本号。pnpm 11 会装上被点名的版本，11.1.3 起还会把它作为一条已批准的例外写进该 profile 的 `pnpm-workspace.yaml`，其余所有包和 modlens 以后的版本仍然留在窗口后面。
+`npm view @tokens/dsh-model-manager version` 可以查到当前版本号。pnpm 11 会装上被点名的版本，11.1.3 起还会把它作为一条已批准的例外写进该 profile 的 `pnpm-workspace.yaml`，其余所有包和 modlens 以后的版本仍然留在窗口后面。
 
 如果你自己设过 `minimumReleaseAge`，pnpm 会把这条策略视为严格模式，转而拒绝安装并报出版本与截止时间（`ERR_PNPM_NO_MATURE_MATCHING_VERSION`）。在同一个文件里放行这一个版本：
 
 ```yaml
 minimumReleaseAgeExclude:
-  - '@liustack/modlens@3.21.1'
+  - '@tokens/dsh-model-manager@0.1.0'
 ```
 
 或者只为这一条命令解除冷静期，注意它解除的是这条命令解析到的所有包，不只 modlens：
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile <name> add @liustack/modlens@latest --config.minimumReleaseAge=0
+npx -y @deepseek-ai/dsh plugin --profile <name> add @tokens/dsh-model-manager@latest --config.minimumReleaseAge=0
 ```
 
 dsh 的 reconcile 会注意到新版本上的 bundle 声明并激活它，随后重启 dsh。用 `npx -y @deepseek-ai/dsh plugin --profile <name> list` 验证。

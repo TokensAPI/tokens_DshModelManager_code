@@ -2,9 +2,9 @@
   <img src="https://raw.githubusercontent.com/liustack/modlens/main/assets/banner.jpg" width="100%" alt="ModLens" />
 </p>
 
-<h1 align="center">ModLens</h1>
+<h1 align="center">Tokens DSH Model Manager</h1>
 
-<p align="center"><b>Give a text-only model sight, and just paste the image.</b></p>
+<p align="center"><b>One API key for the managed TokensAPI chat and vision models.</b></p>
 
 <p align="center">🥇 <b>The most capable vision plugin for DeepSeek Harness (dsh)</b> 🥇</p>
 
@@ -19,14 +19,23 @@
 
 <p align="center">
   <a href="https://x.com/liustack"><img src="https://img.shields.io/badge/follow-%40liustack-black?style=flat-square&logo=x&logoColor=white" alt="Follow @liustack on X"></a>
-  <a href="https://www.npmjs.com/package/@liustack/modlens"><img src="https://img.shields.io/npm/v/@liustack/modlens?style=flat-square&label=npm&color=cb3837" alt="npm"></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/@liustack/modlens?style=flat-square" alt="Node.js"></a>
+  <a href="https://www.npmjs.com/package/@tokens/dsh-model-manager"><img src="https://img.shields.io/npm/v/@tokens/dsh-model-manager?style=flat-square&label=npm&color=cb3837" alt="npm"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/node/v/@tokens/dsh-model-manager?style=flat-square" alt="Node.js"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/Not%20backed%20by-Y%20Combinator-FF6600?style=flat-square&logo=ycombinator&logoColor=white" alt="Not backed by Y Combinator">
   <img src="https://img.shields.io/badge/users-unknown-lightgrey?style=flat-square" alt="Users unknown">
 </p>
 
-The flagship DeepSeek and GLM chat models are text-only and cannot read images. ModLens is a plug-in vision engine that gives a text-only model sight. **ModLens reads images pasted straight into the chat**, no saving to a file and passing a path first.
+This package is the TokensAPI product layer for DSH Desktop. It hides the stock
+DSH model-provider editor, pins `deepseek-v4-flash` for chat,
+`qwen3.6-35b-a3b` for vision, and `https://tokensapi.ai/v1` as the endpoint.
+The user enters only one API key in Settings → Models. DSH's credential service
+stores it; the key is never committed, returned to the browser, or logged.
+
+The vision engine is based on [ModLens](https://github.com/liustack/modlens).
+Its MIT license and original attribution are preserved. The remaining ModLens
+documentation is retained below as implementation reference; installed product
+provider and model choices are managed by this package.
 
 ## Talk to us
 
@@ -34,7 +43,7 @@ Issues are welcome any time: [open one](https://github.com/liustack/modlens/issu
 
 ## Highlights
 
-**🥇 The most capable vision plugin for DeepSeek Harness (dsh):** one command, `npx -y @deepseek-ai/dsh plugin --profile web add @liustack/modlens@3.21.1`, and the text-only DeepSeek model behind dsh reads images through a native `modlens_read_image` tool. Updating is the same command again. The version is named rather than `@latest` on purpose: pnpm 11 holds back releases published in the last 24 hours and resolves the tag against what survives, so `@latest` would install whatever shipped a day ago ([details](docs/harness-setup.md#keeping-it-up-to-date)).
+**🥇 The most capable vision plugin for DeepSeek Harness (dsh):** one command, `npx -y @deepseek-ai/dsh plugin --profile web add @tokens/dsh-model-manager@0.1.0`, and the text-only DeepSeek model behind dsh reads images through a native `modlens_read_image` tool. Updating is the same command again. The version is named rather than `@latest` on purpose: pnpm 11 holds back releases published in the last 24 hours and resolves the tag against what survives, so `@latest` would install whatever shipped a day ago ([details](docs/harness-setup.md#keeping-it-up-to-date)).
 
 Pasting an image works two ways. **① Just paste.** On a text-only model the pasted image lands as a private temp file and its path enters the composer — the same interaction OpenCode and Pi ship — and the `modlens_read_image` tool takes it from there. **② Pick a `(modlens vision)` entry** in the model selector (it remembers your choice, so once is enough), then paste: the thumbnail stays visible in your message, closer to the Codex app feel, and the image is converted to structured evidence at request time, answered by the same underlying route. The plugin auto-discovers every provider route carrying text-only DeepSeek or GLM models and adds a wrapped entry per route (a stock install gets **`DeepSeek-V4-Flash (modlens vision)`** and **`DeepSeek-V4-Pro (modlens vision)`**; extra routes like opencode-go or zai get their own); the two families' own vision models are excluded automatically. Which paste route applies is the host's per-model call: only a model its metadata positively confirms text-only is taken over, anything unconfirmed is left alone, so vision models keep their native paste ([details](docs/harness-setup.md)).
 
