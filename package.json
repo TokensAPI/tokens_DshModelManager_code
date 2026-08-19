@@ -9,6 +9,7 @@
     "scripts": {
         "dev": "vite build --watch",
         "build": "vite build",
+        "prepare": "pnpm build",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "coverage": "vitest run --coverage",
