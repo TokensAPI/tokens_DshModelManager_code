@@ -163,7 +163,7 @@ simply lands on an older one. Name the exact version instead, which pnpm treats
 as a deliberate request rather than a resolution:
 
 ```sh
-npx -y @deepseek-ai/dsh plugin --profile <name> add @tokens/dsh-model-manager@0.1.0
+npx -y @deepseek-ai/dsh plugin --profile <name> add @tokens/dsh-model-manager@0.2.0
 ```
 
 `npm view @tokens/dsh-model-manager version` prints the current one. pnpm 11 installs a named
@@ -178,7 +178,7 @@ file:
 
 ```yaml
 minimumReleaseAgeExclude:
-  - '@tokens/dsh-model-manager@0.1.0'
+  - '@tokens/dsh-model-manager@0.2.0'
 ```
 
 Or lift the gate for a single command, which lifts it for everything that

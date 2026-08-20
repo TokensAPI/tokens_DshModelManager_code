@@ -17,7 +17,7 @@ You are on dsh if `~/.dsh/` exists, or the conversation runs in the DeepSeek
 Harness desktop app. The repository commits its runnable vision CLI, so a
 GitHub install needs no dependency lifecycle script or build allowlist:
 
-Current package identity: `@tokens/dsh-model-manager@0.1.0`.
+Current package identity: `@tokens/dsh-model-manager@0.2.0`.
 
 ```powershell
 npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"
