@@ -222,9 +222,16 @@ describe('Desktop model-manager settings section', () => {
         expect(SOURCE).toContain(
             'body: JSON.stringify({ mainModel: mainModel, visionModel: visionModel })',
         );
-        expect(SOURCE).toContain(
-            'Promise.resolve(synchronizeMainSelection(body.mainModel)).then(() => body)',
+        const saveModelsSource = SOURCE.slice(
+            SOURCE.indexOf('var saveModels'),
+            SOURCE.indexOf('var fetchStoredKey'),
         );
+        expect(saveModelsSource).toContain(
+            'synchronizeMainSelection(body.mainModel, body.mainProvider)',
+        );
+        expect(SOURCE).toContain("state.visionMode !== 'bridge'");
+        expect(SOURCE).toContain('t.nativeVision');
+        expect(SOURCE).toContain('t.directVision');
     });
 
     it('reveals and copies a saved key only after an explicit user action', () => {
@@ -250,6 +257,7 @@ describe('Desktop model-manager settings section', () => {
                               sessions: Record<string, unknown>,
                               modelDirectories: Record<string, unknown>,
                               model: string,
+                              provider?: string,
                           ) => Promise<boolean>;
                       };
                   };
@@ -291,6 +299,46 @@ describe('Desktop model-manager settings section', () => {
 
         expect(synchronized).toBe(true);
         expect(selected).toEqual([{ provider: 'modlens-tokensapi', model: 'qwen3.6-35b-x' }]);
+    });
+
+    it('selects the upstream route for a native multimodal main model', async () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const synchronize = loaded.factory(() => ({})).__manager.synchronizeCurrentSessionModel as (
+            sessions: Record<string, unknown>,
+            modelDirectories: Record<string, unknown>,
+            model: string,
+            provider: string,
+        ) => Promise<boolean>;
+        const selected: Array<{ provider: string; model: string }> = [];
+
+        await expect(
+            synchronize(
+                {
+                    list: { getSnapshot: () => ({ current: 'session-native' }) },
+                    subagentAddress: () => undefined,
+                },
+                {
+                    directoryFor: () => ({
+                        select: async (selection: { provider: string; model: string }) => {
+                            selected.push(selection);
+                        },
+                    }),
+                },
+                'claude-opus-4-6',
+                'tokensapi',
+            ),
+        ).resolves.toBe(true);
+        expect(selected).toEqual([{ provider: 'tokensapi', model: 'claude-opus-4-6' }]);
     });
 
     it('leaves no-session and addressed subagent views untouched', async () => {

@@ -24,6 +24,8 @@ const CLI_PATH = fileURLToPath(new URL('../dist/main.js', import.meta.url))
 const OUTPUT_SCHEMA = JSON.parse(readFileSync(new URL('./vision-schema.json', import.meta.url), 'utf8'))
 
 const CLI_TIMEOUT_MS = 180_000
+const DEFAULT_VISION_FAMILIES = ['deepseek', 'glm']
+const NATIVE_VISION_MODEL_ID = /(deepseek-(vl|ocr)|janus|glm-[\d.]*v(\b|-))/i
 
 // Product-owned route facts. Users supply only the credential; keeping these
 // constants here makes the Host route, spawned vision CLI, and regression
@@ -48,7 +50,11 @@ function managerRuntime(ctx) {
   if (!runtime) {
     runtime = {
       mainModel: TOKENSAPI.mainModel,
+      mainProvider: TOKENSAPI.agentProviderId,
+      visionMode: 'bridge',
       visionModel: TOKENSAPI.visionModel,
+      visionFamilies: DEFAULT_VISION_FAMILIES,
+      visionProviderEnabled: true,
       models: [],
       settings: null,
       agentDefaultModel: null,
@@ -71,7 +77,9 @@ export const MEDIA_EXT = {
 }
 
 export function apply(ctx, config = {}) {
-  managerRuntime(ctx)
+  const managed = managerRuntime(ctx)
+  managed.visionFamilies = Array.isArray(config.families) ? [...config.families] : DEFAULT_VISION_FAMILIES
+  managed.visionProviderEnabled = config.visionProvider !== false
   // One evidence cache for the whole plugin: every wrapper route and the
   // auto-read path share it, so the same pasted attachment is read once,
   // whichever surface asks first (issue #68; auto-read used to bypass
@@ -201,7 +209,7 @@ export function apply(ctx, config = {}) {
       runtime.agentDefaultModel = scope.agentDefaultModel
       Promise.resolve(
         runtime.agentDefaultModel.saveSelection({
-          provider: TOKENSAPI.agentProviderId,
+          provider: runtime.mainProvider,
           model: runtime.mainModel,
         }),
       ).catch((error) => {
@@ -648,19 +656,39 @@ function restoreUpstreamSource(messages, wrapperId, upstream) {
   return changed ? out : messages
 }
 
+/**
+ * Use the text-to-vision bridge only for supported text-only model families.
+ * Native image models and models outside the configured bridge families stay
+ * on the upstream provider, which keeps the selector and the actual request
+ * route aligned.
+ */
+function modelUsesVisionBridge(info, families = DEFAULT_VISION_FAMILIES) {
+  const id = String(info?.id ?? '').toLowerCase()
+  if (!families.some((family) => id.startsWith(String(family).toLowerCase()))) return false
+  if (NATIVE_VISION_MODEL_ID.test(id)) return false
+  if (Array.isArray(info?.inputModalities) && info.inputModalities.includes('image')) return false
+  return true
+}
+
+/**
+ * Describe how the selected main model receives image input.
+ *
+ * Only provider metadata that explicitly declares image input is treated as
+ * native multimodality. Supported text families use the ModLens bridge; every
+ * unknown or unsupported case stays on the direct upstream route without
+ * claiming visual capability that has not been confirmed.
+ */
+function managedVisionMode(info, families = DEFAULT_VISION_FAMILIES) {
+  if (Array.isArray(info?.inputModalities) && info.inputModalities.includes('image')) return 'native'
+  return modelUsesVisionBridge(info, families) ? 'bridge' : 'direct'
+}
+
 function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
   // Wrap only the text-only members of these families. Their own vision
   // models (present or future: deepseek-vl/ocr/janus, glm-4.5v, glm-5v-...)
   // need no bridge and are excluded by name and by declared modality.
-  const families = config.families || ['deepseek', 'glm']
-  const VISION_ID = /(deepseek-(vl|ocr)|janus|glm-[\d.]*v(\b|-))/i
-  const shouldWrap = (info) => {
-    const id = String(info?.id ?? '').toLowerCase()
-    if (!families.some((family) => id.startsWith(family))) return false
-    if (VISION_ID.test(id)) return false
-    if (Array.isArray(info?.inputModalities) && info.inputModalities.includes('image')) return false
-    return true
-  }
+  const families = config.families || DEFAULT_VISION_FAMILIES
+  const shouldWrap = (info) => modelUsesVisionBridge(info, families)
   if (typeof ctx.llm?.registerAdapter !== 'function' || typeof ctx.llm?.stream !== 'function') {
     return
   }
@@ -2073,9 +2101,37 @@ async function parseManagedModels(response) {
   return models
 }
 
+async function resolveManagedMainRoute(ctx, mainModel) {
+  const runtime = managerRuntime(ctx)
+  if (!runtime.visionProviderEnabled) {
+    return { provider: TOKENSAPI.providerId, visionMode: 'direct' }
+  }
+  let info = { id: mainModel }
+  if (typeof ctx.llm?.resolveModelInfo === 'function') {
+    try {
+      info = await ctx.llm.resolveModelInfo(TOKENSAPI.providerId, mainModel)
+    } catch {
+      // The settings update can race an adapter refresh on startup. Falling
+      // back to the id-based family rule keeps known bridge families working,
+      // while every unrelated model safely stays on the upstream provider.
+    }
+  }
+  const visionMode = managedVisionMode(info, runtime.visionFamilies)
+  return {
+    provider: visionMode === 'bridge' ? TOKENSAPI.agentProviderId : TOKENSAPI.providerId,
+    visionMode,
+  }
+}
+
 async function synchronizeMainModel(ctx, mainModel, models) {
   const runtime = managerRuntime(ctx)
   if (runtime.settings?.update) {
+    // The settings page needs the complete TokensAPI response so users can
+    // choose a model, but the conversation model directory is a different
+    // surface: it must advertise only the managed main model. The modlens
+    // wrapper mirrors this upstream catalog, so narrowing it here also keeps
+    // unrelated chat and vision-wrapper models out of the composer picker.
+    const selected = models.find((model) => model.id === mainModel)
     await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
       providers: {
         [TOKENSAPI.providerId]: {
@@ -2083,17 +2139,21 @@ async function synchronizeMainModel(ctx, mainModel, models) {
           apiKeyEnv: TOKENSAPI.credentialRef,
           api: 'openai-responses',
           baseURL: TOKENSAPI.baseURL,
-          models: models.map((model) => ({ id: model.id, name: model.name })),
+          models: [{ id: mainModel, name: selected?.name ?? mainModel }],
         },
       },
     })
   }
+  const route = await resolveManagedMainRoute(ctx, mainModel)
+  runtime.mainProvider = route.provider
+  runtime.visionMode = route.visionMode
   if (typeof runtime.agentDefaultModel?.saveSelection === 'function') {
     await runtime.agentDefaultModel.saveSelection({
-      provider: TOKENSAPI.agentProviderId,
+      provider: route.provider,
       model: mainModel,
     })
   }
+  return route
 }
 
 /** Public gate status. It intentionally contains neither the key nor its fingerprint. */
@@ -2131,6 +2191,8 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
     writable: credential.writable === true,
     provider: 'TokensAPI',
     mainModel: runtime.mainModel,
+    mainProvider: runtime.mainProvider,
+    visionMode: runtime.visionMode,
     visionModel: runtime.visionModel,
     models: publicModels(runtime),
     modelsAvailable: authenticated && runtime.models.length > 0,
@@ -2392,6 +2454,9 @@ export const __modelManager = {
   setManagedModels,
   revealManagedCredential,
   parseManagedModels,
+  modelUsesVisionBridge,
+  managedVisionMode,
+  resolveManagedMainRoute,
   selectedVisionModel,
   readImageBlock,
   runManagedVision,

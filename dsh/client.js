@@ -850,6 +850,9 @@ window.__ModuleLoader__.load({
         noModels: 'No matching models',
         main: 'Main model',
         vision: 'Vision model',
+        nativeVision: 'The main model supports images directly. The separate vision bridge is not used.',
+        directVision:
+          'This model uses its direct route. Native image support is not confirmed, so the separate vision bridge is not used.',
         endpoint: 'Endpoint',
         gateTitle: 'Enter your TokensAPI API key',
         gateIntro: 'The key is verified before Desktop opens. Chat and vision stay locked until verification succeeds.',
@@ -881,6 +884,8 @@ window.__ModuleLoader__.load({
         noModels: '没有匹配的模型',
         main: '主模型',
         vision: '视觉模型',
+        nativeVision: '当前主模型原生支持图片，直接使用其视觉能力，无需单独的视觉桥接模型。',
+        directVision: '当前模型使用直连模式；尚未确认其原生图片能力，因此不启用额外的视觉桥接模型。',
         endpoint: '接口地址',
         gateTitle: '请输入 TokensAPI API Key',
         gateIntro: 'Desktop 会先验证 Key；验证成功前，聊天和识图功能保持锁定。',
@@ -1136,7 +1141,9 @@ window.__ModuleLoader__.load({
                 return body
               }),
             )
-            .then((body) => Promise.resolve(synchronizeMainSelection(body.mainModel)).then(() => body))
+            .then((body) =>
+              Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider)).then(() => body),
+            )
             .then((body) => {
               statePair[1](body)
               mainPair[1](body.mainModel || '')
@@ -1168,6 +1175,9 @@ window.__ModuleLoader__.load({
                 if (!response.ok) throw new Error(body.error || 'save failed')
                 return body
               }),
+            )
+            .then((body) =>
+              Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider)).then(() => body),
             )
             .then((body) => {
               statePair[1](body)
@@ -1406,7 +1416,23 @@ window.__ModuleLoader__.load({
                   'form',
                   { onSubmit: saveModels },
                   modelRow(t.main, mainModel, mainPair[1], 'main'),
-                  modelRow(t.vision, visionModel, visionPair[1], 'vision'),
+                  state.visionMode !== 'bridge'
+                    ? h(
+                        'div',
+                        {
+                          style: {
+                            margin: '8px 0',
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            background: 'var(--dsw-alias-bg-layer-2)',
+                            color: 'var(--dsw-alias-label-secondary)',
+                            fontSize: 13,
+                            lineHeight: 1.5,
+                          },
+                        },
+                        state.visionMode === 'native' ? t.nativeVision : t.directVision,
+                      )
+                    : modelRow(t.vision, visionModel, visionPair[1], 'vision'),
                   !state.modelsAvailable
                     ? h(
                         'p',
@@ -1585,8 +1611,9 @@ window.__ModuleLoader__.load({
      * composer must submit session.selectModel through its shared directory as
      * well or it keeps displaying and using the previous model.
      */
-    async function synchronizeCurrentSessionModel(sessions, modelDirectories, mainModel) {
+    async function synchronizeCurrentSessionModel(sessions, modelDirectories, mainModel, mainProvider) {
       if (typeof mainModel !== 'string' || mainModel.trim() === '') return false
+      var provider = mainProvider === 'tokensapi' ? 'tokensapi' : 'modlens-tokensapi'
       var sessionId = sessions?.list?.getSnapshot?.()?.current
       if (!sessionId || typeof modelDirectories?.directoryFor !== 'function') return false
       // Addressed subagent sessions intentionally do not expose model selection.
@@ -1595,7 +1622,7 @@ window.__ModuleLoader__.load({
       }
       var directory = modelDirectories.directoryFor(sessionId)
       if (typeof directory?.select !== 'function') return false
-      await directory.select({ provider: 'modlens-tokensapi', model: mainModel.trim() })
+      await directory.select({ provider: provider, model: mainModel.trim() })
       return true
     }
 
@@ -1607,8 +1634,8 @@ window.__ModuleLoader__.load({
           .then(({ response, body }) => {
             if (!response.ok || body?.provider !== 'TokensAPI') return
             var react = require('react')
-            var Section = ModelManagerSection(react, (mainModel) =>
-              synchronizeCurrentSessionModel(scope.sessions, scope.modelDirectories, mainModel),
+            var Section = ModelManagerSection(react, (mainModel, mainProvider) =>
+              synchronizeCurrentSessionModel(scope.sessions, scope.modelDirectories, mainModel, mainProvider),
             )
             scope.slots.inject('settings.section', function* () {
               yield scope.slots.register(

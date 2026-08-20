@@ -121,6 +121,8 @@ describe('TokensAPI credential gate: 50 positive cases', () => {
                 writable: true,
                 provider: 'TokensAPI',
                 mainModel: 'deepseek-v4-flash',
+                mainProvider: 'modlens-tokensapi',
+                visionMode: 'bridge',
                 visionModel: 'qwen3.6-35b-a3b',
                 models: API_MODELS,
                 modelsAvailable: true,
@@ -259,6 +261,103 @@ describe('TokensAPI remote API-key verification', () => {
 });
 
 describe('TokensAPI model discovery and selection', () => {
+    it('uses the bridge only for supported text-only model families', () => {
+        expect(
+            __modelManager.modelUsesVisionBridge({
+                id: 'deepseek-v4-flash',
+                inputModalities: ['text'],
+            }),
+        ).toBe(true);
+        expect(
+            __modelManager.modelUsesVisionBridge({
+                id: 'deepseek-vl-2',
+                inputModalities: ['text', 'image'],
+            }),
+        ).toBe(false);
+        expect(
+            __modelManager.modelUsesVisionBridge({
+                id: 'claude-opus-4-6',
+                inputModalities: ['text', 'image'],
+            }),
+        ).toBe(false);
+    });
+
+    it('classifies native, bridged and direct visual behavior separately', () => {
+        expect(
+            __modelManager.managedVisionMode({
+                id: 'claude-opus-4-6',
+                inputModalities: ['text', 'image'],
+            }),
+        ).toBe('native');
+        expect(
+            __modelManager.managedVisionMode({
+                id: 'deepseek-v4-flash',
+                inputModalities: ['text'],
+            }),
+        ).toBe('bridge');
+        expect(
+            __modelManager.managedVisionMode({
+                id: 'claude-opus-4-6',
+                inputModalities: ['text'],
+            }),
+        ).toBe('direct');
+    });
+
+    it('routes native multimodal models upstream and text-only bridge models through modlens', async () => {
+        await expect(
+            __modelManager.resolveManagedMainRoute(
+                {
+                    llm: {
+                        resolveModelInfo: async () => ({
+                            id: 'deepseek-v4-flash',
+                            inputModalities: ['text'],
+                        }),
+                    },
+                },
+                'deepseek-v4-flash',
+            ),
+        ).resolves.toEqual({ provider: TOKENSAPI.agentProviderId, visionMode: 'bridge' });
+        await expect(
+            __modelManager.resolveManagedMainRoute(
+                {
+                    llm: {
+                        resolveModelInfo: async () => ({
+                            id: 'claude-opus-4-6',
+                            inputModalities: ['text', 'image'],
+                        }),
+                    },
+                },
+                'claude-opus-4-6',
+            ),
+        ).resolves.toEqual({ provider: TOKENSAPI.providerId, visionMode: 'native' });
+    });
+
+    it('uses the direct route when capability metadata is missing or the bridge is disabled', async () => {
+        await expect(
+            __modelManager.resolveManagedMainRoute(
+                {
+                    llm: {
+                        resolveModelInfo: async () => {
+                            throw new Error('metadata unavailable');
+                        },
+                    },
+                },
+                'claude-opus-4-6',
+            ),
+        ).resolves.toEqual({ provider: TOKENSAPI.providerId, visionMode: 'direct' });
+
+        const credential = credentialHarness();
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: () => {},
+        };
+        apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
+        await expect(
+            __modelManager.resolveManagedMainRoute(ctx, 'deepseek-v4-flash'),
+        ).resolves.toEqual({ provider: TOKENSAPI.providerId, visionMode: 'direct' });
+    });
+
     it('parses, trims and deduplicates the OpenAI-compatible model list', async () => {
         const models = await __modelManager.parseManagedModels({
             json: async () => ({
@@ -402,7 +501,7 @@ describe('TokensAPI model discovery and selection', () => {
         apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
         await Promise.resolve();
         await __modelManager.setManagedCredential(ctx, 'tk-live-settings', VALID_RESPONSE);
-        await __modelManager.setManagedModels(
+        const status = await __modelManager.setManagedModels(
             ctx,
             { mainModel: 'deepseek-v3.2', visionModel: 'qwen3.6-35b-a3b' },
             VALID_RESPONSE,
@@ -420,12 +519,15 @@ describe('TokensAPI model discovery and selection', () => {
             providers: {
                 tokensapi: {
                     baseURL: TOKENSAPI.baseURL,
-                    models: API_MODELS,
+                    models: [{ id: 'deepseek-v3.2', name: 'DeepSeek V3.2' }],
                 },
             },
         });
+        // The settings page still receives every API model for its own
+        // selector; only the conversation catalog is narrowed.
+        expect(status.models).toEqual(API_MODELS);
         expect(selections.at(-1)).toEqual({
-            provider: TOKENSAPI.agentProviderId,
+            provider: TOKENSAPI.providerId,
             model: 'deepseek-v3.2',
         });
     });
