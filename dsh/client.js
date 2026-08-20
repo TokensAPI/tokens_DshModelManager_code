@@ -1072,7 +1072,7 @@ window.__ModuleLoader__.load({
       return close
     }
 
-    function ModelManagerSection(react) {
+    function ModelManagerSection(react, synchronizeMainSelection) {
       var h = react.createElement
       return function TokensModelManager() {
         var statePair = react.useState(null)
@@ -1136,6 +1136,7 @@ window.__ModuleLoader__.load({
                 return body
               }),
             )
+            .then((body) => Promise.resolve(synchronizeMainSelection(body.mainModel)).then(() => body))
             .then((body) => {
               statePair[1](body)
               mainPair[1](body.mainModel || '')
@@ -1455,7 +1456,13 @@ window.__ModuleLoader__.load({
               h('strong', null, t.key),
               h(
                 'span',
-                { style: { color: state?.authenticated ? 'var(--dsw-alias-state-success-primary)' : 'var(--dsw-alias-state-error-primary)' } },
+                {
+                  style: {
+                    color: state?.authenticated
+                      ? 'var(--dsw-alias-state-success-primary)'
+                      : 'var(--dsw-alias-state-error-primary)',
+                  },
+                },
                 state?.authenticated ? t.ready : t.missing,
               ),
             ),
@@ -1570,15 +1577,39 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Apply the managed main model to the currently open ordinary session.
+     *
+     * The Host setting changed by /tokens/model-manager is the default for new
+     * sessions. Existing sessions retain their own durable selection, so the
+     * composer must submit session.selectModel through its shared directory as
+     * well or it keeps displaying and using the previous model.
+     */
+    async function synchronizeCurrentSessionModel(sessions, modelDirectories, mainModel) {
+      if (typeof mainModel !== 'string' || mainModel.trim() === '') return false
+      var sessionId = sessions?.list?.getSnapshot?.()?.current
+      if (!sessionId || typeof modelDirectories?.directoryFor !== 'function') return false
+      // Addressed subagent sessions intentionally do not expose model selection.
+      if (typeof sessions?.subagentAddress === 'function' && sessions.subagentAddress(sessionId)) {
+        return false
+      }
+      var directory = modelDirectories.directoryFor(sessionId)
+      if (typeof directory?.select !== 'function') return false
+      await directory.select({ provider: 'modlens-tokensapi', model: mainModel.trim() })
+      return true
+    }
+
     function registerManagerSection(ctx) {
       if (typeof ctx.inject !== 'function') return
-      ctx.inject(['slots'], (scope) => {
+      ctx.inject(['slots', 'sessions', 'modelDirectories'], (scope) => {
         fetch('/tokens/model-manager', { cache: 'no-store' })
           .then((response) => response.json().then((body) => ({ response, body })))
           .then(({ response, body }) => {
             if (!response.ok || body?.provider !== 'TokensAPI') return
             var react = require('react')
-            var Section = ModelManagerSection(react)
+            var Section = ModelManagerSection(react, (mainModel) =>
+              synchronizeCurrentSessionModel(scope.sessions, scope.modelDirectories, mainModel),
+            )
             scope.slots.inject('settings.section', function* () {
               yield scope.slots.register(
                 {
@@ -1628,8 +1659,12 @@ window.__ModuleLoader__.load({
       secretFieldProps: secretFieldProps,
       ConfigCard: ConfigCard,
     }
-    exports.__manager = { registerAccessGate: registerAccessGate }
-    // `slots` is optional, so it is acquired through registerManagerSection.
+    exports.__manager = {
+      registerAccessGate: registerAccessGate,
+      synchronizeCurrentSessionModel: synchronizeCurrentSessionModel,
+    }
+    // Settings integration is optional, so its services are acquired through
+    // registerManagerSection instead of making the whole browser plugin wait.
     exports.inject = []
     return module.exports
   },

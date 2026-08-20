@@ -222,6 +222,9 @@ describe('Desktop model-manager settings section', () => {
         expect(SOURCE).toContain(
             'body: JSON.stringify({ mainModel: mainModel, visionModel: visionModel })',
         );
+        expect(SOURCE).toContain(
+            'Promise.resolve(synchronizeMainSelection(body.mainModel)).then(() => body)',
+        );
     });
 
     it('reveals and copies a saved key only after an explicit user action', () => {
@@ -236,5 +239,95 @@ describe('Desktop model-manager settings section', () => {
 
     it('does not mount the redundant legacy vision-engine plugin card', () => {
         expect(SOURCE).not.toContain('registerCard(ctx)');
+    });
+
+    it('switches the currently open session after the managed main model is saved', async () => {
+        let loaded:
+            | {
+                  factory: (require: (id: string) => unknown) => {
+                      __manager: {
+                          synchronizeCurrentSessionModel: (
+                              sessions: Record<string, unknown>,
+                              modelDirectories: Record<string, unknown>,
+                              model: string,
+                          ) => Promise<boolean>;
+                      };
+                  };
+              }
+            | undefined;
+        const windowStub = {
+            __ModuleLoader__: {
+                load: (definition: typeof loaded) => {
+                    loaded = definition;
+                },
+            },
+        };
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(windowStub, {}, () => Promise.reject(new Error('unused')), class {});
+        if (!loaded) throw new Error('client module was not registered');
+        const selected: Array<{ provider: string; model: string }> = [];
+        const sessions = {
+            list: { getSnapshot: () => ({ current: 'session-1' }) },
+            subagentAddress: () => undefined,
+        };
+        const modelDirectories = {
+            directoryFor: (sessionId: string) => {
+                expect(sessionId).toBe('session-1');
+                return {
+                    select: async (selection: { provider: string; model: string }) => {
+                        selected.push(selection);
+                    },
+                };
+            },
+        };
+
+        const synchronized = await loaded
+            .factory(() => ({}))
+            .__manager.synchronizeCurrentSessionModel(
+                sessions,
+                modelDirectories,
+                ' qwen3.6-35b-x ',
+            );
+
+        expect(synchronized).toBe(true);
+        expect(selected).toEqual([{ provider: 'modlens-tokensapi', model: 'qwen3.6-35b-x' }]);
+    });
+
+    it('leaves no-session and addressed subagent views untouched', async () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const synchronize = loaded.factory(() => ({})).__manager.synchronizeCurrentSessionModel as (
+            sessions: Record<string, unknown>,
+            modelDirectories: Record<string, unknown>,
+            model: string,
+        ) => Promise<boolean>;
+        let selects = 0;
+        const directories = {
+            directoryFor: () => ({ select: async () => selects++ }),
+        };
+
+        await expect(
+            synchronize({ list: { getSnapshot: () => ({}) } }, directories, 'qwen3.6-35b-x'),
+        ).resolves.toBe(false);
+        await expect(
+            synchronize(
+                {
+                    list: { getSnapshot: () => ({ current: 'child' }) },
+                    subagentAddress: () => ({ parentSessionId: 'parent' }),
+                },
+                directories,
+                'qwen3.6-35b-x',
+            ),
+        ).resolves.toBe(false);
+        expect(selects).toBe(0);
     });
 });
