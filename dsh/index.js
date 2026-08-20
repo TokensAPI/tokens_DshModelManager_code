@@ -25,7 +25,14 @@ const OUTPUT_SCHEMA = JSON.parse(readFileSync(new URL('./vision-schema.json', im
 
 const CLI_TIMEOUT_MS = 180_000
 const DEFAULT_VISION_FAMILIES = ['deepseek', 'glm']
-const NATIVE_VISION_MODEL_ID = /(deepseek-(vl|ocr)|janus|glm-[\d.]*v(\b|-))/i
+// TokensAPI's model list currently exposes transport compatibility but not a
+// modality field. Keep the fallback deliberately narrow: every family below
+// is product-verified to accept image input, while unknown models remain text
+// only until the upstream catalog can say otherwise.
+const NATIVE_VISION_MODEL_ID =
+  /^(claude-(3(?:[.-]|$)|(opus|sonnet|haiku)-)|deepseek-(vl|ocr)|janus|glm-[\d.]*v(\b|-)|qwen3\.6-35b-a3b(?:$|-))/i
+const CLAUDE_MODEL_ID = /^claude-/i
+const MANAGED_ENDPOINT_TYPES = new Set(['anthropic', 'gemini', 'openai', 'openai-response', 'openai-response-compact'])
 
 // Product-owned route facts. Users supply only the credential; keeping these
 // constants here makes the Host route, spawned vision CLI, and regression
@@ -665,21 +672,20 @@ function restoreUpstreamSource(messages, wrapperId, upstream) {
 function modelUsesVisionBridge(info, families = DEFAULT_VISION_FAMILIES) {
   const id = String(info?.id ?? '').toLowerCase()
   if (!families.some((family) => id.startsWith(String(family).toLowerCase()))) return false
-  if (NATIVE_VISION_MODEL_ID.test(id)) return false
-  if (Array.isArray(info?.inputModalities) && info.inputModalities.includes('image')) return false
+  if (managedModelInput(info).includes('image')) return false
   return true
 }
 
 /**
  * Describe how the selected main model receives image input.
  *
- * Only provider metadata that explicitly declares image input is treated as
- * native multimodality. Supported text families use the ModLens bridge; every
- * unknown or unsupported case stays on the direct upstream route without
- * claiming visual capability that has not been confirmed.
+ * Explicit provider metadata wins. TokensAPI does not currently return that
+ * field, so a small product-verified id table fills the gap for known native
+ * multimodal models. Supported text families use the ModLens bridge; every
+ * other text model stays on the direct upstream route.
  */
 function managedVisionMode(info, families = DEFAULT_VISION_FAMILIES) {
-  if (Array.isArray(info?.inputModalities) && info.inputModalities.includes('image')) return 'native'
+  if (managedModelInput(info).includes('image')) return 'native'
   return modelUsesVisionBridge(info, families) ? 'bridge' : 'direct'
 }
 
@@ -2050,6 +2056,7 @@ function resolvedCredentialValue(result) {
 
 const MAX_MODEL_COUNT = 1000
 const MAX_MODEL_ID_LENGTH = 160
+const MAX_ENDPOINT_TYPE_COUNT = 16
 
 function normalizeModelId(value, fallback) {
   if (typeof value !== 'string') return fallback
@@ -2059,6 +2066,50 @@ function normalizeModelId(value, fallback) {
     return fallback
   }
   return model
+}
+
+function normalizeEndpointTypes(value) {
+  if (!Array.isArray(value) || value.length > MAX_ENDPOINT_TYPE_COUNT) return []
+  const endpointTypes = []
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue
+    const endpointType = entry.trim().toLowerCase()
+    if (!MANAGED_ENDPOINT_TYPES.has(endpointType) || endpointTypes.includes(endpointType)) continue
+    endpointTypes.push(endpointType)
+  }
+  return endpointTypes
+}
+
+function managedModelInput(model) {
+  const declared = Array.isArray(model?.input)
+    ? model.input
+    : Array.isArray(model?.inputModalities)
+      ? model.inputModalities
+      : []
+  if (declared.includes('image')) return ['text', 'image']
+  if (declared.length > 0) return ['text']
+  return NATIVE_VISION_MODEL_ID.test(String(model?.id ?? '')) ? ['text', 'image'] : ['text']
+}
+
+function managedModelApi(model) {
+  const hasEndpointMetadata = Array.isArray(model?.endpointTypes)
+  const endpointTypes = normalizeEndpointTypes(model?.endpointTypes)
+  const isClaude = CLAUDE_MODEL_ID.test(String(model?.id ?? ''))
+
+  // Older TokensAPI-compatible catalogs may omit this metadata. Preserve the
+  // historical Responses route there, except for Claude where the native
+  // Messages protocol is required for DSH's tool schema.
+  if (!hasEndpointMetadata) {
+    return isClaude ? 'anthropic-messages' : 'openai-responses'
+  }
+  if (isClaude && endpointTypes.includes('anthropic')) return 'anthropic-messages'
+  if (endpointTypes.includes('openai-response')) return 'openai-responses'
+  if (endpointTypes.includes('openai')) return 'openai-completions'
+  if (endpointTypes.includes('anthropic')) return 'anthropic-messages'
+  throw new ManagedCredentialError(
+    'unsupported_model',
+    `模型 "${normalizeModelId(model?.id, 'unknown')}" 暂不支持 DSH 可用的调用协议`,
+  )
 }
 
 function selectedVisionModel(ctx) {
@@ -2093,7 +2144,15 @@ async function parseManagedModels(response) {
     if (!id || seen.has(id)) continue
     seen.add(id)
     const name = normalizeModelId(entry?.name, id)
-    models.push({ id, name })
+    const ownedBy = normalizeModelId(entry?.owned_by, '')
+    const endpointTypes = normalizeEndpointTypes(entry?.supported_endpoint_types)
+    const hasEndpointTypes = Array.isArray(entry?.supported_endpoint_types)
+    models.push({
+      id,
+      name,
+      ...(ownedBy ? { ownedBy } : {}),
+      ...(hasEndpointTypes ? { endpointTypes } : {}),
+    })
   }
   if (models.length === 0) {
     throw new ManagedCredentialError('upstream', 'TokensAPI 没有返回可用模型')
@@ -2103,28 +2162,22 @@ async function parseManagedModels(response) {
 
 async function resolveManagedMainRoute(ctx, mainModel) {
   const runtime = managerRuntime(ctx)
-  if (!runtime.visionProviderEnabled) {
-    return { provider: TOKENSAPI.providerId, visionMode: 'direct' }
-  }
-  let info = { id: mainModel }
-  if (typeof ctx.llm?.resolveModelInfo === 'function') {
-    try {
-      info = await ctx.llm.resolveModelInfo(TOKENSAPI.providerId, mainModel)
-    } catch {
-      // The settings update can race an adapter refresh on startup. Falling
-      // back to the id-based family rule keeps known bridge families working,
-      // while every unrelated model safely stays on the upstream provider.
-    }
-  }
-  const visionMode = managedVisionMode(info, runtime.visionFamilies)
+  const selected = runtime.models.find((model) => model.id === mainModel) ?? { id: mainModel, name: mainModel }
+  const input = managedModelInput(selected)
+  const api = managedModelApi(selected)
+  let visionMode = managedVisionMode({ ...selected, inputModalities: input }, runtime.visionFamilies)
+  if (!runtime.visionProviderEnabled && visionMode === 'bridge') visionMode = 'direct'
   return {
     provider: visionMode === 'bridge' ? TOKENSAPI.agentProviderId : TOKENSAPI.providerId,
     visionMode,
+    api,
+    input,
   }
 }
 
 async function synchronizeMainModel(ctx, mainModel, models) {
   const runtime = managerRuntime(ctx)
+  const route = await resolveManagedMainRoute(ctx, mainModel)
   if (runtime.settings?.update) {
     // The settings page needs the complete TokensAPI response so users can
     // choose a model, but the conversation model directory is a different
@@ -2137,14 +2190,13 @@ async function synchronizeMainModel(ctx, mainModel, models) {
         [TOKENSAPI.providerId]: {
           displayName: 'TokensAPI',
           apiKeyEnv: TOKENSAPI.credentialRef,
-          api: 'openai-responses',
+          api: route.api,
           baseURL: TOKENSAPI.baseURL,
-          models: [{ id: mainModel, name: selected?.name ?? mainModel }],
+          models: [{ id: mainModel, name: selected?.name ?? mainModel, input: route.input }],
         },
       },
     })
   }
-  const route = await resolveManagedMainRoute(ctx, mainModel)
   runtime.mainProvider = route.provider
   runtime.visionMode = route.visionMode
   if (typeof runtime.agentDefaultModel?.saveSelection === 'function') {
@@ -2454,6 +2506,8 @@ export const __modelManager = {
   setManagedModels,
   revealManagedCredential,
   parseManagedModels,
+  managedModelApi,
+  managedModelInput,
   modelUsesVisionBridge,
   managedVisionMode,
   resolveManagedMainRoute,

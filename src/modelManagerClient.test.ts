@@ -341,6 +341,175 @@ describe('Desktop model-manager settings section', () => {
         expect(selected).toEqual([{ provider: 'tokensapi', model: 'claude-opus-4-6' }]);
     });
 
+    it('waits for the refreshed provider catalog before switching the current session', async () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const synchronize = loaded.factory(() => ({})).__manager.synchronizeCurrentSessionModel as (
+            sessions: Record<string, unknown>,
+            modelDirectories: Record<string, unknown>,
+            model: string,
+            provider: string,
+            retry: { attempts: number; delayMs: number },
+        ) => Promise<boolean>;
+        const selected: Array<{ provider: string; model: string }> = [];
+        let loads = 0;
+
+        await expect(
+            synchronize(
+                {
+                    list: { getSnapshot: () => ({ current: 'session-refresh' }) },
+                    subagentAddress: () => undefined,
+                },
+                {
+                    directoryFor: () => ({
+                        load: async () => {
+                            loads += 1;
+                            return {
+                                groups:
+                                    loads === 1
+                                        ? [
+                                              {
+                                                  id: 'modlens-tokensapi',
+                                                  models: [{ id: 'deepseek-v4-flash' }],
+                                              },
+                                          ]
+                                        : [
+                                              {
+                                                  id: 'tokensapi',
+                                                  models: [{ id: 'claude-opus-4-7' }],
+                                              },
+                                          ],
+                            };
+                        },
+                        select: async (selection: { provider: string; model: string }) => {
+                            selected.push(selection);
+                        },
+                    }),
+                },
+                'claude-opus-4-7',
+                'tokensapi',
+                { attempts: 3, delayMs: 0 },
+            ),
+        ).resolves.toBe(true);
+        expect(loads).toBe(2);
+        expect(selected).toEqual([{ provider: 'tokensapi', model: 'claude-opus-4-7' }]);
+    });
+
+    it('does not select a model that never appears in the refreshed catalog', async () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const synchronize = loaded.factory(() => ({})).__manager.synchronizeCurrentSessionModel as (
+            sessions: Record<string, unknown>,
+            modelDirectories: Record<string, unknown>,
+            model: string,
+            provider: string,
+            retry: { attempts: number; delayMs: number },
+        ) => Promise<boolean>;
+        let selects = 0;
+
+        await expect(
+            synchronize(
+                {
+                    list: { getSnapshot: () => ({ current: 'session-timeout' }) },
+                    subagentAddress: () => undefined,
+                },
+                {
+                    directoryFor: () => ({
+                        load: async () => ({
+                            groups: [
+                                {
+                                    id: 'modlens-tokensapi',
+                                    models: [{ id: 'deepseek-v4-flash' }],
+                                },
+                            ],
+                        }),
+                        select: async () => {
+                            selects += 1;
+                        },
+                    }),
+                },
+                'claude-opus-4-7',
+                'tokensapi',
+                { attempts: 2, delayMs: 0 },
+            ),
+        ).rejects.toThrow(/模型目录尚未刷新/);
+        expect(selects).toBe(0);
+    });
+
+    it('recovers when one catalog refresh fails before the new model appears', async () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const synchronize = loaded.factory(() => ({})).__manager.synchronizeCurrentSessionModel as (
+            sessions: Record<string, unknown>,
+            modelDirectories: Record<string, unknown>,
+            model: string,
+            provider: string,
+            retry: { attempts: number; delayMs: number },
+        ) => Promise<boolean>;
+        let loads = 0;
+        const selected: Array<{ provider: string; model: string }> = [];
+
+        await expect(
+            synchronize(
+                {
+                    list: { getSnapshot: () => ({ current: 'session-recover' }) },
+                    subagentAddress: () => undefined,
+                },
+                {
+                    directoryFor: () => ({
+                        load: async () => {
+                            loads += 1;
+                            if (loads === 1) throw new Error('adapter refresh in progress');
+                            return {
+                                groups: [
+                                    {
+                                        id: 'tokensapi',
+                                        models: [{ id: 'claude-opus-4-7' }],
+                                    },
+                                ],
+                            };
+                        },
+                        select: async (selection: { provider: string; model: string }) => {
+                            selected.push(selection);
+                        },
+                    }),
+                },
+                'claude-opus-4-7',
+                'tokensapi',
+                { attempts: 3, delayMs: 0 },
+            ),
+        ).resolves.toBe(true);
+        expect(loads).toBe(2);
+        expect(selected).toEqual([{ provider: 'tokensapi', model: 'claude-opus-4-7' }]);
+    });
+
     it('leaves no-session and addressed subagent views untouched', async () => {
         let loaded:
             | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }

@@ -53,14 +53,42 @@ function credentialHarness(initial?: string, verified = false): CredentialHarnes
 }
 
 const API_MODELS = [
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-    { id: 'qwen3.6-35b-a3b', name: 'Qwen 3.6 Vision' },
-    { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
+    {
+        id: 'deepseek-v4-flash',
+        name: 'DeepSeek V4 Flash',
+        ownedBy: 'deepseek',
+        endpointTypes: ['openai', 'openai-response', 'anthropic'],
+    },
+    {
+        id: 'qwen3.6-35b-a3b',
+        name: 'Qwen 3.6 Vision',
+        ownedBy: 'qwen',
+        endpointTypes: ['openai', 'openai-response'],
+    },
+    {
+        id: 'deepseek-v3.2',
+        name: 'DeepSeek V3.2',
+        ownedBy: 'deepseek',
+        endpointTypes: ['openai', 'openai-response'],
+    },
+    {
+        id: 'claude-opus-4-7',
+        name: 'Claude Opus 4.7',
+        ownedBy: 'vertex-ai',
+        endpointTypes: ['anthropic', 'openai'],
+    },
 ];
 
 const VALID_RESPONSE = async () => ({
     status: 200,
-    json: async () => ({ data: API_MODELS }),
+    json: async () => ({
+        data: API_MODELS.map((model) => ({
+            id: model.id,
+            name: model.name,
+            owned_by: model.ownedBy,
+            supported_endpoint_types: model.endpointTypes,
+        })),
+    }),
 });
 
 const VALID_KEYS = Array.from({ length: 50 }, (_, index) => {
@@ -305,46 +333,32 @@ describe('TokensAPI model discovery and selection', () => {
 
     it('routes native multimodal models upstream and text-only bridge models through modlens', async () => {
         await expect(
-            __modelManager.resolveManagedMainRoute(
-                {
-                    llm: {
-                        resolveModelInfo: async () => ({
-                            id: 'deepseek-v4-flash',
-                            inputModalities: ['text'],
-                        }),
-                    },
-                },
-                'deepseek-v4-flash',
-            ),
-        ).resolves.toEqual({ provider: TOKENSAPI.agentProviderId, visionMode: 'bridge' });
+            __modelManager.resolveManagedMainRoute({}, 'deepseek-v4-flash'),
+        ).resolves.toEqual({
+            provider: TOKENSAPI.agentProviderId,
+            visionMode: 'bridge',
+            api: 'openai-responses',
+            input: ['text'],
+        });
         await expect(
-            __modelManager.resolveManagedMainRoute(
-                {
-                    llm: {
-                        resolveModelInfo: async () => ({
-                            id: 'claude-opus-4-6',
-                            inputModalities: ['text', 'image'],
-                        }),
-                    },
-                },
-                'claude-opus-4-6',
-            ),
-        ).resolves.toEqual({ provider: TOKENSAPI.providerId, visionMode: 'native' });
+            __modelManager.resolveManagedMainRoute({}, 'claude-opus-4-7'),
+        ).resolves.toEqual({
+            provider: TOKENSAPI.providerId,
+            visionMode: 'native',
+            api: 'anthropic-messages',
+            input: ['text', 'image'],
+        });
     });
 
-    it('uses the direct route when capability metadata is missing or the bridge is disabled', async () => {
+    it('uses the direct route for an unknown text model or when the bridge is disabled', async () => {
         await expect(
-            __modelManager.resolveManagedMainRoute(
-                {
-                    llm: {
-                        resolveModelInfo: async () => {
-                            throw new Error('metadata unavailable');
-                        },
-                    },
-                },
-                'claude-opus-4-6',
-            ),
-        ).resolves.toEqual({ provider: TOKENSAPI.providerId, visionMode: 'direct' });
+            __modelManager.resolveManagedMainRoute({}, 'unclassified-text-model'),
+        ).resolves.toEqual({
+            provider: TOKENSAPI.providerId,
+            visionMode: 'direct',
+            api: 'openai-responses',
+            input: ['text'],
+        });
 
         const credential = credentialHarness();
         const ctx = {
@@ -355,14 +369,66 @@ describe('TokensAPI model discovery and selection', () => {
         apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
         await expect(
             __modelManager.resolveManagedMainRoute(ctx, 'deepseek-v4-flash'),
-        ).resolves.toEqual({ provider: TOKENSAPI.providerId, visionMode: 'direct' });
+        ).resolves.toEqual({
+            provider: TOKENSAPI.providerId,
+            visionMode: 'direct',
+            api: 'openai-responses',
+            input: ['text'],
+        });
+    });
+
+    it('selects a DSH protocol from TokensAPI endpoint metadata', () => {
+        expect(
+            __modelManager.managedModelApi({
+                id: 'claude-opus-4-7',
+                endpointTypes: ['anthropic', 'openai'],
+            }),
+        ).toBe('anthropic-messages');
+        expect(
+            __modelManager.managedModelApi({
+                id: 'deepseek-v4-flash',
+                endpointTypes: ['openai', 'openai-response'],
+            }),
+        ).toBe('openai-responses');
+        expect(
+            __modelManager.managedModelApi({ id: 'openai-only', endpointTypes: ['openai'] }),
+        ).toBe('openai-completions');
+        expect(() =>
+            __modelManager.managedModelApi({ id: 'gemini-only', endpointTypes: ['gemini'] }),
+        ).toThrow(/暂不支持 DSH/);
+        expect(() =>
+            __modelManager.managedModelApi({ id: 'unknown-only', endpointTypes: ['future-api'] }),
+        ).toThrow(/暂不支持 DSH/);
+    });
+
+    it('declares verified native multimodal models as accepting image input', () => {
+        expect(__modelManager.managedModelInput({ id: 'claude-opus-4-7' })).toEqual([
+            'text',
+            'image',
+        ]);
+        expect(__modelManager.managedModelInput({ id: 'qwen3.6-35b-a3b' })).toEqual([
+            'text',
+            'image',
+        ]);
+        expect(__modelManager.managedModelInput({ id: 'deepseek-v4-flash' })).toEqual(['text']);
     });
 
     it('parses, trims and deduplicates the OpenAI-compatible model list', async () => {
         const models = await __modelManager.parseManagedModels({
             json: async () => ({
                 data: [
-                    { id: ' deepseek-v4-flash ', name: ' DeepSeek V4 Flash ' },
+                    {
+                        id: ' deepseek-v4-flash ',
+                        name: ' DeepSeek V4 Flash ',
+                        owned_by: ' deepseek ',
+                        supported_endpoint_types: [
+                            'openai-response',
+                            'OPENAI',
+                            'unknown',
+                            42,
+                            'openai-response',
+                        ],
+                    },
                     { id: 'deepseek-v4-flash', name: 'duplicate' },
                     { id: '' },
                     null,
@@ -371,7 +437,12 @@ describe('TokensAPI model discovery and selection', () => {
             }),
         });
         expect(models).toEqual([
-            { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+            {
+                id: 'deepseek-v4-flash',
+                name: 'DeepSeek V4 Flash',
+                ownedBy: 'deepseek',
+                endpointTypes: ['openai-response', 'openai'],
+            },
             { id: 'qwen3.6-35b-a3b', name: 'qwen3.6-35b-a3b' },
         ]);
     });
@@ -519,7 +590,8 @@ describe('TokensAPI model discovery and selection', () => {
             providers: {
                 tokensapi: {
                     baseURL: TOKENSAPI.baseURL,
-                    models: [{ id: 'deepseek-v3.2', name: 'DeepSeek V3.2' }],
+                    api: 'openai-responses',
+                    models: [{ id: 'deepseek-v3.2', name: 'DeepSeek V3.2', input: ['text'] }],
                 },
             },
         });
@@ -529,6 +601,34 @@ describe('TokensAPI model discovery and selection', () => {
         expect(selections.at(-1)).toEqual({
             provider: TOKENSAPI.providerId,
             model: 'deepseek-v3.2',
+        });
+
+        await __modelManager.setManagedModels(
+            ctx,
+            { mainModel: 'claude-opus-4-7', visionModel: 'qwen3.6-35b-a3b' },
+            VALID_RESPONSE,
+        );
+        expect(
+            [...updates]
+                .reverse()
+                .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch,
+        ).toMatchObject({
+            providers: {
+                tokensapi: {
+                    api: 'anthropic-messages',
+                    models: [
+                        {
+                            id: 'claude-opus-4-7',
+                            name: 'Claude Opus 4.7',
+                            input: ['text', 'image'],
+                        },
+                    ],
+                },
+            },
+        });
+        expect(selections.at(-1)).toEqual({
+            provider: TOKENSAPI.providerId,
+            model: 'claude-opus-4-7',
         });
     });
 });

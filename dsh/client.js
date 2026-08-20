@@ -1611,9 +1611,10 @@ window.__ModuleLoader__.load({
      * composer must submit session.selectModel through its shared directory as
      * well or it keeps displaying and using the previous model.
      */
-    async function synchronizeCurrentSessionModel(sessions, modelDirectories, mainModel, mainProvider) {
+    async function synchronizeCurrentSessionModel(sessions, modelDirectories, mainModel, mainProvider, retry) {
       if (typeof mainModel !== 'string' || mainModel.trim() === '') return false
       var provider = mainProvider === 'tokensapi' ? 'tokensapi' : 'modlens-tokensapi'
+      var model = mainModel.trim()
       var sessionId = sessions?.list?.getSnapshot?.()?.current
       if (!sessionId || typeof modelDirectories?.directoryFor !== 'function') return false
       // Addressed subagent sessions intentionally do not expose model selection.
@@ -1622,7 +1623,38 @@ window.__ModuleLoader__.load({
       }
       var directory = modelDirectories.directoryFor(sessionId)
       if (typeof directory?.select !== 'function') return false
-      await directory.select({ provider: provider, model: mainModel.trim() })
+      if (typeof directory.load === 'function') {
+        var attempts = Number.isInteger(retry?.attempts) && retry.attempts > 0 ? retry.attempts : 20
+        var delayMs = Number.isFinite(retry?.delayMs) && retry.delayMs >= 0 ? retry.delayMs : 100
+        var available = false
+        var loadError = null
+        for (var attempt = 0; attempt < attempts; attempt += 1) {
+          try {
+            var loaded = await directory.load()
+            var groups = Array.isArray(loaded?.groups) ? loaded.groups : directory.store?.getSnapshot?.()?.groups
+            available =
+              Array.isArray(groups) &&
+              groups.some(
+                (group) =>
+                  group?.id === provider &&
+                  Array.isArray(group.models) &&
+                  group.models.some((entry) => entry?.id === model),
+              )
+            loadError = null
+          } catch (error) {
+            loadError = error
+          }
+          if (available) break
+          if (attempt + 1 < attempts && delayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delayMs))
+          }
+        }
+        if (!available) {
+          if (loadError) throw new Error('模型目录刷新失败，请稍后重试')
+          throw new Error(`模型目录尚未刷新到 ${provider}/${model}，请稍后重试`)
+        }
+      }
+      await directory.select({ provider: provider, model: model })
       return true
     }
 
