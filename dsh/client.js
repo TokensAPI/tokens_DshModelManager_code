@@ -832,7 +832,7 @@ window.__ModuleLoader__.load({
       en: {
         nav: 'Models',
         title: 'TokensAPI models',
-        intro: 'Manage the TokensAPI endpoint, chat model, vision model, and API key in one place.',
+        intro: 'Manage the TokensAPI endpoint, model route, and API key in one place.',
         key: 'API key',
         missing: 'Not configured',
         ready: 'Configured',
@@ -840,6 +840,7 @@ window.__ModuleLoader__.load({
         saveModels: 'Save model choices',
         saving: 'Saving...',
         modelsSaved: 'Model choices saved',
+        sessionSwitchFailed: 'Settings were saved, but the current session could not switch: ',
         modelsUnavailable: 'The model list is temporarily unavailable.',
         stored: 'Saved API key',
         keyHint: 'Use Show or Copy, or type a new key to replace the saved value.',
@@ -850,9 +851,11 @@ window.__ModuleLoader__.load({
         noModels: 'No matching models',
         main: 'Main model',
         vision: 'Vision model',
-        nativeVision: 'The main model supports images directly. The separate vision bridge is not used.',
+        nativeVision: 'Conversations and images are both handled natively by {mainModel}.',
+        bridgeVision:
+          'Conversations are handled by {mainModel}. Images are read by {visionModel} and passed to the main model.',
         directVision:
-          'This model uses its direct route. Native image support is not confirmed, so the separate vision bridge is not used.',
+          'Conversations are handled by {mainModel}. Images are unavailable because native image support is not confirmed and the vision bridge is disabled.',
         endpoint: 'Endpoint',
         gateTitle: 'Enter your TokensAPI API key',
         gateIntro: 'The key is verified before Desktop opens. Chat and vision stay locked until verification succeeds.',
@@ -866,7 +869,7 @@ window.__ModuleLoader__.load({
       zh: {
         nav: '模型',
         title: 'TokensAPI 模型',
-        intro: '在这里统一管理 TokensAPI 接口、主模型、视觉模型和 API Key。',
+        intro: '在这里统一管理 TokensAPI 接口、模型路线和 API Key。',
         key: 'API Key',
         missing: '未配置',
         ready: '已配置',
@@ -874,6 +877,7 @@ window.__ModuleLoader__.load({
         saveModels: '保存模型选择',
         saving: '保存中…',
         modelsSaved: '模型选择已保存',
+        sessionSwitchFailed: '配置已保存，但当前会话切换失败：',
         modelsUnavailable: '暂时无法获取模型列表。',
         stored: 'API Key 已保存',
         keyHint: '可点击“显示”或“复制”，也可以直接输入新 Key 进行替换。',
@@ -884,8 +888,9 @@ window.__ModuleLoader__.load({
         noModels: '没有匹配的模型',
         main: '主模型',
         vision: '视觉模型',
-        nativeVision: '当前主模型原生支持图片，直接使用其视觉能力，无需单独的视觉桥接模型。',
-        directVision: '当前模型使用直连模式；尚未确认其原生图片能力，因此不启用额外的视觉桥接模型。',
+        nativeVision: '对话和图片均由 {mainModel} 原生处理。',
+        bridgeVision: '对话由 {mainModel} 处理，图片由 {visionModel} 读取后交给主模型。',
+        directVision: '对话由 {mainModel} 处理；由于未确认原生图片能力且视觉桥接已关闭，当前不能处理图片。',
         endpoint: '接口地址',
         gateTitle: '请输入 TokensAPI API Key',
         gateIntro: 'Desktop 会先验证 Key；验证成功前，聊天和识图功能保持锁定。',
@@ -901,6 +906,26 @@ window.__ModuleLoader__.load({
     function managerLabels() {
       var lang = (document.documentElement.lang || navigator.language || 'en').toLowerCase()
       return lang.indexOf('zh') === 0 ? MANAGER_TEXT.zh : MANAGER_TEXT.en
+    }
+
+    function selectedModelVisionMode(state, mainModel) {
+      var selected = Array.isArray(state?.models) ? state.models.find((model) => model?.id === mainModel) : null
+      if (selected?.visionMode === 'native' || selected?.visionMode === 'bridge' || selected?.visionMode === 'direct') {
+        return selected.visionMode
+      }
+      if (
+        mainModel === state?.mainModel &&
+        (state?.visionMode === 'native' || state?.visionMode === 'bridge' || state?.visionMode === 'direct')
+      ) {
+        return state.visionMode
+      }
+      return 'bridge'
+    }
+
+    function modelRouteDescription(t, visionMode, mainModel, visionModel) {
+      var template =
+        visionMode === 'native' ? t.nativeVision : visionMode === 'bridge' ? t.bridgeVision : t.directVision
+      return template.replace('{mainModel}', mainModel || '—').replace('{visionModel}', visionModel || '—')
     }
 
     /**
@@ -1099,6 +1124,8 @@ window.__ModuleLoader__.load({
         var note = notePair[0]
         var busy = busyPair[0]
         var t = managerLabels()
+        var draftVisionMode = selectedModelVisionMode(state, mainModel)
+        var routeDescription = modelRouteDescription(t, draftVisionMode, mainModel, visionModel)
 
         var load = react.useCallback(
           () =>
@@ -1114,6 +1141,11 @@ window.__ModuleLoader__.load({
                 mainPair[1](body.mainModel || '')
                 visionPair[1](body.visionModel || '')
                 notePair[1]('')
+                if (body.authenticated === true) {
+                  return Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider)).catch((error) => {
+                    notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`)
+                  })
+                }
               })
               .catch((error) => {
                 notePair[1](String(error.message || error))
@@ -1141,16 +1173,15 @@ window.__ModuleLoader__.load({
                 return body
               }),
             )
-            .then((body) =>
-              Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider)).then(() => body),
-            )
             .then((body) => {
               statePair[1](body)
               mainPair[1](body.mainModel || '')
               visionPair[1](body.visionModel || '')
               keyPair[1]('')
               revealPair[1](false)
-              notePair[1](t.ready)
+              return Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider))
+                .then(() => notePair[1](t.ready))
+                .catch((error) => notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`))
             })
             .catch((error) => {
               notePair[1](String(error.message || error))
@@ -1176,14 +1207,13 @@ window.__ModuleLoader__.load({
                 return body
               }),
             )
-            .then((body) =>
-              Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider)).then(() => body),
-            )
             .then((body) => {
               statePair[1](body)
               mainPair[1](body.mainModel || '')
               visionPair[1](body.visionModel || '')
-              notePair[1](t.modelsSaved)
+              return Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider))
+                .then(() => notePair[1](t.modelsSaved))
+                .catch((error) => notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`))
             })
             .catch((error) => notePair[1](String(error.message || error)))
             .finally(() => busyPair[1](false))
@@ -1395,6 +1425,23 @@ window.__ModuleLoader__.load({
           )
         }
 
+        var routeNote = () =>
+          h(
+            'div',
+            {
+              style: {
+                margin: '8px 0',
+                padding: '10px 12px',
+                borderRadius: 10,
+                background: 'var(--dsw-alias-bg-layer-2)',
+                color: 'var(--dsw-alias-label-secondary)',
+                fontSize: 13,
+                lineHeight: 1.5,
+              },
+            },
+            routeDescription,
+          )
+
         return h(
           'div',
           { style: { maxWidth: 760, padding: '8px 0 32px' } },
@@ -1416,23 +1463,9 @@ window.__ModuleLoader__.load({
                   'form',
                   { onSubmit: saveModels },
                   modelRow(t.main, mainModel, mainPair[1], 'main'),
-                  state.visionMode !== 'bridge'
-                    ? h(
-                        'div',
-                        {
-                          style: {
-                            margin: '8px 0',
-                            padding: '10px 12px',
-                            borderRadius: 10,
-                            background: 'var(--dsw-alias-bg-layer-2)',
-                            color: 'var(--dsw-alias-label-secondary)',
-                            fontSize: 13,
-                            lineHeight: 1.5,
-                          },
-                        },
-                        state.visionMode === 'native' ? t.nativeVision : t.directVision,
-                      )
-                    : modelRow(t.vision, visionModel, visionPair[1], 'vision'),
+                  draftVisionMode === 'bridge'
+                    ? h('div', null, modelRow(t.vision, visionModel, visionPair[1], 'vision'), routeNote())
+                    : routeNote(),
                   !state.modelsAvailable
                     ? h(
                         'p',
@@ -1621,14 +1654,50 @@ window.__ModuleLoader__.load({
       if (typeof sessions?.subagentAddress === 'function' && sessions.subagentAddress(sessionId)) {
         return false
       }
-      var directory = modelDirectories.directoryFor(sessionId)
-      if (typeof directory?.select !== 'function') return false
+      var attempts = Number.isInteger(retry?.attempts) && retry.attempts > 0 ? retry.attempts : 20
+      var delayMs = Number.isFinite(retry?.delayMs) && retry.delayMs >= 0 ? retry.delayMs : 100
+      var directory = null
+      var directoryError = null
+      // The session id becomes current slightly before its client scope and
+      // ModelDirectory are guaranteed to exist. Entering a conversation must
+      // therefore wait for that directory instead of giving up on the first
+      // notification and leaving the composer on “Select model”.
+      for (var attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          var candidate = modelDirectories.directoryFor(sessionId)
+          if (typeof candidate?.select === 'function') {
+            directory = candidate
+            directoryError = null
+            break
+          }
+        } catch (error) {
+          directoryError = error
+        }
+        if (attempt + 1 < attempts && delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs))
+        }
+      }
+      if (!directory) {
+        if (directoryError) throw new Error('会话模型目录尚未就绪，请稍后重试')
+        return false
+      }
+      var selectionVisible = () => {
+        var snapshot = directory.store?.getSnapshot?.()
+        if (!snapshot || snapshot.current?.provider !== provider || snapshot.current?.model !== model) return false
+        return (
+          Array.isArray(snapshot.groups) &&
+          snapshot.groups.some(
+            (group) =>
+              group?.id === provider &&
+              Array.isArray(group.models) &&
+              group.models.some((entry) => entry?.id === model),
+          )
+        )
+      }
       if (typeof directory.load === 'function') {
-        var attempts = Number.isInteger(retry?.attempts) && retry.attempts > 0 ? retry.attempts : 20
-        var delayMs = Number.isFinite(retry?.delayMs) && retry.delayMs >= 0 ? retry.delayMs : 100
         var available = false
         var loadError = null
-        for (var attempt = 0; attempt < attempts; attempt += 1) {
+        for (attempt = 0; attempt < attempts; attempt += 1) {
           try {
             var loaded = await directory.load()
             var groups = Array.isArray(loaded?.groups) ? loaded.groups : directory.store?.getSnapshot?.()?.groups
@@ -1655,6 +1724,16 @@ window.__ModuleLoader__.load({
         }
       }
       await directory.select({ provider: provider, model: model })
+      // A concurrent catalog refresh can suppress select()'s local store echo
+      // even though the Host accepted it. One Host reload is enough to make
+      // the default selection visible in the composer's shared directory.
+      if (
+        typeof directory.store?.getSnapshot === 'function' &&
+        typeof directory.load === 'function' &&
+        !selectionVisible()
+      ) {
+        await directory.load()
+      }
       return true
     }
 
@@ -1666,9 +1745,82 @@ window.__ModuleLoader__.load({
           .then(({ response, body }) => {
             if (!response.ok || body?.provider !== 'TokensAPI') return
             var react = require('react')
-            var Section = ModelManagerSection(react, (mainModel, mainProvider) =>
-              synchronizeCurrentSessionModel(scope.sessions, scope.modelDirectories, mainModel, mainProvider),
-            )
+            var desiredMainModel = body.mainModel
+            var desiredMainProvider = body.mainProvider
+            var desiredSelectionEnabled = body.authenticated === true
+            var lastActivationKey = ''
+            var activateDesiredSelection = () => {
+              if (!desiredSelectionEnabled) return Promise.resolve(false)
+              var sessionId = scope.sessions?.list?.getSnapshot?.()?.current
+              if (!sessionId) return Promise.resolve(false)
+              var activationKey = `${sessionId}\u0000${desiredMainProvider}\u0000${desiredMainModel}`
+              var selectionAlreadyVisible = false
+              try {
+                var directory = scope.modelDirectories?.directoryFor?.(sessionId)
+                var snapshot = directory?.store?.getSnapshot?.()
+                var provider = desiredMainProvider === 'tokensapi' ? 'tokensapi' : 'modlens-tokensapi'
+                selectionAlreadyVisible =
+                  snapshot?.current?.provider === provider &&
+                  snapshot?.current?.model === desiredMainModel &&
+                  Array.isArray(snapshot?.groups) &&
+                  snapshot.groups.some(
+                    (group) =>
+                      group?.id === provider &&
+                      Array.isArray(group.models) &&
+                      group.models.some((model) => model?.id === desiredMainModel),
+                  )
+              } catch {
+                selectionAlreadyVisible = false
+              }
+              if (activationKey === lastActivationKey && selectionAlreadyVisible) return Promise.resolve(false)
+              lastActivationKey = activationKey
+              return Promise.resolve(
+                synchronizeCurrentSessionModel(
+                  scope.sessions,
+                  scope.modelDirectories,
+                  desiredMainModel,
+                  desiredMainProvider,
+                ),
+              )
+                .then((activated) => {
+                  if (!activated && lastActivationKey === activationKey) lastActivationKey = ''
+                  return activated
+                })
+                .catch((error) => {
+                  if (lastActivationKey === activationKey) lastActivationKey = ''
+                  throw error
+                })
+            }
+            var synchronizeMainSelection = (mainModel, mainProvider) => {
+              desiredMainModel = mainModel
+              desiredMainProvider = mainProvider
+              desiredSelectionEnabled = true
+              lastActivationKey = ''
+              return activateDesiredSelection()
+            }
+            var Section = ModelManagerSection(react, synchronizeMainSelection)
+            // Existing sessions retain their own model selection across Host
+            // restarts. Re-apply the centrally saved TokensAPI choice when the
+            // browser plugin starts so the composer, settings card, and actual
+            // request route cannot drift apart after a restart.
+            if (body.authenticated === true) {
+              Promise.resolve(activateDesiredSelection()).catch((error) => {
+                console.error(`[tokens-model-manager] saved session model activation skipped: ${error}`)
+              })
+            }
+            if (typeof scope.sessions?.list?.subscribe === 'function') {
+              var stopSessionSelectionSync = scope.sessions.list.subscribe(() => {
+                Promise.resolve(activateDesiredSelection()).catch((error) => {
+                  console.error(`[tokens-model-manager] session model activation skipped: ${error}`)
+                })
+              })
+              if (typeof ctx.effect === 'function') {
+                ctx.effect(
+                  () => () => stopSessionSelectionSync(),
+                  'tokens-model-manager: synchronize selected session model',
+                )
+              }
+            }
             scope.slots.inject('settings.section', function* () {
               yield scope.slots.register(
                 {
@@ -1720,6 +1872,9 @@ window.__ModuleLoader__.load({
     }
     exports.__manager = {
       registerAccessGate: registerAccessGate,
+      registerManagerSection: registerManagerSection,
+      selectedModelVisionMode: selectedModelVisionMode,
+      modelRouteDescription: modelRouteDescription,
       synchronizeCurrentSessionModel: synchronizeCurrentSessionModel,
     }
     // Settings integration is optional, so its services are acquired through

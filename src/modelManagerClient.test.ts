@@ -226,12 +226,88 @@ describe('Desktop model-manager settings section', () => {
             SOURCE.indexOf('var saveModels'),
             SOURCE.indexOf('var fetchStoredKey'),
         );
+        const managerSectionStart = SOURCE.indexOf('function ModelManagerSection');
+        const settingsLoadStart = SOURCE.indexOf(
+            'var load = react.useCallback',
+            managerSectionStart,
+        );
+        const settingsLoadSource = SOURCE.slice(
+            settingsLoadStart,
+            SOURCE.indexOf('react.useEffect', settingsLoadStart),
+        );
+        expect(settingsLoadSource).toContain(
+            'synchronizeMainSelection(body.mainModel, body.mainProvider)',
+        );
         expect(saveModelsSource).toContain(
             'synchronizeMainSelection(body.mainModel, body.mainProvider)',
         );
-        expect(SOURCE).toContain("state.visionMode !== 'bridge'");
+        expect(saveModelsSource.indexOf('statePair[1](body)')).toBeLessThan(
+            saveModelsSource.indexOf('synchronizeMainSelection(body.mainModel, body.mainProvider)'),
+        );
+        expect(SOURCE).toContain('t.sessionSwitchFailed');
+        expect(SOURCE).toContain("draftVisionMode === 'bridge'");
+        expect(SOURCE).toContain('selectedModelVisionMode(state, mainModel)');
         expect(SOURCE).toContain('t.nativeVision');
+        expect(SOURCE).toContain('t.bridgeVision');
         expect(SOURCE).toContain('t.directVision');
+    });
+
+    it('follows the draft main-model selection and describes the route with the models actually used', () => {
+        let loaded:
+            | {
+                  factory: (require: (id: string) => unknown) => {
+                      __manager: {
+                          selectedModelVisionMode: (
+                              state: Record<string, unknown>,
+                              mainModel: string,
+                          ) => string;
+                          modelRouteDescription: (
+                              labels: Record<string, string>,
+                              visionMode: string,
+                              mainModel: string,
+                              visionModel: string,
+                          ) => string;
+                      };
+                  };
+              }
+            | undefined;
+        const windowStub = {
+            __ModuleLoader__: {
+                load: (definition: typeof loaded) => {
+                    loaded = definition;
+                },
+            },
+        };
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(windowStub, {}, () => undefined, class {});
+        if (!loaded) throw new Error('client module was not registered');
+        const manager = loaded.factory(() => ({})).__manager;
+        const state = {
+            mainModel: 'deepseek-v4-flash',
+            visionMode: 'bridge',
+            models: [
+                { id: 'deepseek-v4-flash', visionMode: 'bridge' },
+                { id: 'gpt-5.5', visionMode: 'native' },
+                { id: 'direct-text-model', visionMode: 'direct' },
+            ],
+        };
+
+        expect(manager.selectedModelVisionMode(state, 'gpt-5.5')).toBe('native');
+        expect(manager.selectedModelVisionMode(state, 'deepseek-v4-flash')).toBe('bridge');
+        expect(manager.selectedModelVisionMode(state, 'direct-text-model')).toBe('direct');
+        expect(manager.selectedModelVisionMode(state, 'new-unclassified-model')).toBe('bridge');
+
+        const labels = {
+            nativeVision: '对话和图片均由 {mainModel} 原生处理。',
+            bridgeVision: '对话由 {mainModel} 处理，图片由 {visionModel} 读取后交给主模型。',
+            directVision: '对话由 {mainModel} 处理，当前不能处理图片。',
+        };
+        expect(manager.modelRouteDescription(labels, 'native', 'gpt-5.5', 'unused')).toBe(
+            '对话和图片均由 gpt-5.5 原生处理。',
+        );
+        expect(
+            manager.modelRouteDescription(labels, 'bridge', 'deepseek-v4-flash', 'qwen3.6-35b-a3b'),
+        ).toBe('对话由 deepseek-v4-flash 处理，图片由 qwen3.6-35b-a3b 读取后交给主模型。');
     });
 
     it('reveals and copies a saved key only after an explicit user action', () => {
@@ -246,6 +322,115 @@ describe('Desktop model-manager settings section', () => {
 
     it('does not mount the redundant legacy vision-engine plugin card', () => {
         expect(SOURCE).not.toContain('registerCard(ctx)');
+    });
+
+    it('reapplies the saved model to the current image-bearing session on client startup', async () => {
+        let loaded:
+            | {
+                  factory: (require: (id: string) => unknown) => {
+                      __manager: {
+                          registerManagerSection: (ctx: Record<string, unknown>) => void;
+                      };
+                  };
+              }
+            | undefined;
+        const windowStub = {
+            __ModuleLoader__: {
+                load: (definition: typeof loaded) => {
+                    loaded = definition;
+                },
+            },
+        };
+        const fetchStub = async () => ({
+            ok: true,
+            json: async () => ({
+                provider: 'TokensAPI',
+                authenticated: true,
+                mainModel: 'claude-opus-5',
+                mainProvider: 'tokensapi',
+            }),
+        });
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(windowStub, {}, fetchStub, class {});
+        if (!loaded) throw new Error('client module was not registered');
+        const selected: Array<{ provider: string; model: string }> = [];
+        let currentSession = 'session-with-images';
+        let sessionListener: (() => void) | undefined;
+        const directoryStates = new Map<
+            string,
+            {
+                current: { provider: string; model: string } | null;
+                groups: Array<{ id: string; models: Array<{ id: string }> }>;
+            }
+        >();
+
+        loaded
+            .factory(() => ({}))
+            .__manager.registerManagerSection({
+                inject: (_services: string[], callback: (scope: Record<string, unknown>) => void) =>
+                    callback({
+                        sessions: {
+                            list: {
+                                getSnapshot: () => ({ current: currentSession }),
+                                subscribe: (listener: () => void) => {
+                                    sessionListener = listener;
+                                    return () => undefined;
+                                },
+                            },
+                            subagentAddress: () => undefined,
+                        },
+                        modelDirectories: {
+                            directoryFor: (sessionId: string) => {
+                                let state = directoryStates.get(sessionId);
+                                if (!state) {
+                                    state = { current: null, groups: [] };
+                                    directoryStates.set(sessionId, state);
+                                }
+                                return {
+                                    store: { getSnapshot: () => state },
+                                    load: async () => {
+                                        state.groups = [
+                                            {
+                                                id: 'tokensapi',
+                                                models: [{ id: 'claude-opus-5' }],
+                                            },
+                                        ];
+                                        return state;
+                                    },
+                                    select: async (selection: {
+                                        provider: string;
+                                        model: string;
+                                    }) => {
+                                        selected.push(selection);
+                                        state.current = selection;
+                                    },
+                                };
+                            },
+                        },
+                        slots: { inject: () => undefined },
+                    }),
+            });
+        for (let index = 0; index < 20; index++) await Promise.resolve();
+        currentSession = 'second-image-session';
+        sessionListener?.();
+        for (let index = 0; index < 20; index++) await Promise.resolve();
+        // Ordinary list updates for the same visible selection are deduped.
+        sessionListener?.();
+        for (let index = 0; index < 20; index++) await Promise.resolve();
+        // Re-entering/resetting that same session clears the directory store;
+        // the same activation key must no longer suppress the default reload.
+        const second = directoryStates.get(currentSession);
+        if (!second) throw new Error('second session directory was not created');
+        second.current = null;
+        second.groups = [];
+        sessionListener?.();
+        for (let index = 0; index < 20; index++) await Promise.resolve();
+
+        expect(selected).toEqual([
+            { provider: 'tokensapi', model: 'claude-opus-5' },
+            { provider: 'tokensapi', model: 'claude-opus-5' },
+            { provider: 'tokensapi', model: 'claude-opus-5' },
+        ]);
     });
 
     it('switches the currently open session after the managed main model is saved', async () => {
@@ -402,6 +587,117 @@ describe('Desktop model-manager settings section', () => {
         ).resolves.toBe(true);
         expect(loads).toBe(2);
         expect(selected).toEqual([{ provider: 'tokensapi', model: 'claude-opus-4-7' }]);
+    });
+
+    it('reloads the shared selector store when a concurrent refresh hides an accepted selection', async () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const synchronize = loaded.factory(() => ({})).__manager.synchronizeCurrentSessionModel as (
+            sessions: Record<string, unknown>,
+            modelDirectories: Record<string, unknown>,
+            model: string,
+            provider: string,
+            retry: Record<string, number>,
+        ) => Promise<boolean>;
+        const state = {
+            current: null as null | { provider: string; model: string },
+            groups: [] as Array<{ id: string; models: Array<{ id: string }> }>,
+        };
+        let loads = 0;
+        let accepted: { provider: string; model: string } | undefined;
+        const directory = {
+            store: { getSnapshot: () => state },
+            load: async () => {
+                loads += 1;
+                state.groups = [{ id: 'tokensapi', models: [{ id: 'gpt-5.5' }] }];
+                // The first load is the pre-selection catalog check. The
+                // second represents the Host fact reload after an overlapping
+                // refresh won the browser generation and left current null.
+                if (loads > 1 && accepted) state.current = accepted;
+                return state;
+            },
+            select: async (selection: { provider: string; model: string }) => {
+                accepted = selection;
+                // Host accepted it, but the simulated stale refresh owns the
+                // client store generation and suppresses select's local echo.
+                state.current = null;
+            },
+        };
+
+        await expect(
+            synchronize(
+                {
+                    list: { getSnapshot: () => ({ current: 'session-raced-selector' }) },
+                    subagentAddress: () => undefined,
+                },
+                { directoryFor: () => directory },
+                'gpt-5.5',
+                'tokensapi',
+                { attempts: 1, delayMs: 0 },
+            ),
+        ).resolves.toBe(true);
+        expect(loads).toBe(2);
+        expect(state.current).toEqual({ provider: 'tokensapi', model: 'gpt-5.5' });
+    });
+
+    it('waits for the per-session model directory when entering a conversation', async () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const synchronize = loaded.factory(() => ({})).__manager.synchronizeCurrentSessionModel as (
+            sessions: Record<string, unknown>,
+            modelDirectories: Record<string, unknown>,
+            model: string,
+            provider: string,
+            retry: Record<string, number>,
+        ) => Promise<boolean>;
+        let resolutions = 0;
+        const selected: Array<{ provider: string; model: string }> = [];
+
+        await expect(
+            synchronize(
+                {
+                    list: { getSnapshot: () => ({ current: 'session-entering' }) },
+                    subagentAddress: () => undefined,
+                },
+                {
+                    directoryFor: () => {
+                        resolutions += 1;
+                        if (resolutions === 1) throw new Error('session scope not mounted yet');
+                        return {
+                            load: async () => ({
+                                groups: [{ id: 'tokensapi', models: [{ id: 'gpt-5.5' }] }],
+                            }),
+                            select: async (selection: { provider: string; model: string }) => {
+                                selected.push(selection);
+                            },
+                        };
+                    },
+                },
+                'gpt-5.5',
+                'tokensapi',
+                { attempts: 2, delayMs: 0 },
+            ),
+        ).resolves.toBe(true);
+        expect(resolutions).toBe(2);
+        expect(selected).toEqual([{ provider: 'tokensapi', model: 'gpt-5.5' }]);
     });
 
     it('does not select a model that never appears in the refreshed catalog', async () => {

@@ -77,7 +77,25 @@ const API_MODELS = [
         ownedBy: 'vertex-ai',
         endpointTypes: ['anthropic', 'openai'],
     },
+    {
+        id: 'gpt-5.5',
+        name: 'GPT 5.5',
+        ownedBy: 'openai',
+        endpointTypes: ['openai'],
+    },
 ];
+
+const PUBLIC_API_MODELS = API_MODELS.map((model) => ({
+    ...model,
+    visionMode: ['qwen3.6-35b-a3b', 'claude-opus-4-7', 'gpt-5.5'].includes(model.id)
+        ? 'native'
+        : 'bridge',
+}));
+
+const DIRECT_PUBLIC_API_MODELS = PUBLIC_API_MODELS.map((model) => ({
+    ...model,
+    visionMode: model.visionMode === 'bridge' ? 'direct' : model.visionMode,
+}));
 
 const VALID_RESPONSE = async () => ({
     status: 200,
@@ -152,7 +170,7 @@ describe('TokensAPI credential gate: 50 positive cases', () => {
                 mainProvider: 'modlens-tokensapi',
                 visionMode: 'bridge',
                 visionModel: 'qwen3.6-35b-a3b',
-                models: API_MODELS,
+                models: PUBLIC_API_MODELS,
                 modelsAvailable: true,
                 baseURL: 'https://tokensapi.ai/v1',
             });
@@ -289,6 +307,54 @@ describe('TokensAPI remote API-key verification', () => {
 });
 
 describe('TokensAPI model discovery and selection', () => {
+    it('waits for persisted model settings before exposing startup status', async () => {
+        const credential = credentialHarness('tk-startup-settings', true);
+        const values = new Map<string, Record<string, unknown>>([
+            [TOKENSAPI.settingsNamespace, { mainModel: 'gpt-5.5', visionModel: 'qwen3.6-35b-a3b' }],
+        ]);
+        let settingsInjection: ((scope: Record<string, unknown>) => void) | undefined;
+        const settings = {
+            register: (
+                namespace: string,
+                _schema: unknown,
+                options?: { base?: Record<string, unknown> },
+            ) => {
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Record<string, unknown>) => {
+                values.set(namespace, { ...(values.get(namespace) ?? {}), ...patch });
+            },
+        };
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) settingsInjection = callback;
+            },
+        };
+        apply(ctx, { settingsCard: false, pasteToPath: false });
+
+        let completed = false;
+        const statusPromise = __modelManager
+            .modelManagerStatus(ctx, VALID_RESPONSE)
+            .then((status: Record<string, unknown>) => {
+                completed = true;
+                return status;
+            });
+        await Promise.resolve();
+        expect(completed).toBe(false);
+
+        settingsInjection?.({ settings });
+        await expect(statusPromise).resolves.toMatchObject({
+            mainModel: 'gpt-5.5',
+            mainProvider: TOKENSAPI.providerId,
+            visionMode: 'native',
+            visionModel: 'qwen3.6-35b-a3b',
+        });
+    });
+
     it('uses the bridge only for supported text-only model families', () => {
         expect(
             __modelManager.modelUsesVisionBridge({
@@ -310,7 +376,7 @@ describe('TokensAPI model discovery and selection', () => {
         ).toBe(false);
     });
 
-    it('classifies native, bridged and direct visual behavior separately', () => {
+    it('routes confirmed native models directly and bridges every unconfirmed text model', () => {
         expect(
             __modelManager.managedVisionMode({
                 id: 'claude-opus-4-6',
@@ -328,7 +394,12 @@ describe('TokensAPI model discovery and selection', () => {
                 id: 'claude-opus-4-6',
                 inputModalities: ['text'],
             }),
-        ).toBe('direct');
+        ).toBe('bridge');
+        expect(
+            __modelManager.managedVisionMode({
+                id: 'gpt-5.5',
+            }),
+        ).toBe('native');
     });
 
     it('routes native multimodal models upstream and text-only bridge models through modlens', async () => {
@@ -348,14 +419,28 @@ describe('TokensAPI model discovery and selection', () => {
             api: 'anthropic-messages',
             input: ['text', 'image'],
         });
+        const harness = credentialHarness();
+        await __modelManager.setManagedCredential(
+            harness.ctx,
+            'tk-gpt-native-route',
+            VALID_RESPONSE,
+        );
+        await expect(
+            __modelManager.resolveManagedMainRoute(harness.ctx, 'gpt-5.5'),
+        ).resolves.toEqual({
+            provider: TOKENSAPI.providerId,
+            visionMode: 'native',
+            api: 'openai-completions',
+            input: ['text', 'image'],
+        });
     });
 
-    it('uses the direct route for an unknown text model or when the bridge is disabled', async () => {
+    it('uses the bridge for an unknown text model and direct only when the bridge is disabled', async () => {
         await expect(
             __modelManager.resolveManagedMainRoute({}, 'unclassified-text-model'),
         ).resolves.toEqual({
-            provider: TOKENSAPI.providerId,
-            visionMode: 'direct',
+            provider: TOKENSAPI.agentProviderId,
+            visionMode: 'bridge',
             api: 'openai-responses',
             input: ['text'],
         });
@@ -410,6 +495,7 @@ describe('TokensAPI model discovery and selection', () => {
             'text',
             'image',
         ]);
+        expect(__modelManager.managedModelInput({ id: 'gpt-5.5' })).toEqual(['text', 'image']);
         expect(__modelManager.managedModelInput({ id: 'deepseek-v4-flash' })).toEqual(['text']);
     });
 
@@ -428,6 +514,7 @@ describe('TokensAPI model discovery and selection', () => {
                             42,
                             'openai-response',
                         ],
+                        input_modalities: ['text', 'image', 'audio', 'image'],
                     },
                     { id: 'deepseek-v4-flash', name: 'duplicate' },
                     { id: '' },
@@ -442,6 +529,7 @@ describe('TokensAPI model discovery and selection', () => {
                 name: 'DeepSeek V4 Flash',
                 ownedBy: 'deepseek',
                 endpointTypes: ['openai-response', 'openai'],
+                input: ['text', 'image'],
             },
             { id: 'qwen3.6-35b-a3b', name: 'qwen3.6-35b-a3b' },
         ]);
@@ -515,7 +603,7 @@ describe('TokensAPI model discovery and selection', () => {
             'tk-never-return-this',
             VALID_RESPONSE,
         );
-        expect(status.models).toEqual(API_MODELS);
+        expect(status.models).toEqual(PUBLIC_API_MODELS);
         expect(JSON.stringify(status)).not.toContain('tk-never-return-this');
     });
 
@@ -597,7 +685,7 @@ describe('TokensAPI model discovery and selection', () => {
         });
         // The settings page still receives every API model for its own
         // selector; only the conversation catalog is narrowed.
-        expect(status.models).toEqual(API_MODELS);
+        expect(status.models).toEqual(DIRECT_PUBLIC_API_MODELS);
         expect(selections.at(-1)).toEqual({
             provider: TOKENSAPI.providerId,
             model: 'deepseek-v3.2',

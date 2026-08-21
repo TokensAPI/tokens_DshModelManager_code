@@ -592,6 +592,68 @@ describe('dsh plugin vision provider (phase 3)', () => {
         }
     });
 
+    it('bridges unconfirmed text models but excludes verified native multimodal models', async () => {
+        // The managed route bridges unknown text models so image-bearing
+        // sessions remain usable, but a model already confirmed to accept the
+        // original pixels must stay on its native provider route.
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const registered: Array<Record<string, CallableFunction>> = [];
+        const models = [
+            { id: 'gpt-5.5', name: 'GPT 5.5', inputModalities: ['text', 'image'] },
+            { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', inputModalities: ['text'] },
+            { id: 'claude-opus-5', name: 'Claude Opus 5', inputModalities: ['text', 'image'] },
+        ];
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: () => {},
+                llm: {
+                    listProviders: () => [{ id: 'tokensapi', name: 'TokensAPI' }],
+                    providerRetryPolicy: () => undefined,
+                    registerAdapter: (
+                        _ids: string[],
+                        adapter: Record<string, CallableFunction>,
+                    ) => {
+                        registered.push(adapter);
+                        const handle = () => {};
+                        handle.replace = () => {};
+                        return handle;
+                    },
+                    listModels: async () => models,
+                    resolveModelInfo: async (_provider: string, id: string) =>
+                        models.find((model) => model.id === id),
+                    stream: () => (async function* () {})(),
+                },
+            } as never,
+            {
+                upstream: 'tokensapi',
+                providerId: 'modlens-tokensapi',
+                settingsCard: false,
+                pasteToPath: false,
+            },
+        );
+
+        const listed = (await registered[0].listModels('modlens-tokensapi')) as Array<{
+            id: string;
+            inputModalities: string[];
+        }>;
+        expect(listed.map((model) => model.id)).toEqual(['deepseek-v4-flash']);
+        expect(listed.every((model) => model.inputModalities.includes('image'))).toBe(true);
+        await expect(
+            registered[0].resolveModel('modlens-tokensapi', 'deepseek-v4-flash'),
+        ).resolves.toMatchObject({
+            id: 'deepseek-v4-flash',
+            inputModalities: ['text', 'image'],
+        });
+        await expect(registered[0].resolveModel('modlens-tokensapi', 'gpt-5.5')).rejects.toThrow(
+            /native image input/,
+        );
+    });
+
     it('mints a pinned default id that encodes its upstream (#49)', async () => {
         // The flat default, deepseek-modlens whatever the upstream, collided
         // with the id auto-discovery mints for deepseek-official, so history

@@ -26,11 +26,13 @@ const OUTPUT_SCHEMA = JSON.parse(readFileSync(new URL('./vision-schema.json', im
 const CLI_TIMEOUT_MS = 180_000
 const DEFAULT_VISION_FAMILIES = ['deepseek', 'glm']
 // TokensAPI's model list currently exposes transport compatibility but not a
-// modality field. Keep the fallback deliberately narrow: every family below
-// is product-verified to accept image input, while unknown models remain text
-// only until the upstream catalog can say otherwise.
+// modality field. The family list remains the conservative default for the
+// generic ModLens wrapper. The managed TokensAPI product route has a stronger
+// promise: every selectable chat model must remain usable in image-bearing
+// sessions, so models without confirmed native vision use the selected visual
+// model as a bridge instead of falling back to an image-rejecting direct route.
 const NATIVE_VISION_MODEL_ID =
-  /^(claude-(3(?:[.-]|$)|(opus|sonnet|haiku)-)|deepseek-(vl|ocr)|janus|glm-[\d.]*v(\b|-)|qwen3\.6-35b-a3b(?:$|-))/i
+  /^(claude-(3(?:[.-]|$)|(opus|sonnet|haiku)-)|deepseek-(vl|ocr)|janus|glm-[\d.]*v(\b|-)|qwen3\.6-35b-a3b(?:$|-)|gpt-5\.5(?:$|-))/i
 const CLAUDE_MODEL_ID = /^claude-/i
 const MANAGED_ENDPOINT_TYPES = new Set(['anthropic', 'gemini', 'openai', 'openai-response', 'openai-response-compact'])
 
@@ -64,6 +66,7 @@ function managerRuntime(ctx) {
       visionProviderEnabled: true,
       models: [],
       settings: null,
+      settingsReady: Promise.resolve(),
       agentDefaultModel: null,
     }
     managerRuntimes.set(ctx, runtime)
@@ -85,6 +88,19 @@ export const MEDIA_EXT = {
 
 export function apply(ctx, config = {}) {
   const managed = managerRuntime(ctx)
+  let settleManagerSettings = () => {}
+  if (typeof ctx.inject === 'function') {
+    let settled = false
+    managed.settingsReady = new Promise((resolve) => {
+      settleManagerSettings = () => {
+        if (settled) return
+        settled = true
+        resolve()
+      }
+    })
+  } else {
+    managed.settingsReady = Promise.resolve()
+  }
   managed.visionFamilies = Array.isArray(config.families) ? [...config.families] : DEFAULT_VISION_FAMILIES
   managed.visionProviderEnabled = config.visionProvider !== false
   // One evidence cache for the whole plugin: every wrapper route and the
@@ -180,7 +196,10 @@ export function apply(ctx, config = {}) {
   // the API key remains exclusively in the credential service.
   if (typeof ctx.inject === 'function') {
     ctx.inject(['settings'], (scope) => {
-      if (typeof scope.settings?.register !== 'function' || typeof scope.settings?.get !== 'function') return
+      if (typeof scope.settings?.register !== 'function' || typeof scope.settings?.get !== 'function') {
+        settleManagerSettings()
+        return
+      }
       try {
         const modelSettings = (value) => ({ ...(value ?? {}) })
         modelSettings.toJSON = () => ({
@@ -203,11 +222,14 @@ export function apply(ctx, config = {}) {
         runtime.visionModel = normalizeModelId(saved.visionModel, TOKENSAPI.visionModel)
         Promise.resolve(
           synchronizeMainModel(ctx, runtime.mainModel, [{ id: runtime.mainModel, name: runtime.mainModel }]),
-        ).catch((error) => {
-          console.error(`[tokens-model-manager] saved main model activation skipped: ${error}`)
-        })
+        )
+          .catch((error) => {
+            console.error(`[tokens-model-manager] saved main model activation skipped: ${error}`)
+          })
+          .finally(settleManagerSettings)
       } catch (error) {
         console.error(`[tokens-model-manager] model settings namespace skipped: ${error}`)
+        settleManagerSettings()
       }
     })
     ctx.inject(['agentDefaultModel'], (scope) => {
@@ -681,12 +703,14 @@ function modelUsesVisionBridge(info, families = DEFAULT_VISION_FAMILIES) {
  *
  * Explicit provider metadata wins. TokensAPI does not currently return that
  * field, so a small product-verified id table fills the gap for known native
- * multimodal models. Supported text families use the ModLens bridge; every
- * other text model stays on the direct upstream route.
+ * multimodal models. Every other managed model uses the selected visual model
+ * as a bridge. This fail-safe default keeps unknown/new models selectable in
+ * sessions that already contain images without pretending they natively
+ * understand the original pixels.
  */
-function managedVisionMode(info, families = DEFAULT_VISION_FAMILIES) {
+function managedVisionMode(info) {
   if (managedModelInput(info).includes('image')) return 'native'
-  return modelUsesVisionBridge(info, families) ? 'bridge' : 'direct'
+  return 'bridge'
 }
 
 function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
@@ -694,7 +718,9 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
   // models (present or future: deepseek-vl/ocr/janus, glm-4.5v, glm-5v-...)
   // need no bridge and are excluded by name and by declared modality.
   const families = config.families || DEFAULT_VISION_FAMILIES
-  const shouldWrap = (info) => modelUsesVisionBridge(info, families)
+  const managedTokensApiRoute = config.upstream === TOKENSAPI.providerId
+  const shouldWrap = (info) =>
+    managedTokensApiRoute ? !managedModelInput(info).includes('image') : modelUsesVisionBridge(info, families)
   if (typeof ctx.llm?.registerAdapter !== 'function' || typeof ctx.llm?.stream !== 'function') {
     return
   }
@@ -2121,7 +2147,11 @@ function publicModels(runtime) {
   for (const id of [runtime.mainModel, runtime.visionModel]) {
     if (!models.some((model) => model.id === id)) models.push({ id, name: id })
   }
-  return models
+  return models.map((model) => {
+    let visionMode = managedVisionMode(model)
+    if (!runtime.visionProviderEnabled && visionMode === 'bridge') visionMode = 'direct'
+    return { ...model, visionMode }
+  })
 }
 
 async function parseManagedModels(response) {
@@ -2147,11 +2177,20 @@ async function parseManagedModels(response) {
     const ownedBy = normalizeModelId(entry?.owned_by, '')
     const endpointTypes = normalizeEndpointTypes(entry?.supported_endpoint_types)
     const hasEndpointTypes = Array.isArray(entry?.supported_endpoint_types)
+    const declaredInput = Array.isArray(entry?.input_modalities)
+      ? entry.input_modalities
+      : Array.isArray(entry?.input)
+        ? entry.input
+        : null
+    const input = Array.isArray(declaredInput)
+      ? [...new Set(declaredInput.filter((value) => value === 'text' || value === 'image'))]
+      : []
     models.push({
       id,
       name,
       ...(ownedBy ? { ownedBy } : {}),
       ...(hasEndpointTypes ? { endpointTypes } : {}),
+      ...(Array.isArray(declaredInput) ? { input } : {}),
     })
   }
   if (models.length === 0) {
@@ -2165,7 +2204,7 @@ async function resolveManagedMainRoute(ctx, mainModel) {
   const selected = runtime.models.find((model) => model.id === mainModel) ?? { id: mainModel, name: mainModel }
   const input = managedModelInput(selected)
   const api = managedModelApi(selected)
-  let visionMode = managedVisionMode({ ...selected, inputModalities: input }, runtime.visionFamilies)
+  let visionMode = managedVisionMode({ ...selected, inputModalities: input })
   if (!runtime.visionProviderEnabled && visionMode === 'bridge') visionMode = 'direct'
   return {
     provider: visionMode === 'bridge' ? TOKENSAPI.agentProviderId : TOKENSAPI.providerId,
@@ -2210,6 +2249,13 @@ async function synchronizeMainModel(ctx, mainModel, models) {
 
 /** Public gate status. It intentionally contains neither the key nor its fingerprint. */
 async function modelManagerStatus(ctx, request = globalThis.fetch) {
+  // The browser plugin starts immediately and can reach this route before the
+  // settings service has replayed persisted namespaces. Returning the in-memory
+  // defaults during that window makes the client faithfully write DeepSeek
+  // back into the restored session, even though the saved selection is another
+  // model. Wait for the model namespace and its initial route activation so a
+  // startup status can never masquerade as the user's saved configuration.
+  await managerRuntime(ctx).settingsReady
   const [credential, verification] = await Promise.all([
     ctx.credentials.describe(TOKENSAPI.credentialRef),
     ctx.credentials.describe(TOKENSAPI.verificationRef),
