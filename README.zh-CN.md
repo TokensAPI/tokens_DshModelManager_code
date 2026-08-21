@@ -79,7 +79,7 @@ agy                                                           # 浏览器完成�
 
 **DeepSeek Harness Desktop 用户不走 skill 流程**，本包就是原生 dsh 插件。在 PowerShell 中运行：
 
-当前包标识：`@tokens/dsh-model-manager@0.2.0`。
+当前包标识：`@tokens/dsh-model-manager@0.2.1`。
 
 ```powershell
 npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"

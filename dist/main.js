@@ -5006,7 +5006,7 @@ function parsePositiveInt(raw, flag) {
   }
   return Number.parseInt(raw, 10);
 }
-program.name("modlens").description("Plug-in vision for text-only LLMs: image in, structured JSON evidence out").version("0.2.0");
+program.name("modlens").description("Plug-in vision for text-only LLMs: image in, structured JSON evidence out").version("0.2.1");
 program.command("analyze", { isDefault: true }).description("Analyze an image into structured JSON evidence (default command)").requiredOption("-i, --input <path|url>", "Input image path or https URL").option("-o, --output <path>", "Write result JSON to a file").option("-m, --model <name>", "Provider model name").option("-p, --provider <name>", `Vision provider (${listProviders().join(", ")})`).option("--prompt <text>", "Extra focus for this image").option("--timeout <ms>", "Provider timeout in milliseconds", "180000").option("--provider-bin <path>", "Provider binary path (default: agy)").option("--workdir <path>", "Working directory for the provider").option(
   "--extra-body <json>",
   `JSON merged into the API request body, e.g. '{"thinking":{"type":"disabled"}}'`
@@ -5116,7 +5116,7 @@ program.command("doctor").description(
       configPath: CONFIG_PATH,
       // Lets doctor name an installed skill copy that is older than
       // the CLI reporting on it (issue #33).
-      version: "0.2.0"
+      version: "0.2.1"
     });
     const output = options.json ? JSON.stringify(report, null, 2) : renderDoctorReport(report);
     process.stdout.write(`${output}

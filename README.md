@@ -68,7 +68,7 @@ Pasting an image works two ways. **① Just paste.** On a text-only model the pa
 the built vision CLI, so GitHub installation does not run dependency lifecycle
 scripts or need a build allowlist:
 
-Current package identity: `@tokens/dsh-model-manager@0.2.0`.
+Current package identity: `@tokens/dsh-model-manager@0.2.1`.
 
 ```powershell
 npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"

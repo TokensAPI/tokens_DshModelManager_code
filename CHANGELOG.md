@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 - 2026-08-21
+
+- Reapply the saved TokensAPI model when the Desktop client starts and whenever the user changes ordinary sessions, so existing image-bearing sessions no longer fall back to their old model after a restart.
+- Keep the successfully persisted model/API-key state visible when only the current-session switch fails, and report that partial failure accurately instead of presenting it as a failed save.
+- Route every TokensAPI model without confirmed native image support through the selected visual model, while the request-verified `gpt-5.5` now stays on its native multimodal route and receives the original images directly.
+- Make the settings UI follow the currently selected model immediately: native multimodal models hide the separate visual-model picker, bridged text models show it, and the route note names the exact model or model pair that will handle the conversation and images.
+- Load and select the managed default whenever an ordinary conversation is entered. The client now waits for that session's model directory to mount and refreshes its shared selection once, so a working model no longer leaves the composer displaying the fallback “Select model” label.
+- Wait for persisted model settings to load before the startup status endpoint can synchronize the restored Desktop session. Restarting no longer lets the temporary DeepSeek defaults overwrite a saved `gpt-5.5` (or other) session selection.
+
 ## 0.2.0 - 2026-08-20
 
 - **TokensAPI models now keep their real DSH transport and image-input capabilities.** The managed catalog preserves each model's supported endpoint types, selects `anthropic-messages` for Claude, `openai-responses` when available, and `openai-completions` as the compatible fallback. Verified native multimodal models are registered with both text and image input, so Desktop no longer blocks their images before a request, while DeepSeek and GLM text models continue to use the separate visual-model bridge.
