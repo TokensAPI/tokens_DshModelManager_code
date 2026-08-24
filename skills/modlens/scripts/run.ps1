@@ -24,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 # package.json version, and the release script rewrites it on every bump.
 $Package = '@tokens/dsh-model-manager'
 $Bin = 'modlens'
-$Pinned = '0.2.1'
+$Pinned = '0.2.2'
 # -------------------------------------------------------------------------------
 
 $NativeNote = 'no native artifact is published for this tool yet; phase A ships npm launch paths only'

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 - 2026-08-24
+
+- Allow the TokensAPI endpoint to be edited and saved together with the selected main and visual models. Managed model and visual-analysis requests use the saved endpoint, while API-key sign-in verification intentionally remains on the official TokensAPI service.
+
 ## 0.2.1 - 2026-08-21
 
 - Reapply the saved TokensAPI model when the Desktop client starts and whenever the user changes ordinary sessions, so existing image-bearing sessions no longer fall back to their old model after a restart.
