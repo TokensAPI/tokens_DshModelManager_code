@@ -220,8 +220,12 @@ describe('Desktop model-manager settings section', () => {
         );
         expect(pickerSource).not.toContain("'select'");
         expect(SOURCE).toContain(
-            'body: JSON.stringify({ mainModel: mainModel, visionModel: visionModel })',
+            'body: JSON.stringify({ baseURL: baseURL, mainModel: mainModel, visionModel: visionModel })',
         );
+        expect(SOURCE).toContain("var basePair = react.useState('')");
+        expect(SOURCE).toContain("type: 'url'");
+        expect(SOURCE).toContain('endpointRow()');
+        expect(SOURCE).toContain("baseURL.trim() !== (state?.baseURL || '')");
         const saveModelsSource = SOURCE.slice(
             SOURCE.indexOf('var saveModels'),
             SOURCE.indexOf('var fetchStoredKey'),

@@ -36,9 +36,9 @@ const NATIVE_VISION_MODEL_ID =
 const CLAUDE_MODEL_ID = /^claude-/i
 const MANAGED_ENDPOINT_TYPES = new Set(['anthropic', 'gemini', 'openai', 'openai-response', 'openai-response-compact'])
 
-// Product-owned route facts. Users supply only the credential; keeping these
-// constants here makes the Host route, spawned vision CLI, and regression
-// tests share one source of truth without ever serializing a secret.
+// Product defaults and stable service ids. The settings page may override the
+// runtime endpoint after sign-in; the gate itself deliberately keeps using the
+// official default below until its login policy is changed explicitly.
 export const TOKENSAPI = Object.freeze({
   credentialRef: 'TOKENSAPI_API_KEY',
   verificationRef: 'TOKENSAPI_API_KEY_VERIFIED_SHA256',
@@ -58,6 +58,7 @@ function managerRuntime(ctx) {
   let runtime = managerRuntimes.get(ctx)
   if (!runtime) {
     runtime = {
+      baseURL: TOKENSAPI.baseURL,
       mainModel: TOKENSAPI.mainModel,
       mainProvider: TOKENSAPI.agentProviderId,
       visionMode: 'bridge',
@@ -207,17 +208,33 @@ export function apply(ctx, config = {}) {
           refs: {
             0: {
               type: 'object',
-              meta: { default: { mainModel: TOKENSAPI.mainModel, visionModel: TOKENSAPI.visionModel } },
+              meta: {
+                default: {
+                  baseURL: TOKENSAPI.baseURL,
+                  mainModel: TOKENSAPI.mainModel,
+                  visionModel: TOKENSAPI.visionModel,
+                },
+              },
               dict: {},
             },
           },
         })
         scope.settings.register(TOKENSAPI.settingsNamespace, modelSettings, {
-          base: { mainModel: TOKENSAPI.mainModel, visionModel: TOKENSAPI.visionModel },
+          base: {
+            baseURL: TOKENSAPI.baseURL,
+            mainModel: TOKENSAPI.mainModel,
+            visionModel: TOKENSAPI.visionModel,
+          },
         })
         const runtime = managerRuntime(ctx)
         runtime.settings = scope.settings
         const saved = scope.settings.get(TOKENSAPI.settingsNamespace) ?? {}
+        try {
+          runtime.baseURL = normalizeManagedBaseURL(saved.baseURL)
+        } catch (error) {
+          runtime.baseURL = TOKENSAPI.baseURL
+          console.error(`[tokens-model-manager] saved endpoint ignored: ${error}`)
+        }
         runtime.mainModel = normalizeModelId(saved.mainModel, TOKENSAPI.mainModel)
         runtime.visionModel = normalizeModelId(saved.visionModel, TOKENSAPI.visionModel)
         Promise.resolve(
@@ -1502,7 +1519,7 @@ async function runManagedVision(ctx, args, signal) {
   return run(process.execPath, args, signal, {
     TOKENS_MODEL_MANAGER: '1',
     TOKENSAPI_API_KEY: apiKey,
-    TOKENSAPI_BASE_URL: TOKENSAPI.baseURL,
+    TOKENSAPI_BASE_URL: managerRuntime(ctx).baseURL,
     TOKENSAPI_VISION_MODEL: selectedVisionModel(ctx),
   })
 }
@@ -2230,7 +2247,7 @@ async function synchronizeMainModel(ctx, mainModel, models) {
           displayName: 'TokensAPI',
           apiKeyEnv: TOKENSAPI.credentialRef,
           api: route.api,
-          baseURL: TOKENSAPI.baseURL,
+          baseURL: runtime.baseURL,
           models: [{ id: mainModel, name: selected?.name ?? mainModel, input: route.input }],
         },
       },
@@ -2295,7 +2312,7 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
     models: publicModels(runtime),
     modelsAvailable: authenticated && runtime.models.length > 0,
     ...(modelListError === '' ? {} : { modelListError }),
-    baseURL: TOKENSAPI.baseURL,
+    baseURL: runtime.baseURL,
     ...(lastVisionFailure === null ? {} : { visionDiagnostic: lastVisionFailure }),
   }
 }
@@ -2315,6 +2332,29 @@ function normalizeManagedCredential(value) {
   return apiKey
 }
 
+function normalizeManagedBaseURL(value) {
+  if (typeof value !== 'string') return TOKENSAPI.baseURL
+  const input = value.trim()
+  if (input === '') throw new TypeError('接口地址不能为空')
+  if (input.length > 2048) throw new TypeError('接口地址过长')
+  let parsed
+  try {
+    parsed = new URL(input)
+  } catch {
+    throw new TypeError('接口地址格式无效')
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new TypeError('接口地址不能包含账号、查询参数或锚点')
+  }
+  const hostname = parsed.hostname.toLowerCase()
+  const loopback = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    throw new TypeError('接口地址必须使用 HTTPS；本机回环地址可使用 HTTP')
+  }
+  const pathname = parsed.pathname === '/' ? '' : parsed.pathname.replace(/\/+$/u, '')
+  return `${parsed.origin}${pathname}`
+}
+
 class ManagedCredentialError extends Error {
   constructor(code, message) {
     super(message)
@@ -2323,7 +2363,7 @@ class ManagedCredentialError extends Error {
 }
 
 /**
- * Validate against the same immutable TokensAPI endpoint used by the models.
+ * Validate sign-in against the immutable official TokensAPI endpoint.
  * Error bodies are never surfaced because gateways sometimes echo request
  * metadata. A successful body is reduced to bounded public model metadata.
  */
@@ -2380,6 +2420,7 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
     throw new ManagedCredentialError('unreachable', status.modelListError || '暂时无法获取模型列表')
   }
   const runtime = managerRuntime(ctx)
+  const baseURL = Object.hasOwn(value ?? {}, 'baseURL') ? normalizeManagedBaseURL(value.baseURL) : runtime.baseURL
   const mainModel = normalizeModelId(value?.mainModel, '')
   const visionModel = normalizeModelId(value?.visionModel, '')
   if (!mainModel || !visionModel) throw new TypeError('mainModel 和 visionModel 必须是有效的模型 ID')
@@ -2387,9 +2428,17 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
   if (!allowed.has(mainModel) || !allowed.has(visionModel)) {
     throw new ManagedCredentialError('invalid_model', '所选模型不在 TokensAPI 可用列表中')
   }
-  await synchronizeMainModel(ctx, mainModel, runtime.models)
-  if (runtime.settings?.update) {
-    await runtime.settings.update(TOKENSAPI.settingsNamespace, { mainModel, visionModel })
+  const previousBaseURL = runtime.baseURL
+  runtime.baseURL = baseURL
+  try {
+    await synchronizeMainModel(ctx, mainModel, runtime.models)
+    if (runtime.settings?.update) {
+      await runtime.settings.update(TOKENSAPI.settingsNamespace, { baseURL, mainModel, visionModel })
+    }
+  } catch (error) {
+    runtime.baseURL = previousBaseURL
+    await synchronizeMainModel(ctx, runtime.mainModel, runtime.models).catch(() => {})
+    throw error
   }
   runtime.mainModel = mainModel
   runtime.visionModel = visionModel
@@ -2546,6 +2595,7 @@ export const __config = { engineSummary, applyEngineSettings, modlensConfigPath 
 export const __modelManager = {
   modelManagerStatus,
   normalizeManagedCredential,
+  normalizeManagedBaseURL,
   validateManagedCredential,
   managedCredentialFingerprint,
   setManagedCredential,

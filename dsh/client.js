@@ -837,9 +837,9 @@ window.__ModuleLoader__.load({
         missing: 'Not configured',
         ready: 'Configured',
         save: 'Save API key',
-        saveModels: 'Save model choices',
+        saveModels: 'Save endpoint and models',
         saving: 'Saving...',
-        modelsSaved: 'Model choices saved',
+        modelsSaved: 'Endpoint and model choices saved',
         sessionSwitchFailed: 'Settings were saved, but the current session could not switch: ',
         modelsUnavailable: 'The model list is temporarily unavailable.',
         stored: 'Saved API key',
@@ -874,9 +874,9 @@ window.__ModuleLoader__.load({
         missing: '未配置',
         ready: '已配置',
         save: '保存 API Key',
-        saveModels: '保存模型选择',
+        saveModels: '保存接口和模型',
         saving: '保存中…',
-        modelsSaved: '模型选择已保存',
+        modelsSaved: '接口和模型选择已保存',
         sessionSwitchFailed: '配置已保存，但当前会话切换失败：',
         modelsUnavailable: '暂时无法获取模型列表。',
         stored: 'API Key 已保存',
@@ -1107,6 +1107,7 @@ window.__ModuleLoader__.load({
       return function TokensModelManager() {
         var statePair = react.useState(null)
         var keyPair = react.useState('')
+        var basePair = react.useState('')
         var mainPair = react.useState('')
         var visionPair = react.useState('')
         var revealPair = react.useState(false)
@@ -1116,6 +1117,7 @@ window.__ModuleLoader__.load({
         var busyPair = react.useState(false)
         var state = statePair[0]
         var apiKey = keyPair[0]
+        var baseURL = basePair[0]
         var mainModel = mainPair[0]
         var visionModel = visionPair[0]
         var keyVisible = revealPair[0]
@@ -1126,6 +1128,10 @@ window.__ModuleLoader__.load({
         var t = managerLabels()
         var draftVisionMode = selectedModelVisionMode(state, mainModel)
         var routeDescription = modelRouteDescription(t, draftVisionMode, mainModel, visionModel)
+        var routingDirty =
+          baseURL.trim() !== (state?.baseURL || '') ||
+          mainModel !== state?.mainModel ||
+          visionModel !== state?.visionModel
 
         var load = react.useCallback(
           () =>
@@ -1138,6 +1144,7 @@ window.__ModuleLoader__.load({
               )
               .then((body) => {
                 statePair[1](body)
+                basePair[1](body.baseURL || '')
                 mainPair[1](body.mainModel || '')
                 visionPair[1](body.visionModel || '')
                 notePair[1]('')
@@ -1175,6 +1182,7 @@ window.__ModuleLoader__.load({
             )
             .then((body) => {
               statePair[1](body)
+              basePair[1](body.baseURL || '')
               mainPair[1](body.mainModel || '')
               visionPair[1](body.visionModel || '')
               keyPair[1]('')
@@ -1193,13 +1201,13 @@ window.__ModuleLoader__.load({
 
         var saveModels = (event) => {
           event.preventDefault()
-          if (!mainModel || !visionModel || busy || !state?.modelsAvailable) return
+          if (!baseURL.trim() || !mainModel || !visionModel || busy || !state?.modelsAvailable) return
           busyPair[1](true)
           notePair[1]('')
           fetch('/tokens/model-manager', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ mainModel: mainModel, visionModel: visionModel }),
+            body: JSON.stringify({ baseURL: baseURL, mainModel: mainModel, visionModel: visionModel }),
           })
             .then((response) =>
               response.json().then((body) => {
@@ -1209,6 +1217,7 @@ window.__ModuleLoader__.load({
             )
             .then((body) => {
               statePair[1](body)
+              basePair[1](body.baseURL || '')
               mainPair[1](body.mainModel || '')
               visionPair[1](body.visionModel || '')
               return Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider))
@@ -1260,12 +1269,32 @@ window.__ModuleLoader__.load({
             .finally(() => busyPair[1](false))
         }
 
-        var row = (label, value) =>
+        var endpointRow = () =>
           h(
             'div',
             { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, padding: '8px 0' } },
-            h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)' } }, label),
-            h('code', null, value || '—'),
+            h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)', paddingTop: 10 } }, t.endpoint),
+            h('input', {
+              type: 'url',
+              value: baseURL,
+              disabled: busy,
+              spellCheck: false,
+              autoCapitalize: 'none',
+              onChange: (event) => basePair[1](event.target.value),
+              style: {
+                width: '100%',
+                minWidth: 0,
+                minHeight: 44,
+                boxSizing: 'border-box',
+                padding: '9px 12px',
+                borderRadius: 10,
+                border: '1px solid var(--dsw-alias-border-l2, var(--dsw-alias-border-l2))',
+                background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
+                color: 'inherit',
+                font: 'inherit',
+                outline: 'none',
+              },
+            }),
           )
 
         var modelRow = (label, value, setValue, pickerId) => {
@@ -1458,10 +1487,10 @@ window.__ModuleLoader__.load({
                     marginBottom: 16,
                   },
                 },
-                row(t.endpoint, state.baseURL),
                 h(
                   'form',
                   { onSubmit: saveModels },
+                  endpointRow(),
                   modelRow(t.main, mainModel, mainPair[1], 'main'),
                   draftVisionMode === 'bridge'
                     ? h('div', null, modelRow(t.vision, visionModel, visionPair[1], 'vision'), routeNote())
@@ -1477,10 +1506,7 @@ window.__ModuleLoader__.load({
                     'button',
                     {
                       type: 'submit',
-                      disabled:
-                        busy ||
-                        !state.modelsAvailable ||
-                        (mainModel === state.mainModel && visionModel === state.visionModel),
+                      disabled: busy || !baseURL.trim() || !state.modelsAvailable || !routingDirty,
                       style: {
                         marginTop: 10,
                         padding: '9px 16px',
@@ -1490,12 +1516,7 @@ window.__ModuleLoader__.load({
                         background: 'var(--dsw-alias-state-business-primary)',
                         color: 'var(--dsw-alias-bg-layer-2)',
                         fontWeight: 700,
-                        opacity:
-                          busy ||
-                          !state.modelsAvailable ||
-                          (mainModel === state.mainModel && visionModel === state.visionModel)
-                            ? 0.5
-                            : 1,
+                        opacity: busy || !baseURL.trim() || !state.modelsAvailable || !routingDirty ? 0.5 : 1,
                       },
                     },
                     busy ? t.saving : t.saveModels,

@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error The DSH entry is deliberately dependency-free plain JS.
 import { __modelManager, apply, TOKENSAPI } from '../dsh/index.js';
@@ -238,6 +241,66 @@ describe('TokensAPI managed vision configuration', () => {
         expect(status.authenticated).toBe(true);
         expect(JSON.stringify(status)).not.toContain('super-secret-key');
         expect(status).not.toHaveProperty('apiKey');
+    });
+});
+
+describe('TokensAPI editable endpoint', () => {
+    it('keeps the official endpoint as the default and normalizes a saved HTTPS URL', () => {
+        expect(__modelManager.normalizeManagedBaseURL(undefined)).toBe(TOKENSAPI.baseURL);
+        expect(__modelManager.normalizeManagedBaseURL(' https://gateway.example/api/v1/// ')).toBe(
+            'https://gateway.example/api/v1',
+        );
+        expect(__modelManager.normalizeManagedBaseURL('http://localhost:8787/v1/')).toBe(
+            'http://localhost:8787/v1',
+        );
+    });
+
+    for (const value of [
+        '',
+        'not a URL',
+        'http://gateway.example/v1',
+        'https://user:pass@gateway.example/v1',
+        'https://gateway.example/v1?key=value',
+        'https://gateway.example/v1#fragment',
+    ]) {
+        it(`rejects an unsafe endpoint: ${value || '(blank)'}`, () => {
+            expect(() => __modelManager.normalizeManagedBaseURL(value)).toThrow();
+        });
+    }
+
+    it('uses the saved endpoint for managed vision while login verification stays official', async () => {
+        const harness = credentialHarness('tk-custom-endpoint', true);
+        await __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE);
+        await __modelManager.setManagedModels(
+            harness.ctx,
+            {
+                baseURL: 'https://gateway.example/v1/',
+                mainModel: TOKENSAPI.mainModel,
+                visionModel: TOKENSAPI.visionModel,
+            },
+            VALID_RESPONSE,
+        );
+
+        let verificationUrl = '';
+        await __modelManager.validateManagedCredential(
+            'tk-custom-endpoint',
+            async (url: unknown) => {
+                verificationUrl = String(url);
+                return { status: 200, json: async () => ({ data: API_MODELS }) };
+            },
+        );
+        expect(verificationUrl).toBe(`${TOKENSAPI.baseURL}/models`);
+
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tokens-endpoint-'));
+        const script = path.join(dir, 'print-endpoint.cjs');
+        fs.writeFileSync(script, "process.stdout.write(process.env.TOKENSAPI_BASE_URL || '')");
+        try {
+            const result = await __modelManager.runManagedVision(harness.ctx, [script], undefined);
+            expect(result.code).toBe(0);
+            expect(result.stdout).toBe('https://gateway.example/v1');
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     });
 });
 
@@ -662,11 +725,16 @@ describe('TokensAPI model discovery and selection', () => {
         await __modelManager.setManagedCredential(ctx, 'tk-live-settings', VALID_RESPONSE);
         const status = await __modelManager.setManagedModels(
             ctx,
-            { mainModel: 'deepseek-v3.2', visionModel: 'qwen3.6-35b-a3b' },
+            {
+                baseURL: 'https://gateway.example/v1/',
+                mainModel: 'deepseek-v3.2',
+                visionModel: 'qwen3.6-35b-a3b',
+            },
             VALID_RESPONSE,
         );
 
         expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            baseURL: 'https://gateway.example/v1',
             mainModel: 'deepseek-v3.2',
             visionModel: 'qwen3.6-35b-a3b',
         });
@@ -677,7 +745,7 @@ describe('TokensAPI model discovery and selection', () => {
         ).toMatchObject({
             providers: {
                 tokensapi: {
-                    baseURL: TOKENSAPI.baseURL,
+                    baseURL: 'https://gateway.example/v1',
                     api: 'openai-responses',
                     models: [{ id: 'deepseek-v3.2', name: 'DeepSeek V3.2', input: ['text'] }],
                 },
@@ -686,6 +754,7 @@ describe('TokensAPI model discovery and selection', () => {
         // The settings page still receives every API model for its own
         // selector; only the conversation catalog is narrowed.
         expect(status.models).toEqual(DIRECT_PUBLIC_API_MODELS);
+        expect(status.baseURL).toBe('https://gateway.example/v1');
         expect(selections.at(-1)).toEqual({
             provider: TOKENSAPI.providerId,
             model: 'deepseek-v3.2',
