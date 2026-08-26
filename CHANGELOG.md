@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.7 - 2026-08-26
+
+- Hide the fallback upstream and its visual wrapper from Desktop's outer conversation model selector whenever TokensAPI is active. The saved endpoint, selected model, and independent credential remain available inside the fallback panel and the route is registered again only when the user switches to it.
+- Remove a fallback route left by an older build during startup, so returning to TokensAPI and restarting both converge on the same clean model directory.
+
+## 0.2.6 - 2026-08-26
+
+- Replace the fallback route's preset model choices with explicit discovery from the configured endpoint's authenticated `/models` response. Enter or reuse the independent fallback API key, click **Get models**, select a returned model, and only then save and switch.
+- Clear stale fallback choices whenever the endpoint or key changes, reject switching without a discovered selection, and keep discovery read-only so it never persists the entered fallback key, changes the active route, or touches the TokensAPI sign-in credential.
+
+## 0.2.5 - 2026-08-26
+
+- Fix fallback saving on stable Desktop builds that do not register the optional `llm-deepseek` settings namespace. The fallback now creates its private `tokens-fallback` provider inside the bundled `llm-pi-ai` adapter, while retaining its independent `DEEPSEEK_API_KEY` and the TokensAPI visual bridge.
+- Use `deepseek-chat` and `deepseek-reasoner` as the initial model choices for the default DeepSeek endpoint, then replace that list with the endpoint's authenticated `/models` response.
+
+## 0.2.4 - 2026-08-26
+
+- Turn the fixed DeepSeek official entry into an independent fallback model route. Its request endpoint is editable, its model is selectable from the fallback catalog, and its separate `DEEPSEEK_API_KEY` is validated only against that endpoint; the TokensAPI login credential is never read for fallback chat or overwritten.
+- Persist the fallback endpoint and selected model, apply them to the built-in DeepSeek-compatible adapter, and continue sending images through the existing TokensAPI visual bridge. Switching back restores the parked TokensAPI chat model.
+
+## 0.2.3 - 2026-08-26
+
+- Add a low-profile DeepSeek official fallback inside the existing Models page. Its independent `DEEPSEEK_API_KEY` never overwrites the TokensAPI credential; switching selects `deepseek-modlens/deepseek-v4-flash`, keeps images on the configured TokensAPI visual bridge, and restores the parked TokensAPI model when switched back.
+- Keep the built-in `llm-deepseek` adapter enabled in the product patch and register its dedicated vision wrapper beside the pinned TokensAPI wrapper, so the fallback changes the real request route rather than only the settings display.
+
 ## 0.2.2 - 2026-08-24
 
 - Allow the TokensAPI endpoint to be edited and saved together with the selected main and visual models. Managed model and visual-analysis requests use the saved endpoint, while API-key sign-in verification intentionally remains on the official TokensAPI service.
