@@ -101,12 +101,24 @@ const API_MODELS = [
     },
 ];
 
-const PUBLIC_API_MODELS = API_MODELS.map((model) => ({
-    ...model,
-    visionMode: ['qwen3.6-35b-a3b', 'claude-opus-4-7', 'gpt-5.5'].includes(model.id)
-        ? 'native'
-        : 'bridge',
-}));
+const PUBLIC_API_MODELS = API_MODELS.map((model) => {
+    const protocols = model.id.startsWith('claude-')
+        ? [{ id: 'anthropic-messages', label: 'Anthropic Messages' }]
+        : [
+              { id: 'openai-completions', label: 'Chat Completions' },
+              ...(model.endpointTypes.includes('openai-response')
+                  ? [{ id: 'openai-responses', label: 'Responses API' }]
+                  : []),
+          ];
+    return {
+        ...model,
+        api: protocols[0].id,
+        protocols,
+        visionMode: ['qwen3.6-35b-a3b', 'claude-opus-4-7', 'gpt-5.5'].includes(model.id)
+            ? 'native'
+            : 'bridge',
+    };
+});
 
 const DIRECT_PUBLIC_API_MODELS = PUBLIC_API_MODELS.map((model) => ({
     ...model,
@@ -197,6 +209,7 @@ describe('TokensAPI credential gate: 50 positive cases', () => {
                 provider: 'TokensAPI',
                 channel: 'tokensapi',
                 mainModel: 'deepseek-v4-flash',
+                api: 'openai-completions',
                 mainProvider: 'modlens-tokensapi',
                 activeMainModel: 'deepseek-v4-flash',
                 visionMode: 'bridge',
@@ -1010,7 +1023,14 @@ describe('TokensAPI model discovery and selection', () => {
     it('waits for persisted model settings before exposing startup status', async () => {
         const credential = credentialHarness('tk-startup-settings', true);
         const values = new Map<string, Record<string, unknown>>([
-            [TOKENSAPI.settingsNamespace, { mainModel: 'gpt-5.5', visionModel: 'qwen3.6-35b-a3b' }],
+            [
+                TOKENSAPI.settingsNamespace,
+                {
+                    mainModel: 'gpt-5.5',
+                    protocolByModel: { 'gpt-5.5': 'openai-responses' },
+                    visionModel: 'qwen3.6-35b-a3b',
+                },
+            ],
         ]);
         let settingsInjection: ((scope: Record<string, unknown>) => void) | undefined;
         const settings = {
@@ -1049,9 +1069,62 @@ describe('TokensAPI model discovery and selection', () => {
         settingsInjection?.({ settings });
         await expect(statusPromise).resolves.toMatchObject({
             mainModel: 'gpt-5.5',
+            api: 'openai-completions',
             mainProvider: TOKENSAPI.providerId,
             visionMode: 'native',
             visionModel: 'qwen3.6-35b-a3b',
+        });
+    });
+
+    it('restores a persisted Responses choice before the first conversation request', async () => {
+        const credential = credentialHarness('tk-startup-protocol', true);
+        const values = new Map<string, Record<string, unknown>>([
+            [
+                TOKENSAPI.settingsNamespace,
+                {
+                    mainModel: 'deepseek-v4-flash',
+                    protocolByModel: { 'deepseek-v4-flash': 'openai-responses' },
+                    visionModel: TOKENSAPI.visionModel,
+                },
+            ],
+        ]);
+        const updates: Array<{ namespace: string; patch: Record<string, unknown> }> = [];
+        const settings = {
+            register: (
+                namespace: string,
+                _schema: unknown,
+                options?: { base?: Record<string, unknown> },
+            ) => {
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Record<string, unknown>) => {
+                updates.push({ namespace, patch });
+                values.set(namespace, { ...(values.get(namespace) ?? {}), ...patch });
+            },
+        };
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) callback({ settings });
+            },
+        };
+
+        apply(ctx, { settingsCard: false, pasteToPath: false });
+        await expect(__modelManager.modelManagerStatus(ctx, VALID_RESPONSE)).resolves.toMatchObject(
+            {
+                mainModel: 'deepseek-v4-flash',
+                api: 'openai-responses',
+            },
+        );
+        expect(
+            [...updates]
+                .reverse()
+                .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch,
+        ).toMatchObject({
+            providers: { tokensapi: { api: 'openai-responses' } },
         });
     });
 
@@ -1108,7 +1181,7 @@ describe('TokensAPI model discovery and selection', () => {
         ).resolves.toEqual({
             provider: TOKENSAPI.agentProviderId,
             visionMode: 'bridge',
-            api: 'openai-responses',
+            api: 'openai-completions',
             input: ['text'],
         });
         await expect(
@@ -1141,7 +1214,7 @@ describe('TokensAPI model discovery and selection', () => {
         ).resolves.toEqual({
             provider: TOKENSAPI.agentProviderId,
             visionMode: 'bridge',
-            api: 'openai-responses',
+            api: 'openai-completions',
             input: ['text'],
         });
 
@@ -1157,12 +1230,12 @@ describe('TokensAPI model discovery and selection', () => {
         ).resolves.toEqual({
             provider: TOKENSAPI.providerId,
             visionMode: 'direct',
-            api: 'openai-responses',
+            api: 'openai-completions',
             input: ['text'],
         });
     });
 
-    it('selects a DSH protocol from TokensAPI endpoint metadata', () => {
+    it('defaults to Chat Completions and validates explicit protocol choices', () => {
         expect(
             __modelManager.managedModelApi({
                 id: 'claude-opus-4-7',
@@ -1174,7 +1247,19 @@ describe('TokensAPI model discovery and selection', () => {
                 id: 'deepseek-v4-flash',
                 endpointTypes: ['openai', 'openai-response'],
             }),
+        ).toBe('openai-completions');
+        expect(
+            __modelManager.managedModelApi(
+                {
+                    id: 'deepseek-v4-flash',
+                    endpointTypes: ['openai', 'openai-response'],
+                },
+                'openai-responses',
+            ),
         ).toBe('openai-responses');
+        expect(__modelManager.managedModelApi({ id: 'catalog-without-metadata' })).toBe(
+            'openai-completions',
+        );
         expect(
             __modelManager.managedModelApi({ id: 'openai-only', endpointTypes: ['openai'] }),
         ).toBe('openai-completions');
@@ -1184,6 +1269,12 @@ describe('TokensAPI model discovery and selection', () => {
         expect(() =>
             __modelManager.managedModelApi({ id: 'unknown-only', endpointTypes: ['future-api'] }),
         ).toThrow(/暂不支持 DSH/);
+        expect(() =>
+            __modelManager.managedModelApi(
+                { id: 'openai-only', endpointTypes: ['openai'] },
+                'openai-responses',
+            ),
+        ).toThrow(/不支持所选请求协议/);
     });
 
     it('declares verified native multimodal models as accepting image input', () => {
@@ -1241,6 +1332,32 @@ describe('TokensAPI model discovery and selection', () => {
         ).rejects.toMatchObject({ code: 'upstream' });
     });
 
+    it('keeps settings reachable when the saved model loses every supported DSH protocol', async () => {
+        const harness = credentialHarness('tk-capability-drift', true);
+        const status = await __modelManager.modelManagerStatus(harness.ctx, async () => ({
+            status: 200,
+            json: async () => ({
+                data: [
+                    {
+                        id: TOKENSAPI.mainModel,
+                        supported_endpoint_types: ['gemini'],
+                    },
+                    {
+                        id: TOKENSAPI.visionModel,
+                        supported_endpoint_types: ['openai'],
+                    },
+                ],
+            }),
+        }));
+
+        expect(status).toMatchObject({
+            authenticated: true,
+            api: '',
+            modelsAvailable: true,
+        });
+        expect(status.modelListError).toMatch(/暂不支持 DSH/);
+    });
+
     it('rejects an empty usable model list', async () => {
         await expect(
             __modelManager.parseManagedModels({ json: async () => ({ data: [{ id: '' }, {}] }) }),
@@ -1278,10 +1395,72 @@ describe('TokensAPI model discovery and selection', () => {
         );
         expect(status).toMatchObject({
             mainModel: 'deepseek-v3.2',
+            api: 'openai-completions',
             visionModel: 'qwen3.6-35b-a3b',
             modelsAvailable: true,
         });
         expect(__modelManager.selectedVisionModel(harness.ctx)).toBe('qwen3.6-35b-a3b');
+    });
+
+    it('persists a protocol per model and restores it when switching back', async () => {
+        const harness = credentialHarness();
+        await __modelManager.setManagedCredential(
+            harness.ctx,
+            'tk-protocol-choice',
+            VALID_RESPONSE,
+        );
+
+        const responses = await __modelManager.setManagedModels(
+            harness.ctx,
+            {
+                mainModel: 'deepseek-v4-flash',
+                api: 'openai-responses',
+                visionModel: TOKENSAPI.visionModel,
+            },
+            VALID_RESPONSE,
+        );
+        expect(responses.api).toBe('openai-responses');
+        expect(
+            responses.models.find((model: { id: string }) => model.id === 'deepseek-v4-flash'),
+        ).toMatchObject({
+            api: 'openai-responses',
+        });
+
+        await __modelManager.setManagedModels(
+            harness.ctx,
+            {
+                mainModel: 'deepseek-v3.2',
+                api: 'openai-completions',
+                visionModel: TOKENSAPI.visionModel,
+            },
+            VALID_RESPONSE,
+        );
+        const restored = await __modelManager.setManagedModels(
+            harness.ctx,
+            { mainModel: 'deepseek-v4-flash', visionModel: TOKENSAPI.visionModel },
+            VALID_RESPONSE,
+        );
+        expect(restored.api).toBe('openai-responses');
+    });
+
+    it('rejects a protocol that the selected model does not advertise', async () => {
+        const harness = credentialHarness();
+        await __modelManager.setManagedCredential(
+            harness.ctx,
+            'tk-invalid-protocol',
+            VALID_RESPONSE,
+        );
+        await expect(
+            __modelManager.setManagedModels(
+                harness.ctx,
+                {
+                    mainModel: 'gpt-5.5',
+                    api: 'openai-responses',
+                    visionModel: TOKENSAPI.visionModel,
+                },
+                VALID_RESPONSE,
+            ),
+        ).rejects.toMatchObject({ code: 'unsupported_protocol' });
     });
 
     it('rejects a model id that was not returned by TokensAPI', async () => {
@@ -1383,7 +1562,7 @@ describe('TokensAPI model discovery and selection', () => {
             providers: {
                 tokensapi: {
                     baseURL: 'https://gateway.example/v1',
-                    api: 'openai-responses',
+                    api: 'openai-completions',
                     models: [{ id: 'deepseek-v3.2', name: 'DeepSeek V3.2', input: ['text'] }],
                 },
             },

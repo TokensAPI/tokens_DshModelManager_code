@@ -14,7 +14,7 @@
       tokensapi:
         displayName: TokensAPI
         apiKeyEnv: TOKENSAPI_API_KEY
-        api: openai-responses
+        api: openai-completions
         baseURL: https://tokensapi.ai/v1
         models:
           - id: deepseek-v4-flash

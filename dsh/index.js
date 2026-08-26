@@ -35,6 +35,12 @@ const NATIVE_VISION_MODEL_ID =
   /^(claude-(3(?:[.-]|$)|(opus|sonnet|haiku)-)|deepseek-(vl|ocr)|janus|glm-[\d.]*v(\b|-)|qwen3\.6-35b-a3b(?:$|-)|gpt-5\.5(?:$|-))/i
 const CLAUDE_MODEL_ID = /^claude-/i
 const MANAGED_ENDPOINT_TYPES = new Set(['anthropic', 'gemini', 'openai', 'openai-response', 'openai-response-compact'])
+const MANAGED_MODEL_APIS = new Set(['anthropic-messages', 'openai-completions', 'openai-responses'])
+const MANAGED_MODEL_API_LABELS = Object.freeze({
+  'anthropic-messages': 'Anthropic Messages',
+  'openai-completions': 'Chat Completions',
+  'openai-responses': 'Responses API',
+})
 
 // Product defaults and stable service ids. The settings page may override the
 // runtime endpoint after sign-in; the gate itself deliberately keeps using the
@@ -78,6 +84,7 @@ function managerRuntime(ctx) {
     runtime = {
       baseURL: TOKENSAPI.baseURL,
       mainModel: TOKENSAPI.mainModel,
+      protocolByModel: {},
       tokensMainProvider: TOKENSAPI.agentProviderId,
       mainProvider: TOKENSAPI.agentProviderId,
       activeChannel: 'tokensapi',
@@ -252,6 +259,7 @@ export function apply(ctx, config = {}) {
                 default: {
                   baseURL: TOKENSAPI.baseURL,
                   mainModel: TOKENSAPI.mainModel,
+                  protocolByModel: {},
                   visionModel: TOKENSAPI.visionModel,
                   fallbackBaseURL: DEEPSEEK_OFFICIAL.baseURL,
                   fallbackModel: DEEPSEEK_OFFICIAL.mainModel,
@@ -266,6 +274,7 @@ export function apply(ctx, config = {}) {
           base: {
             baseURL: TOKENSAPI.baseURL,
             mainModel: TOKENSAPI.mainModel,
+            protocolByModel: {},
             visionModel: TOKENSAPI.visionModel,
             fallbackBaseURL: DEEPSEEK_OFFICIAL.baseURL,
             fallbackModel: DEEPSEEK_OFFICIAL.mainModel,
@@ -282,6 +291,7 @@ export function apply(ctx, config = {}) {
           console.error(`[tokens-model-manager] saved endpoint ignored: ${error}`)
         }
         runtime.mainModel = normalizeModelId(saved.mainModel, TOKENSAPI.mainModel)
+        runtime.protocolByModel = normalizeProtocolByModel(saved.protocolByModel)
         runtime.visionModel = normalizeModelId(saved.visionModel, TOKENSAPI.visionModel)
         try {
           runtime.fallbackBaseURL = normalizeManagedBaseURL(saved.fallbackBaseURL ?? DEEPSEEK_OFFICIAL.baseURL)
@@ -2199,6 +2209,24 @@ function normalizeEndpointTypes(value) {
   return endpointTypes
 }
 
+function normalizeManagedModelApi(value, fallback = '') {
+  if (typeof value !== 'string') return fallback
+  const api = value.trim().toLowerCase()
+  return MANAGED_MODEL_APIS.has(api) ? api : fallback
+}
+
+function normalizeProtocolByModel(value) {
+  const protocols = {}
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return protocols
+  for (const [rawModel, rawApi] of Object.entries(value).slice(0, MAX_MODEL_COUNT)) {
+    const model = normalizeModelId(rawModel, '')
+    const api = normalizeManagedModelApi(rawApi)
+    if (!model || !api || model === '__proto__' || model === 'constructor' || model === 'prototype') continue
+    protocols[model] = api
+  }
+  return protocols
+}
+
 function managedModelInput(model) {
   const declared = Array.isArray(model?.input)
     ? model.input
@@ -2210,25 +2238,71 @@ function managedModelInput(model) {
   return NATIVE_VISION_MODEL_ID.test(String(model?.id ?? '')) ? ['text', 'image'] : ['text']
 }
 
-function managedModelApi(model) {
+function managedModelApis(model) {
   const hasEndpointMetadata = Array.isArray(model?.endpointTypes)
   const endpointTypes = normalizeEndpointTypes(model?.endpointTypes)
   const isClaude = CLAUDE_MODEL_ID.test(String(model?.id ?? ''))
 
-  // Older TokensAPI-compatible catalogs may omit this metadata. Preserve the
-  // historical Responses route there, except for Claude where the native
-  // Messages protocol is required for DSH's tool schema.
+  // Older compatible catalogs may omit endpoint metadata. Keep both OpenAI
+  // transports selectable there, but default to Chat Completions below. This
+  // also lets a persisted Responses choice survive startup before /models has
+  // been refreshed.
   if (!hasEndpointMetadata) {
-    return isClaude ? 'anthropic-messages' : 'openai-responses'
+    return isClaude ? ['anthropic-messages'] : ['openai-completions', 'openai-responses']
   }
-  if (isClaude && endpointTypes.includes('anthropic')) return 'anthropic-messages'
-  if (endpointTypes.includes('openai-response')) return 'openai-responses'
-  if (endpointTypes.includes('openai')) return 'openai-completions'
-  if (endpointTypes.includes('anthropic')) return 'anthropic-messages'
+  if (isClaude && endpointTypes.includes('anthropic')) return ['anthropic-messages']
+  const apis = []
+  if (endpointTypes.includes('openai')) apis.push('openai-completions')
+  if (endpointTypes.includes('openai-response') || endpointTypes.includes('openai-response-compact')) {
+    apis.push('openai-responses')
+  }
+  if (apis.length === 0 && endpointTypes.includes('anthropic')) apis.push('anthropic-messages')
+  if (apis.length > 0) return apis
   throw new ManagedCredentialError(
     'unsupported_model',
     `模型 "${normalizeModelId(model?.id, 'unknown')}" 暂不支持 DSH 可用的调用协议`,
   )
+}
+
+function managedModelApi(model, preferredApi) {
+  const apis = managedModelApis(model)
+  if (preferredApi !== undefined && preferredApi !== null && preferredApi !== '') {
+    const api = normalizeManagedModelApi(preferredApi)
+    if (!api || !apis.includes(api)) {
+      throw new ManagedCredentialError(
+        'unsupported_protocol',
+        `模型 "${normalizeModelId(model?.id, 'unknown')}" 不支持所选请求协议`,
+      )
+    }
+    return api
+  }
+  return apis[0]
+}
+
+function configuredManagedModelApi(model, preferredApi) {
+  try {
+    return managedModelApi(model, preferredApi)
+  } catch (error) {
+    // A model catalog may remove a transport that was valid when the user
+    // saved it. Fall back to the model's current default instead of making the
+    // whole settings/status route unavailable. Explicit new choices still use
+    // managedModelApi directly and fail closed.
+    if (error?.code === 'unsupported_protocol') return managedModelApi(model)
+    throw error
+  }
+}
+
+function publicManagedModel(runtime, model) {
+  let protocols = []
+  let api = ''
+  try {
+    protocols = managedModelApis(model).map((id) => ({ id, label: MANAGED_MODEL_API_LABELS[id] }))
+    api = configuredManagedModelApi(model, runtime.protocolByModel[model.id])
+  } catch {
+    // Keep unsupported catalog entries visible so the upstream model list is
+    // transparent. Selection still fails closed in resolveManagedMainRoute.
+  }
+  return { ...model, api, protocols }
 }
 
 function selectedVisionModel(ctx) {
@@ -2243,7 +2317,7 @@ function publicModels(runtime) {
   return models.map((model) => {
     let visionMode = managedVisionMode(model)
     if (!runtime.visionProviderEnabled && visionMode === 'bridge') visionMode = 'direct'
-    return { ...model, visionMode }
+    return publicManagedModel(runtime, { ...model, visionMode })
   })
 }
 
@@ -2296,7 +2370,7 @@ async function resolveManagedMainRoute(ctx, mainModel) {
   const runtime = managerRuntime(ctx)
   const selected = runtime.models.find((model) => model.id === mainModel) ?? { id: mainModel, name: mainModel }
   const input = managedModelInput(selected)
-  const api = managedModelApi(selected)
+  const api = configuredManagedModelApi(selected, runtime.protocolByModel[mainModel])
   let visionMode = managedVisionMode({ ...selected, inputModalities: input })
   if (!runtime.visionProviderEnabled && visionMode === 'bridge') visionMode = 'direct'
   return {
@@ -2501,6 +2575,16 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
     }
   }
   const officialActive = runtime.activeChannel === 'official'
+  const selectedMain = runtime.models.find((model) => model.id === runtime.mainModel) ?? {
+    id: runtime.mainModel,
+    name: runtime.mainModel,
+  }
+  let api = ''
+  try {
+    api = configuredManagedModelApi(selectedMain, runtime.protocolByModel[runtime.mainModel])
+  } catch (error) {
+    if (modelListError === '') modelListError = String(error?.message ?? error)
+  }
   return {
     configured: credential.configured === true,
     authenticated,
@@ -2508,6 +2592,7 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
     provider: 'TokensAPI',
     channel: officialActive ? 'official' : 'tokensapi',
     mainModel: runtime.mainModel,
+    api,
     mainProvider: runtime.mainProvider,
     activeMainModel: officialActive ? runtime.fallbackModel : runtime.mainModel,
     visionMode: runtime.visionMode,
@@ -2641,15 +2726,27 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
   if (!allowed.has(mainModel) || !allowed.has(visionModel)) {
     throw new ManagedCredentialError('invalid_model', '所选模型不在 TokensAPI 可用列表中')
   }
+  const selected = runtime.models.find((model) => model.id === mainModel)
+  const api = Object.hasOwn(value ?? {}, 'api')
+    ? managedModelApi(selected, value.api)
+    : configuredManagedModelApi(selected, runtime.protocolByModel[mainModel])
   const previousBaseURL = runtime.baseURL
+  const previousProtocolByModel = runtime.protocolByModel
   runtime.baseURL = baseURL
+  runtime.protocolByModel = { ...runtime.protocolByModel, [mainModel]: api }
   try {
     await synchronizeMainModel(ctx, mainModel, runtime.models)
     if (runtime.settings?.update) {
-      await runtime.settings.update(TOKENSAPI.settingsNamespace, { baseURL, mainModel, visionModel })
+      await runtime.settings.update(TOKENSAPI.settingsNamespace, {
+        baseURL,
+        mainModel,
+        protocolByModel: runtime.protocolByModel,
+        visionModel,
+      })
     }
   } catch (error) {
     runtime.baseURL = previousBaseURL
+    runtime.protocolByModel = previousProtocolByModel
     await synchronizeMainModel(ctx, runtime.mainModel, runtime.models).catch(() => {})
     throw error
   }
@@ -3017,7 +3114,9 @@ export const __modelManager = {
   synchronizeFallbackModel,
   hideFallbackModel,
   parseManagedModels,
+  managedModelApis,
   managedModelApi,
+  normalizeProtocolByModel,
   managedModelInput,
   modelUsesVisionBridge,
   managedVisionMode,

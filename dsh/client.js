@@ -850,6 +850,8 @@ window.__ModuleLoader__.load({
         searchModels: 'Search models',
         noModels: 'No matching models',
         main: 'Main model',
+        protocol: 'Request protocol',
+        protocolHint: 'Applies to new requests. Start a new conversation when changing protocol for an active task.',
         vision: 'Vision model',
         nativeVision: 'Conversations and images are both handled natively by {mainModel}.',
         bridgeVision:
@@ -908,6 +910,8 @@ window.__ModuleLoader__.load({
         searchModels: '搜索模型',
         noModels: '没有匹配的模型',
         main: '主模型',
+        protocol: '请求协议',
+        protocolHint: '从下一次请求开始生效；进行中的任务切换协议后，建议新建会话。',
         vision: '视觉模型',
         nativeVision: '对话和图片均由 {mainModel} 原生处理。',
         bridgeVision: '对话由 {mainModel} 处理，图片由 {visionModel} 读取后交给主模型。',
@@ -980,6 +984,13 @@ window.__ModuleLoader__.load({
         return state.visionMode
       }
       return 'bridge'
+    }
+
+    function selectedModelProtocol(state, mainModel) {
+      var selected = Array.isArray(state?.models) ? state.models.find((model) => model?.id === mainModel) : null
+      if (typeof selected?.api === 'string' && selected.api) return selected.api
+      if (mainModel === state?.mainModel && typeof state?.api === 'string') return state.api
+      return ''
     }
 
     function modelRouteDescription(t, visionMode, mainModel, visionModel) {
@@ -1180,6 +1191,7 @@ window.__ModuleLoader__.load({
         var fallbackModelsPair = react.useState([])
         var basePair = react.useState('')
         var mainPair = react.useState('')
+        var protocolPair = react.useState('')
         var visionPair = react.useState('')
         var revealPair = react.useState(false)
         var officialRevealPair = react.useState(false)
@@ -1196,6 +1208,7 @@ window.__ModuleLoader__.load({
         var fallbackModels = fallbackModelsPair[0]
         var baseURL = basePair[0]
         var mainModel = mainPair[0]
+        var protocol = protocolPair[0]
         var visionModel = visionPair[0]
         var keyVisible = revealPair[0]
         var officialKeyVisible = officialRevealPair[0]
@@ -1214,6 +1227,7 @@ window.__ModuleLoader__.load({
         var routingDirty =
           baseURL.trim() !== (state?.baseURL || '') ||
           mainModel !== state?.mainModel ||
+          protocol !== state?.api ||
           visionModel !== state?.visionModel
         var fallbackDirty =
           fallbackBaseURL.trim() !== (state?.official?.baseURL || '') || fallbackModel !== state?.official?.mainModel
@@ -1231,6 +1245,7 @@ window.__ModuleLoader__.load({
                 statePair[1](body)
                 basePair[1](body.baseURL || '')
                 mainPair[1](body.mainModel || '')
+                protocolPair[1](body.api || '')
                 visionPair[1](body.visionModel || '')
                 fallbackBasePair[1](body.official?.baseURL || 'https://api.deepseek.com')
                 fallbackModelsPair[1](Array.isArray(body.official?.models) ? body.official.models : [])
@@ -1275,6 +1290,7 @@ window.__ModuleLoader__.load({
               statePair[1](body)
               basePair[1](body.baseURL || '')
               mainPair[1](body.mainModel || '')
+              protocolPair[1](body.api || '')
               visionPair[1](body.visionModel || '')
               keyPair[1]('')
               revealPair[1](false)
@@ -1293,13 +1309,13 @@ window.__ModuleLoader__.load({
 
         var saveModels = (event) => {
           event.preventDefault()
-          if (!baseURL.trim() || !mainModel || !visionModel || busy || !state?.modelsAvailable) return
+          if (!baseURL.trim() || !mainModel || !protocol || !visionModel || busy || !state?.modelsAvailable) return
           busyPair[1](true)
           notePair[1]('')
           fetch('/tokens/model-manager', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ baseURL: baseURL, mainModel: mainModel, visionModel: visionModel }),
+            body: JSON.stringify({ baseURL: baseURL, mainModel: mainModel, api: protocol, visionModel: visionModel }),
           })
             .then((response) =>
               response.json().then((body) => {
@@ -1311,6 +1327,7 @@ window.__ModuleLoader__.load({
               statePair[1](body)
               basePair[1](body.baseURL || '')
               mainPair[1](body.mainModel || '')
+              protocolPair[1](body.api || '')
               visionPair[1](body.visionModel || '')
               var selection = activeSelectionFromStatus(body)
               return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider))
@@ -1752,6 +1769,75 @@ window.__ModuleLoader__.load({
           )
         }
 
+        var protocolRow = () => {
+          var selected = Array.isArray(state?.models) ? state.models.find((model) => model?.id === mainModel) : null
+          var protocols = Array.isArray(selected?.protocols) ? selected.protocols : []
+          return h(
+            'div',
+            { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, padding: '8px 0' } },
+            h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)', paddingTop: 10 } }, t.protocol),
+            h(
+              'div',
+              null,
+              h(
+                'div',
+                {
+                  role: 'radiogroup',
+                  'aria-label': t.protocol,
+                  style: {
+                    display: 'grid',
+                    gridTemplateColumns: `repeat(${Math.max(protocols.length, 1)}, minmax(0, 1fr))`,
+                    gap: 6,
+                    padding: 4,
+                    border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+                    borderRadius: 10,
+                    background: 'var(--dsw-alias-bg-layer-2)',
+                  },
+                },
+                protocols.map((option) =>
+                  h(
+                    'button',
+                    {
+                      key: option.id,
+                      type: 'button',
+                      role: 'radio',
+                      'aria-checked': protocol === option.id,
+                      disabled: busy || protocols.length < 2,
+                      onClick: () => {
+                        protocolPair[1](option.id)
+                        notePair[1]('')
+                      },
+                      style: {
+                        minHeight: 36,
+                        padding: '7px 10px',
+                        border:
+                          protocol === option.id
+                            ? '1px solid var(--dsw-alias-state-business-primary)'
+                            : '1px solid transparent',
+                        borderRadius: 7,
+                        background:
+                          protocol === option.id
+                            ? 'var(--dsw-alias-background-selected, var(--dsw-alias-bg-layer-1))'
+                            : 'transparent',
+                        color: 'inherit',
+                        font: 'inherit',
+                        fontWeight: protocol === option.id ? 700 : 500,
+                        cursor: busy || protocols.length < 2 ? 'default' : 'pointer',
+                      },
+                    },
+                    option.label || option.id,
+                  ),
+                ),
+              ),
+              h(
+                'p',
+                { style: { margin: '6px 2px 0', color: 'var(--dsw-alias-label-secondary, #666)', fontSize: 12 } },
+                t.protocolHint,
+              ),
+            ),
+          )
+        }
+
         var routeNote = () =>
           h(
             'div',
@@ -1821,7 +1907,16 @@ window.__ModuleLoader__.load({
                   'form',
                   { onSubmit: saveModels },
                   endpointRow(),
-                  modelRow(t.main, mainModel, mainPair[1], 'main'),
+                  modelRow(
+                    t.main,
+                    mainModel,
+                    (value) => {
+                      mainPair[1](value)
+                      protocolPair[1](selectedModelProtocol(state, value))
+                    },
+                    'main',
+                  ),
+                  protocolRow(),
                   draftVisionMode === 'bridge'
                     ? h('div', null, modelRow(t.vision, visionModel, visionPair[1], 'vision'), routeNote())
                     : routeNote(),
@@ -1836,7 +1931,7 @@ window.__ModuleLoader__.load({
                     'button',
                     {
                       type: 'submit',
-                      disabled: busy || !baseURL.trim() || !state.modelsAvailable || !routingDirty,
+                      disabled: busy || !baseURL.trim() || !protocol || !state.modelsAvailable || !routingDirty,
                       style: {
                         marginTop: 10,
                         padding: '9px 16px',
@@ -1846,7 +1941,8 @@ window.__ModuleLoader__.load({
                         background: 'var(--dsw-alias-state-business-primary)',
                         color: 'var(--dsw-alias-bg-layer-2)',
                         fontWeight: 700,
-                        opacity: busy || !baseURL.trim() || !state.modelsAvailable || !routingDirty ? 0.5 : 1,
+                        opacity:
+                          busy || !baseURL.trim() || !protocol || !state.modelsAvailable || !routingDirty ? 0.5 : 1,
                       },
                     },
                     busy ? t.saving : t.saveModels,
@@ -2584,6 +2680,7 @@ window.__ModuleLoader__.load({
       registerAccessGate: registerAccessGate,
       registerManagerSection: registerManagerSection,
       selectedModelVisionMode: selectedModelVisionMode,
+      selectedModelProtocol: selectedModelProtocol,
       modelRouteDescription: modelRouteDescription,
       routeControlState: routeControlState,
       activeSelectionFromStatus: activeSelectionFromStatus,

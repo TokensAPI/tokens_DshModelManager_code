@@ -210,8 +210,9 @@ describe('Desktop startup API-key gate', () => {
 });
 
 describe('Desktop model-manager settings section', () => {
-    it('renders two searchable custom model pickers populated from the backend list', () => {
-        expect(SOURCE.match(/modelRow\(t\.(?:main|vision)/g)).toHaveLength(2);
+    it('renders searchable model pickers and a protocol selector populated by the backend', () => {
+        expect(SOURCE).toContain('modelRow(');
+        expect(SOURCE).toContain('modelRow(t.vision');
         expect(SOURCE).toContain('maxHeight: 260');
         expect(SOURCE).toContain('placeholder: t.searchModels');
         const pickerSource = SOURCE.slice(
@@ -220,9 +221,13 @@ describe('Desktop model-manager settings section', () => {
         );
         expect(pickerSource).not.toContain("'select'");
         expect(SOURCE).toContain(
-            'body: JSON.stringify({ baseURL: baseURL, mainModel: mainModel, visionModel: visionModel })',
+            'body: JSON.stringify({ baseURL: baseURL, mainModel: mainModel, api: protocol, visionModel: visionModel })',
         );
         expect(SOURCE).toContain("var basePair = react.useState('')");
+        expect(SOURCE).toContain("var protocolPair = react.useState('')");
+        expect(SOURCE).toContain("role: 'radiogroup'");
+        expect(SOURCE).toContain('selectedModelProtocol(state, value)');
+        expect(SOURCE).toContain("protocol: '请求协议'");
         expect(SOURCE).toContain("type: 'url'");
         expect(SOURCE).toContain('endpointRow()');
         expect(SOURCE).toContain("baseURL.trim() !== (state?.baseURL || '')");

@@ -54,6 +54,7 @@ describe('dsh plugin bundle', () => {
         const patch = fs.readFileSync(path.join(__dirname, '..', 'cordis.patch.yml'), 'utf-8');
         expect(patch).toContain("name: '@tokens/dsh-model-manager'");
         expect(patch).not.toContain('llm-deepseek');
+        expect(patch).toContain('api: openai-completions');
         expect(patch).toContain('upstream: tokensapi');
         expect(patch).toContain('providerId: modlens-tokensapi');
     });
