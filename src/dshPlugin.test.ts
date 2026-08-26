@@ -53,6 +53,9 @@ describe('dsh plugin bundle', () => {
         expect(pkg.files).toContain('cordis.patch.yml');
         const patch = fs.readFileSync(path.join(__dirname, '..', 'cordis.patch.yml'), 'utf-8');
         expect(patch).toContain("name: '@tokens/dsh-model-manager'");
+        expect(patch).not.toContain('llm-deepseek');
+        expect(patch).toContain('upstream: tokensapi');
+        expect(patch).toContain('providerId: modlens-tokensapi');
     });
 });
 
@@ -652,6 +655,48 @@ describe('dsh plugin vision provider (phase 3)', () => {
         await expect(registered[0].resolveModel('modlens-tokensapi', 'gpt-5.5')).rejects.toThrow(
             /native image input/,
         );
+    });
+
+    it('registers the private fallback wrapper beside the pinned TokensAPI route', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+        };
+        const providers: string[] = [];
+        plugin.apply(
+            {
+                tools: { register: () => {} },
+                attachments: {},
+                on: () => {},
+                llm: {
+                    listProviders: () => [
+                        { id: 'tokensapi', name: 'TokensAPI' },
+                        { id: 'tokens-fallback', name: '备用线路' },
+                    ],
+                    providerRetryPolicy: () => undefined,
+                    registerAdapter: (ids: string[]) => {
+                        providers.push(...ids);
+                        const handle = () => {};
+                        handle.replace = () => {};
+                        return handle;
+                    },
+                    listModels: async () => [{ id: 'deepseek-chat', inputModalities: ['text'] }],
+                    resolveModelInfo: async () => ({
+                        id: 'deepseek-chat',
+                        inputModalities: ['text'],
+                    }),
+                    stream: () => (async function* () {})(),
+                },
+            } as never,
+            {
+                upstream: 'tokensapi',
+                providerId: 'modlens-tokensapi',
+                settingsCard: false,
+                pasteToPath: false,
+            },
+        );
+
+        expect(providers).toEqual(['modlens-tokensapi', 'modlens-tokens-fallback']);
     });
 
     it('mints a pinned default id that encodes its upstream (#49)', async () => {

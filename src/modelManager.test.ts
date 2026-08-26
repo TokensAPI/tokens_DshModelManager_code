@@ -3,12 +3,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error The DSH entry is deliberately dependency-free plain JS.
-import { __modelManager, apply, TOKENSAPI } from '../dsh/index.js';
+import { __modelManager, apply, DEEPSEEK_OFFICIAL, TOKENSAPI } from '../dsh/index.js';
 import { resolveProviderSettings } from './config.ts';
 
 interface CredentialHarness {
     stored: string | undefined;
     verification: string | undefined;
+    official: string | undefined;
     ctx: {
         credentials: {
             describe: (
@@ -24,13 +25,18 @@ function credentialHarness(initial?: string, verified = false): CredentialHarnes
     const harness: CredentialHarness = {
         stored: initial,
         verification: undefined,
+        official: undefined,
         ctx: {
             credentials: {
                 describe: async (ref) => ({
                     configured:
                         ref === TOKENSAPI.credentialRef
                             ? harness.stored !== undefined
-                            : harness.verification !== undefined,
+                            : ref === TOKENSAPI.verificationRef
+                              ? harness.verification !== undefined
+                              : ref === DEEPSEEK_OFFICIAL.credentialRef
+                                ? harness.official !== undefined
+                                : false,
                     writable: true,
                     ...(harness.stored === undefined && harness.verification === undefined
                         ? {}
@@ -38,12 +44,19 @@ function credentialHarness(initial?: string, verified = false): CredentialHarnes
                 }),
                 resolve: async (ref) => {
                     const value =
-                        ref === TOKENSAPI.credentialRef ? harness.stored : harness.verification;
+                        ref === TOKENSAPI.credentialRef
+                            ? harness.stored
+                            : ref === TOKENSAPI.verificationRef
+                              ? harness.verification
+                              : ref === DEEPSEEK_OFFICIAL.credentialRef
+                                ? harness.official
+                                : undefined;
                     return value === undefined ? undefined : { value };
                 },
                 set: async (ref, value) => {
                     if (ref === TOKENSAPI.credentialRef) harness.stored = value;
                     else if (ref === TOKENSAPI.verificationRef) harness.verification = value;
+                    else if (ref === DEEPSEEK_OFFICIAL.credentialRef) harness.official = value;
                     else throw new Error(`unexpected credential ref: ${ref}`);
                 },
             },
@@ -112,6 +125,19 @@ const VALID_RESPONSE = async () => ({
     }),
 });
 
+const FALLBACK_MODELS = [
+    { id: 'deepseek-chat', name: 'DeepSeek Chat' },
+    { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' },
+    { id: 'custom-multimodal', name: 'Custom Multimodal' },
+];
+
+const FALLBACK_RESPONSE = async () => ({
+    status: 200,
+    json: async () => ({
+        data: FALLBACK_MODELS.map((model) => ({ id: model.id, name: model.name })),
+    }),
+});
+
 const VALID_KEYS = Array.from({ length: 50 }, (_, index) => {
     const serial = String(index + 1).padStart(2, '0');
     return {
@@ -169,13 +195,25 @@ describe('TokensAPI credential gate: 50 positive cases', () => {
                 authenticated: true,
                 writable: true,
                 provider: 'TokensAPI',
+                channel: 'tokensapi',
                 mainModel: 'deepseek-v4-flash',
                 mainProvider: 'modlens-tokensapi',
+                activeMainModel: 'deepseek-v4-flash',
                 visionMode: 'bridge',
                 visionModel: 'qwen3.6-35b-a3b',
                 models: PUBLIC_API_MODELS,
                 modelsAvailable: true,
                 baseURL: 'https://tokensapi.ai/v1',
+                official: {
+                    configured: false,
+                    writable: true,
+                    active: false,
+                    provider: 'modlens-tokens-fallback',
+                    upstreamProvider: 'tokens-fallback',
+                    baseURL: 'https://api.deepseek.com',
+                    mainModel: '',
+                    models: [],
+                },
             });
             expect(JSON.stringify(status)).not.toContain(testCase.stored);
         });
@@ -242,6 +280,503 @@ describe('TokensAPI managed vision configuration', () => {
         expect(JSON.stringify(status)).not.toContain('super-secret-key');
         expect(status).not.toHaveProperty('apiKey');
     });
+});
+
+describe('independent fallback route', () => {
+    it('stores the official key independently and never returns it in status', async () => {
+        const harness = credentialHarness('tk-primary', true);
+        const status = await __modelManager.setOfficialCredential(
+            harness.ctx,
+            '  sk-deepseek-official  ',
+            VALID_RESPONSE,
+        );
+        expect(harness.stored).toBe('tk-primary');
+        expect(harness.official).toBe('sk-deepseek-official');
+        expect(status.official).toMatchObject({ configured: true, active: false });
+        expect(JSON.stringify(status)).not.toContain('sk-deepseek-official');
+    });
+
+    it('reveals the official key only through the explicit action', async () => {
+        const harness = credentialHarness('tk-primary', true);
+        harness.official = 'sk-deepseek-reveal';
+        await expect(__modelManager.revealOfficialCredential(harness.ctx)).resolves.toEqual({
+            apiKey: 'sk-deepseek-reveal',
+        });
+        harness.official = undefined;
+        await expect(__modelManager.revealOfficialCredential(harness.ctx)).rejects.toMatchObject({
+            code: 'unauthenticated',
+        });
+    });
+
+    it('discovers the real model catalog with the entered key without persisting or switching', async () => {
+        const harness = credentialHarness('tk-login-stays', true);
+        const requests: Array<{ url: string; authorization: string }> = [];
+        const request = async (url: unknown, init?: { headers?: { authorization?: string } }) => {
+            if (String(url) === `${TOKENSAPI.baseURL}/models`) return VALID_RESPONSE();
+            requests.push({
+                url: String(url),
+                authorization: String(init?.headers?.authorization ?? ''),
+            });
+            return FALLBACK_RESPONSE();
+        };
+
+        await expect(
+            __modelManager.discoverFallback(
+                harness.ctx,
+                {
+                    baseURL: 'https://backup.example/v1/',
+                    apiKey: 'sk-unsaved-backup',
+                },
+                request,
+            ),
+        ).resolves.toEqual({
+            baseURL: 'https://backup.example/v1',
+            models: FALLBACK_MODELS,
+        });
+        expect(requests).toEqual([
+            {
+                url: 'https://backup.example/v1/models',
+                authorization: 'Bearer sk-unsaved-backup',
+            },
+        ]);
+        expect(harness.stored).toBe('tk-login-stays');
+        expect(harness.official).toBeUndefined();
+        await expect(
+            __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE),
+        ).resolves.toMatchObject({
+            channel: 'tokensapi',
+            mainProvider: TOKENSAPI.agentProviderId,
+            official: {
+                baseURL: DEEPSEEK_OFFICIAL.baseURL,
+                mainModel: '',
+                models: [],
+            },
+        });
+    });
+
+    it('uses the saved fallback key to discover models without exposing or replacing it', async () => {
+        const harness = credentialHarness('tk-primary', true);
+        harness.official = 'sk-saved-backup';
+        const requests: Array<{ url: string; authorization: string }> = [];
+        const request = async (url: unknown, init?: { headers?: { authorization?: string } }) => {
+            if (String(url) === `${TOKENSAPI.baseURL}/models`) return VALID_RESPONSE();
+            requests.push({
+                url: String(url),
+                authorization: String(init?.headers?.authorization ?? ''),
+            });
+            return FALLBACK_RESPONSE();
+        };
+
+        await expect(
+            __modelManager.discoverFallback(
+                harness.ctx,
+                { baseURL: 'https://saved-backup.example/v1' },
+                request,
+            ),
+        ).resolves.toEqual({
+            baseURL: 'https://saved-backup.example/v1',
+            models: FALLBACK_MODELS,
+        });
+        expect(requests).toEqual([
+            {
+                url: 'https://saved-backup.example/v1/models',
+                authorization: 'Bearer sk-saved-backup',
+            },
+        ]);
+        expect(harness.stored).toBe('tk-primary');
+        expect(harness.official).toBe('sk-saved-backup');
+    });
+
+    it('refuses model discovery when no fallback key is available', async () => {
+        const harness = credentialHarness('tk-primary', true);
+        await expect(
+            __modelManager.discoverFallback(
+                harness.ctx,
+                { baseURL: 'https://backup.example/v1' },
+                VALID_RESPONSE,
+            ),
+        ).rejects.toMatchObject({ code: 'unauthenticated' });
+        expect(harness.stored).toBe('tk-primary');
+        expect(harness.official).toBeUndefined();
+    });
+
+    for (const testCase of [
+        {
+            name: 'an unauthorized endpoint',
+            code: 'invalid_key',
+            response: async () => ({ status: 401, json: async () => ({}) }),
+        },
+        {
+            name: 'an unavailable endpoint',
+            code: 'upstream',
+            response: async () => ({ status: 503, json: async () => ({}) }),
+        },
+        {
+            name: 'a malformed model response',
+            code: 'upstream',
+            response: async () => ({
+                status: 200,
+                json: async () => {
+                    throw new Error('invalid JSON');
+                },
+            }),
+        },
+        {
+            name: 'an empty model response',
+            code: 'upstream',
+            response: async () => ({ status: 200, json: async () => ({ data: [] }) }),
+        },
+    ]) {
+        it(`keeps both routes unchanged after ${testCase.name}`, async () => {
+            const harness = credentialHarness('tk-primary', true);
+            harness.official = 'sk-existing-backup';
+            const request = async (url: unknown) =>
+                String(url) === `${TOKENSAPI.baseURL}/models`
+                    ? VALID_RESPONSE()
+                    : testCase.response();
+
+            await expect(
+                __modelManager.discoverFallback(
+                    harness.ctx,
+                    {
+                        baseURL: 'https://broken.example/v1',
+                        apiKey: 'sk-replacement-not-saved',
+                    },
+                    request,
+                ),
+            ).rejects.toMatchObject({ code: testCase.code });
+            expect(harness.stored).toBe('tk-primary');
+            expect(harness.official).toBe('sk-existing-backup');
+            await expect(
+                __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE),
+            ).resolves.toMatchObject({
+                channel: 'tokensapi',
+                mainProvider: TOKENSAPI.agentProviderId,
+                official: {
+                    baseURL: DEEPSEEK_OFFICIAL.baseURL,
+                    mainModel: '',
+                },
+            });
+        });
+    }
+
+    it('refuses to switch before an official key is stored', async () => {
+        const harness = credentialHarness('tk-primary', true);
+        await expect(
+            __modelManager.switchToOfficial(harness.ctx, VALID_RESPONSE),
+        ).rejects.toMatchObject({ code: 'unauthenticated' });
+        await expect(
+            __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE),
+        ).resolves.toMatchObject({
+            channel: 'tokensapi',
+            mainProvider: 'modlens-tokensapi',
+        });
+    });
+
+    it('refuses to switch before a fallback model has been discovered and selected', async () => {
+        const harness = credentialHarness('tk-primary', true);
+        harness.official = 'sk-deepseek';
+        await expect(
+            __modelManager.switchToOfficial(harness.ctx, VALID_RESPONSE),
+        ).rejects.toMatchObject({ code: 'invalid_model' });
+        await expect(
+            __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE),
+        ).resolves.toMatchObject({
+            channel: 'tokensapi',
+            mainProvider: TOKENSAPI.agentProviderId,
+        });
+    });
+
+    it('keeps the TokensAPI sign-in gate mandatory for the official fallback', async () => {
+        const harness = credentialHarness();
+        harness.official = 'sk-deepseek';
+        await expect(
+            __modelManager.switchToOfficial(harness.ctx, VALID_RESPONSE),
+        ).rejects.toMatchObject({ code: 'unauthenticated' });
+    });
+
+    it('configures an independent endpoint, model, and key without touching the login key', async () => {
+        const harness = credentialHarness('tk-login-stays', true);
+        const requests: Array<{ url: string; authorization: string }> = [];
+        const request = async (url: unknown, init?: { headers?: { authorization?: string } }) => {
+            requests.push({
+                url: String(url),
+                authorization: String(init?.headers?.authorization ?? ''),
+            });
+            return VALID_RESPONSE();
+        };
+        const status = await __modelManager.configureFallback(
+            harness.ctx,
+            {
+                baseURL: 'https://backup.example/v1/',
+                mainModel: 'deepseek-v3.2',
+                apiKey: 'sk-backup-only',
+            },
+            request,
+        );
+
+        expect(harness.stored).toBe('tk-login-stays');
+        expect(harness.official).toBe('sk-backup-only');
+        expect(requests).toContainEqual({
+            url: 'https://backup.example/v1/models',
+            authorization: 'Bearer sk-backup-only',
+        });
+        expect(status).toMatchObject({
+            channel: 'official',
+            activeMainModel: 'deepseek-v3.2',
+            mainProvider: 'modlens-tokens-fallback',
+            official: {
+                active: true,
+                baseURL: 'https://backup.example/v1',
+                mainModel: 'deepseek-v3.2',
+                configured: true,
+            },
+        });
+        expect(JSON.stringify(status)).not.toContain('sk-backup-only');
+        expect(JSON.stringify(status)).not.toContain('tk-login-stays');
+    });
+
+    it('uses the bundled llm-pi-ai namespace when llm-deepseek is not installed', async () => {
+        const credential = credentialHarness('tk-primary', true);
+        const registered = new Set<string>([TOKENSAPI.llmSettingsNamespace]);
+        const values = new Map<string, Record<string, unknown>>([
+            [
+                TOKENSAPI.llmSettingsNamespace,
+                {
+                    providers: {
+                        [DEEPSEEK_OFFICIAL.upstreamProviderId]: {
+                            displayName: 'stale fallback from the previous run',
+                        },
+                    },
+                },
+            ],
+        ]);
+        const updates: Array<{ namespace: string; patch: Record<string, unknown> }> = [];
+        const mutations: Array<{
+            namespace: string;
+            operations: Array<{ op: string; path: string[] }>;
+        }> = [];
+        const fallbackProvider = () => {
+            const providers = values.get(TOKENSAPI.llmSettingsNamespace)?.providers;
+            return (
+                typeof providers === 'object' && providers !== null
+                    ? (providers as Record<string, unknown>)
+                    : {}
+            )[DEEPSEEK_OFFICIAL.upstreamProviderId];
+        };
+        const settings = {
+            register: (
+                namespace: string,
+                _schema: unknown,
+                options?: { base?: Record<string, unknown> },
+            ) => {
+                registered.add(namespace);
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Record<string, unknown>) => {
+                if (!registered.has(namespace)) {
+                    throw new Error(`settings namespace "${namespace}" is not registered`);
+                }
+                updates.push({ namespace, patch });
+                const previous = values.get(namespace) ?? {};
+                const next = { ...previous, ...patch };
+                if (
+                    typeof previous.providers === 'object' &&
+                    previous.providers !== null &&
+                    typeof patch.providers === 'object' &&
+                    patch.providers !== null
+                ) {
+                    next.providers = {
+                        ...(previous.providers as Record<string, unknown>),
+                        ...(patch.providers as Record<string, unknown>),
+                    };
+                }
+                values.set(namespace, next);
+            },
+            mutate: async (
+                namespace: string,
+                operations: Array<{ op: string; path: string[] }>,
+            ) => {
+                if (!registered.has(namespace)) {
+                    throw new Error(`settings namespace "${namespace}" is not registered`);
+                }
+                mutations.push({ namespace, operations });
+                const current = values.get(namespace) ?? {};
+                const providers = {
+                    ...((current.providers as Record<string, unknown> | undefined) ?? {}),
+                };
+                for (const operation of operations) {
+                    if (
+                        operation.op === 'unset' &&
+                        operation.path[0] === 'providers' &&
+                        operation.path[1]
+                    ) {
+                        delete providers[operation.path[1]];
+                    }
+                }
+                values.set(namespace, { ...current, providers });
+            },
+        };
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) callback({ settings });
+            },
+        };
+        apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
+
+        await expect(__modelManager.modelManagerStatus(ctx, VALID_RESPONSE)).resolves.toMatchObject(
+            { channel: 'tokensapi' },
+        );
+        expect(fallbackProvider()).toBeUndefined();
+
+        await expect(
+            __modelManager.configureFallback(
+                ctx,
+                {
+                    baseURL: 'https://backup.example/v1/',
+                    mainModel: 'deepseek-v3.2',
+                    apiKey: 'sk-backup-only',
+                },
+                VALID_RESPONSE,
+            ),
+        ).resolves.toMatchObject({
+            channel: 'official',
+            mainProvider: DEEPSEEK_OFFICIAL.providerId,
+        });
+
+        expect(updates.some((entry) => entry.namespace === 'llm-deepseek')).toBe(false);
+        const fallbackUpdate = [...updates]
+            .reverse()
+            .find(
+                (entry) =>
+                    entry.namespace === TOKENSAPI.llmSettingsNamespace &&
+                    (entry.patch.providers as Record<string, unknown> | undefined)?.[
+                        DEEPSEEK_OFFICIAL.upstreamProviderId
+                    ] !== undefined,
+            );
+        expect(fallbackUpdate?.patch).toMatchObject({
+            providers: {
+                [DEEPSEEK_OFFICIAL.upstreamProviderId]: {
+                    displayName: '备用线路',
+                    apiKeyEnv: DEEPSEEK_OFFICIAL.credentialRef,
+                    api: 'openai-completions',
+                    baseURL: 'https://backup.example/v1',
+                    models: [{ id: 'deepseek-v3.2', input: ['text'] }],
+                },
+            },
+        });
+        expect(credential.stored).toBe('tk-primary');
+        expect(credential.official).toBe('sk-backup-only');
+
+        await expect(__modelManager.switchToTokensAPI(ctx, VALID_RESPONSE)).resolves.toMatchObject({
+            channel: 'tokensapi',
+            mainProvider: TOKENSAPI.providerId,
+            official: { active: false, configured: true },
+        });
+        expect(fallbackProvider()).toBeUndefined();
+        expect(mutations).toContainEqual({
+            namespace: TOKENSAPI.llmSettingsNamespace,
+            operations: [
+                {
+                    op: 'unset',
+                    path: ['providers', DEEPSEEK_OFFICIAL.upstreamProviderId],
+                },
+            ],
+        });
+
+        await expect(__modelManager.switchToOfficial(ctx, VALID_RESPONSE)).resolves.toMatchObject({
+            channel: 'official',
+            mainProvider: DEEPSEEK_OFFICIAL.providerId,
+        });
+        expect(fallbackProvider()).toMatchObject({
+            displayName: '备用线路',
+            baseURL: 'https://backup.example/v1',
+        });
+    });
+
+    it('does not replace the backup key or route when endpoint validation fails', async () => {
+        const harness = credentialHarness('tk-login-stays', true);
+        harness.official = 'sk-previous-backup';
+        const request = async (url: unknown) =>
+            String(url) === `${TOKENSAPI.baseURL}/models`
+                ? VALID_RESPONSE()
+                : { status: 401, json: async () => ({}) };
+        await expect(
+            __modelManager.configureFallback(
+                harness.ctx,
+                {
+                    baseURL: 'https://broken.example/v1',
+                    mainModel: 'deepseek-v4-flash',
+                    apiKey: 'sk-invalid-replacement',
+                },
+                request,
+            ),
+        ).rejects.toMatchObject({ code: 'invalid_key' });
+        expect(harness.stored).toBe('tk-login-stays');
+        expect(harness.official).toBe('sk-previous-backup');
+        await expect(
+            __modelManager.modelManagerStatus(harness.ctx, request),
+        ).resolves.toMatchObject({
+            channel: 'tokensapi',
+            official: {
+                baseURL: DEEPSEEK_OFFICIAL.baseURL,
+                mainModel: DEEPSEEK_OFFICIAL.mainModel,
+            },
+        });
+    });
+
+    it('switches chat to the official vision wrapper and restores the parked TokensAPI route', async () => {
+        const harness = credentialHarness('tk-primary', true);
+        await __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE);
+        await __modelManager.setManagedModels(
+            harness.ctx,
+            { mainModel: 'deepseek-v3.2', visionModel: 'qwen3.6-35b-a3b' },
+            VALID_RESPONSE,
+        );
+        await __modelManager.configureFallback(
+            harness.ctx,
+            {
+                baseURL: DEEPSEEK_OFFICIAL.baseURL,
+                mainModel: 'deepseek-v3.2',
+                apiKey: 'sk-deepseek',
+            },
+            VALID_RESPONSE,
+        );
+        await __modelManager.switchToTokensAPI(harness.ctx, VALID_RESPONSE);
+
+        const official = await __modelManager.switchToOfficial(harness.ctx, VALID_RESPONSE);
+        expect(official).toMatchObject({
+            channel: 'official',
+            mainModel: 'deepseek-v3.2',
+            activeMainModel: 'deepseek-v3.2',
+            mainProvider: DEEPSEEK_OFFICIAL.providerId,
+            visionModel: 'qwen3.6-35b-a3b',
+            official: { active: true, configured: true },
+        });
+
+        const restored = await __modelManager.switchToTokensAPI(harness.ctx, VALID_RESPONSE);
+        expect(restored).toMatchObject({
+            channel: 'tokensapi',
+            mainModel: 'deepseek-v3.2',
+            activeMainModel: 'deepseek-v3.2',
+            mainProvider: TOKENSAPI.agentProviderId,
+            official: { active: false, configured: true },
+        });
+    });
+
+    for (const value of ['', ' ', '\t', 'x'.repeat(513)]) {
+        it(`rejects an invalid official key: ${JSON.stringify(value).slice(0, 40)}`, async () => {
+            const harness = credentialHarness('tk-primary', true);
+            await expect(
+                __modelManager.setOfficialCredential(harness.ctx, value, VALID_RESPONSE),
+            ).rejects.toThrow();
+            expect(harness.official).toBeUndefined();
+        });
+    }
 });
 
 describe('TokensAPI editable endpoint', () => {

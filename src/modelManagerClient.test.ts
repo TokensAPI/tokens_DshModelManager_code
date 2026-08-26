@@ -239,14 +239,10 @@ describe('Desktop model-manager settings section', () => {
             settingsLoadStart,
             SOURCE.indexOf('react.useEffect', settingsLoadStart),
         );
-        expect(settingsLoadSource).toContain(
-            'synchronizeMainSelection(body.mainModel, body.mainProvider)',
-        );
-        expect(saveModelsSource).toContain(
-            'synchronizeMainSelection(body.mainModel, body.mainProvider)',
-        );
+        expect(settingsLoadSource).toContain('var selection = activeSelectionFromStatus(body)');
+        expect(saveModelsSource).toContain('var selection = activeSelectionFromStatus(body)');
         expect(saveModelsSource.indexOf('statePair[1](body)')).toBeLessThan(
-            saveModelsSource.indexOf('synchronizeMainSelection(body.mainModel, body.mainProvider)'),
+            saveModelsSource.indexOf('activeSelectionFromStatus(body)'),
         );
         expect(SOURCE).toContain('t.sessionSwitchFailed');
         expect(SOURCE).toContain("draftVisionMode === 'bridge'");
@@ -254,6 +250,52 @@ describe('Desktop model-manager settings section', () => {
         expect(SOURCE).toContain('t.nativeVision');
         expect(SOURCE).toContain('t.bridgeVision');
         expect(SOURCE).toContain('t.directVision');
+        expect(SOURCE).toContain("officialEntry: '备用线路'");
+        expect(SOURCE).toContain('body: JSON.stringify(payload)');
+        expect(SOURCE).toContain("action: 'discoverFallback'");
+        expect(SOURCE).toContain("action: 'configureFallback'");
+        expect(SOURCE).toContain("postManager({ action: 'switchTokensAPI' })");
+        expect(SOURCE).toContain('baseURL: fallbackBaseURL');
+        expect(SOURCE).toContain('mainModel: fallbackModel');
+        expect(SOURCE).toContain('var fallbackModelsPair = react.useState([])');
+        expect(SOURCE).toContain('fallbackModelsPair[1](models)');
+        expect(SOURCE).toContain('fallbackModels.length > 0');
+        expect(SOURCE).toContain('t.officialFetchModels');
+        expect(SOURCE).toContain('t.officialModelsHint');
+        expect(SOURCE).not.toContain('state.official?.models || []');
+    });
+
+    it('clears a stale fallback catalog when its endpoint or key changes', () => {
+        const clearStart = SOURCE.indexOf('var clearFallbackModels');
+        const discoverStart = SOURCE.indexOf('var discoverFallbackModels');
+        const clearSource = SOURCE.slice(clearStart, discoverStart);
+        const fallbackPanelStart = SOURCE.indexOf('endpointRow(fallbackBaseURL');
+        const fallbackPanelSource = SOURCE.slice(
+            fallbackPanelStart,
+            SOURCE.indexOf("type: 'submit'", fallbackPanelStart),
+        );
+
+        expect(clearSource).toContain('fallbackModelsPair[1]([])');
+        expect(clearSource).toContain("fallbackModelPair[1]('')");
+        expect(fallbackPanelSource).toContain('fallbackBasePair[1](value)');
+        expect(fallbackPanelSource.match(/clearFallbackModels\(\)/g)).toHaveLength(2);
+    });
+
+    it('requires an authenticated model discovery result before fallback saving is enabled', () => {
+        const discoverStart = SOURCE.indexOf('var discoverFallbackModels');
+        const switchStart = SOURCE.indexOf('var switchOfficial');
+        const discoverSource = SOURCE.slice(discoverStart, switchStart);
+        const switchSource = SOURCE.slice(
+            switchStart,
+            SOURCE.indexOf('var switchTokens', switchStart),
+        );
+
+        expect(discoverSource).toContain("action: 'discoverFallback'");
+        expect(discoverSource).toContain('apiKey: officialApiKey');
+        expect(discoverSource).toContain('fallbackModelsPair[1](models)');
+        expect(switchSource).toContain(
+            '!fallbackModels.some((model) => model.id === fallbackModel)',
+        );
     });
 
     it('follows the draft main-model selection and describes the route with the models actually used', () => {
@@ -320,8 +362,38 @@ describe('Desktop model-manager settings section', () => {
         expect(SOURCE).toContain('placeholder: state?.configured ? t.stored : t.key');
         expect(SOURCE).toContain("body: JSON.stringify({ action: 'revealApiKey' })");
         expect(SOURCE).toContain('navigator.clipboard.writeText(value)');
+        expect(SOURCE).toContain("postManager({ action: 'revealOfficialApiKey' })");
+        expect(SOURCE).toContain("type: officialKeyVisible ? 'text' : secretFieldProps().type");
         expect(SOURCE).not.toContain('state.apiKey');
         expect(SOURCE).not.toContain('返回浏览器');
+    });
+
+    it('uses the active fallback selection without overwriting the parked TokensAPI model', () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const activeSelection = loaded.factory(() => ({})).__manager.activeSelectionFromStatus as (
+            status: Record<string, unknown>,
+        ) => {
+            model: string;
+            provider: string;
+        };
+        expect(
+            activeSelection({
+                channel: 'official',
+                mainModel: 'gpt-5.5',
+                activeMainModel: 'deepseek-chat',
+                mainProvider: 'modlens-tokens-fallback',
+            }),
+        ).toEqual({ model: 'deepseek-chat', provider: 'modlens-tokens-fallback' });
     });
 
     it('does not mount the redundant legacy vision-engine plugin card', () => {
@@ -528,6 +600,46 @@ describe('Desktop model-manager settings section', () => {
             ),
         ).resolves.toBe(true);
         expect(selected).toEqual([{ provider: 'tokensapi', model: 'claude-opus-4-6' }]);
+    });
+
+    it('selects the fallback wrapper without remapping it to TokensAPI', async () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const synchronize = loaded.factory(() => ({})).__manager.synchronizeCurrentSessionModel as (
+            sessions: Record<string, unknown>,
+            modelDirectories: Record<string, unknown>,
+            model: string,
+            provider: string,
+        ) => Promise<boolean>;
+        const selected: Array<{ provider: string; model: string }> = [];
+
+        await expect(
+            synchronize(
+                {
+                    list: { getSnapshot: () => ({ current: 'session-official' }) },
+                    subagentAddress: () => undefined,
+                },
+                {
+                    directoryFor: () => ({
+                        select: async (selection: { provider: string; model: string }) => {
+                            selected.push(selection);
+                        },
+                    }),
+                },
+                'deepseek-chat',
+                'modlens-tokens-fallback',
+            ),
+        ).resolves.toBe(true);
+        expect(selected).toEqual([{ provider: 'modlens-tokens-fallback', model: 'deepseek-chat' }]);
     });
 
     it('waits for the refreshed provider catalog before switching the current session', async () => {

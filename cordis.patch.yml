@@ -1,9 +1,9 @@
-# TokensAPI product layer. It removes the public DeepSeek model route and the
-# generic provider editor, pins the only supported text and vision routes, and
-# mounts this package's Host + browser halves. No credential value is present
-# here: both routes resolve TOKENSAPI_API_KEY from DSH's credential service.
-- id: llm-deepseek
-  disabled: true
+# TokensAPI product layer. It hides the generic provider editor, pins the
+# primary TokensAPI text and vision routes, and mounts this package's Host +
+# browser halves. The private fallback route is added dynamically to the same
+# bundled llm-pi-ai adapter, so it does not depend on a separate provider
+# plugin. No credential value is present here: each route resolves its own
+# reference from DSH credentials.
 
 - id: ui-settings-models
   disabled: true

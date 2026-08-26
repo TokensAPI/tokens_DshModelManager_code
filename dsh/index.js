@@ -51,6 +51,24 @@ export const TOKENSAPI = Object.freeze({
   visionModel: 'qwen3.6-35b-a3b',
 })
 
+const DEFAULT_FALLBACK_MODELS = Object.freeze([])
+
+// Optional fallback for chat requests. Its endpoint, model, and key are a
+// separate route; none of them can overwrite the TokensAPI sign-in or visual
+// bridge configuration. The route is hosted by the already bundled generic
+// llm-pi-ai adapter instead of assuming the optional llm-deepseek adapter is
+// installed in every Desktop build.
+export const DEEPSEEK_OFFICIAL = Object.freeze({
+  credentialRef: 'DEEPSEEK_API_KEY',
+  settingsNamespace: TOKENSAPI.llmSettingsNamespace,
+  providerId: 'modlens-tokens-fallback',
+  upstreamProviderId: 'tokens-fallback',
+  api: 'openai-completions',
+  baseURL: 'https://api.deepseek.com',
+  mainModel: '',
+  models: DEFAULT_FALLBACK_MODELS,
+})
+
 let lastVisionFailure = null
 const managerRuntimes = new WeakMap()
 
@@ -60,7 +78,12 @@ function managerRuntime(ctx) {
     runtime = {
       baseURL: TOKENSAPI.baseURL,
       mainModel: TOKENSAPI.mainModel,
+      tokensMainProvider: TOKENSAPI.agentProviderId,
       mainProvider: TOKENSAPI.agentProviderId,
+      activeChannel: 'tokensapi',
+      fallbackBaseURL: DEEPSEEK_OFFICIAL.baseURL,
+      fallbackModel: DEEPSEEK_OFFICIAL.mainModel,
+      fallbackModels: DEFAULT_FALLBACK_MODELS.map((model) => ({ ...model })),
       visionMode: 'bridge',
       visionModel: TOKENSAPI.visionModel,
       visionFamilies: DEFAULT_VISION_FAMILIES,
@@ -124,6 +147,23 @@ export function apply(ctx, config = {}) {
   const ownProviders = new Set()
   if (config.visionProvider !== false) {
     registerVisionProvider(ctx, config, ownProviders, evidenceCache)
+    // The Tokens product pins its managed route instead of enabling broad
+    // provider discovery. Register the one intentionally supported fallback
+    // alongside that pin: chat delegates to a private llm-pi-ai route, while
+    // this wrapper keeps image-bearing sessions on the same TokensAPI visual
+    // bridge used by the primary route.
+    if (config.upstream === TOKENSAPI.providerId) {
+      registerVisionProvider(
+        ctx,
+        {
+          ...config,
+          upstream: DEEPSEEK_OFFICIAL.upstreamProviderId,
+          providerId: DEEPSEEK_OFFICIAL.providerId,
+        },
+        ownProviders,
+        evidenceCache,
+      )
+    }
   }
   // Paste-to-path: the browser half (dsh/client.js) intercepts image pastes
   // and POSTs the bytes here; the file lands in a private temp dir and the
@@ -213,6 +253,8 @@ export function apply(ctx, config = {}) {
                   baseURL: TOKENSAPI.baseURL,
                   mainModel: TOKENSAPI.mainModel,
                   visionModel: TOKENSAPI.visionModel,
+                  fallbackBaseURL: DEEPSEEK_OFFICIAL.baseURL,
+                  fallbackModel: DEEPSEEK_OFFICIAL.mainModel,
                 },
               },
               dict: {},
@@ -224,6 +266,8 @@ export function apply(ctx, config = {}) {
             baseURL: TOKENSAPI.baseURL,
             mainModel: TOKENSAPI.mainModel,
             visionModel: TOKENSAPI.visionModel,
+            fallbackBaseURL: DEEPSEEK_OFFICIAL.baseURL,
+            fallbackModel: DEEPSEEK_OFFICIAL.mainModel,
           },
         })
         const runtime = managerRuntime(ctx)
@@ -237,11 +281,22 @@ export function apply(ctx, config = {}) {
         }
         runtime.mainModel = normalizeModelId(saved.mainModel, TOKENSAPI.mainModel)
         runtime.visionModel = normalizeModelId(saved.visionModel, TOKENSAPI.visionModel)
-        Promise.resolve(
+        try {
+          runtime.fallbackBaseURL = normalizeManagedBaseURL(saved.fallbackBaseURL ?? DEEPSEEK_OFFICIAL.baseURL)
+        } catch (error) {
+          runtime.fallbackBaseURL = DEEPSEEK_OFFICIAL.baseURL
+          console.error(`[tokens-model-manager] saved fallback endpoint ignored: ${error}`)
+        }
+        runtime.fallbackModel = normalizeModelId(saved.fallbackModel, DEEPSEEK_OFFICIAL.mainModel)
+        if (runtime.fallbackModel && !runtime.fallbackModels.some((model) => model.id === runtime.fallbackModel)) {
+          runtime.fallbackModels.push({ id: runtime.fallbackModel, name: runtime.fallbackModel })
+        }
+        Promise.all([
           synchronizeMainModel(ctx, runtime.mainModel, [{ id: runtime.mainModel, name: runtime.mainModel }]),
-        )
+          hideFallbackModel(ctx),
+        ])
           .catch((error) => {
-            console.error(`[tokens-model-manager] saved main model activation skipped: ${error}`)
+            console.error(`[tokens-model-manager] saved model route activation skipped: ${error}`)
           })
           .finally(settleManagerSettings)
       } catch (error) {
@@ -736,8 +791,11 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
   // need no bridge and are excluded by name and by declared modality.
   const families = config.families || DEFAULT_VISION_FAMILIES
   const managedTokensApiRoute = config.upstream === TOKENSAPI.providerId
+  const managedFallbackRoute = config.upstream === DEEPSEEK_OFFICIAL.upstreamProviderId
   const shouldWrap = (info) =>
-    managedTokensApiRoute ? !managedModelInput(info).includes('image') : modelUsesVisionBridge(info, families)
+    managedTokensApiRoute || managedFallbackRoute
+      ? !managedModelInput(info).includes('image')
+      : modelUsesVisionBridge(info, families)
   if (typeof ctx.llm?.registerAdapter !== 'function' || typeof ctx.llm?.stream !== 'function') {
     return
   }
@@ -2253,15 +2311,138 @@ async function synchronizeMainModel(ctx, mainModel, models) {
       },
     })
   }
-  runtime.mainProvider = route.provider
+  runtime.tokensMainProvider = route.provider
   runtime.visionMode = route.visionMode
-  if (typeof runtime.agentDefaultModel?.saveSelection === 'function') {
+  // Refreshing or editing the parked TokensAPI configuration must not kick an
+  // actively selected official fallback back to TokensAPI. It becomes active
+  // again only through the explicit switch-back action below.
+  if (runtime.activeChannel !== 'official') {
+    runtime.mainProvider = route.provider
+  }
+  if (runtime.activeChannel !== 'official' && typeof runtime.agentDefaultModel?.saveSelection === 'function') {
     await runtime.agentDefaultModel.saveSelection({
       provider: route.provider,
       model: mainModel,
     })
   }
   return route
+}
+
+function publicFallbackModels(runtime) {
+  const models = [...runtime.fallbackModels]
+  if (runtime.fallbackModel && !models.some((model) => model.id === runtime.fallbackModel)) {
+    models.push({ id: runtime.fallbackModel, name: runtime.fallbackModel })
+  }
+  return models.map((model) => ({ id: model.id, name: model.name ?? model.id }))
+}
+
+async function parseFallbackModels(response) {
+  let payload
+  try {
+    payload = await response.json()
+  } catch {
+    throw new ManagedCredentialError('upstream', '备用线路返回了无法识别的模型列表')
+  }
+  if (!Array.isArray(payload?.data) || payload.data.length > MAX_MODEL_COUNT) {
+    throw new ManagedCredentialError('upstream', '备用线路返回了无法识别的模型列表')
+  }
+  const models = []
+  const seen = new Set()
+  for (const entry of payload.data) {
+    const id = normalizeModelId(entry?.id, '')
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    models.push({ id, name: normalizeModelId(entry?.name, id) })
+  }
+  if (models.length === 0) {
+    throw new ManagedCredentialError('upstream', '备用线路没有返回可用模型')
+  }
+  return models
+}
+
+async function validateFallbackCredential(apiKey, baseURL, request = globalThis.fetch) {
+  if (typeof request !== 'function') {
+    throw new ManagedCredentialError('unreachable', '无法连接备用线路，请检查地址和网络')
+  }
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 20_000)
+  let response
+  try {
+    response = await request(`${baseURL}/models`, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json' },
+      redirect: 'error',
+      signal: controller.signal,
+    })
+  } catch {
+    throw new ManagedCredentialError('unreachable', '无法连接备用线路，请检查地址和网络')
+  } finally {
+    clearTimeout(timeout)
+  }
+  if (response?.status === 200) return parseFallbackModels(response)
+  if (response?.status === 401 || response?.status === 403) {
+    throw new ManagedCredentialError('invalid_key', '备用线路 API Key 无效，请检查后重试')
+  }
+  throw new ManagedCredentialError('upstream', '备用线路暂时不可用，请稍后重试')
+}
+
+async function synchronizeFallbackModel(ctx) {
+  const runtime = managerRuntime(ctx)
+  if (!runtime.fallbackModel) return
+  const selected = runtime.fallbackModels.find((model) => model.id === runtime.fallbackModel)
+  if (runtime.settings?.update) {
+    await runtime.settings.update(DEEPSEEK_OFFICIAL.settingsNamespace, {
+      providers: {
+        [DEEPSEEK_OFFICIAL.upstreamProviderId]: {
+          displayName: '备用线路',
+          apiKeyEnv: DEEPSEEK_OFFICIAL.credentialRef,
+          api: DEEPSEEK_OFFICIAL.api,
+          baseURL: runtime.fallbackBaseURL,
+          models: [
+            {
+              id: runtime.fallbackModel,
+              name: selected?.name ?? runtime.fallbackModel,
+              input: ['text'],
+            },
+          ],
+        },
+      },
+    })
+  }
+}
+
+/**
+ * Keep the saved fallback configuration private while TokensAPI is active.
+ * Removing the upstream route also makes the vision wrapper withdraw itself,
+ * so neither entry remains in the Desktop conversation model selector.
+ */
+async function hideFallbackModel(ctx) {
+  const settings = managerRuntime(ctx).settings
+  if (!settings) return
+  const current = typeof settings.get === 'function' ? (settings.get(DEEPSEEK_OFFICIAL.settingsNamespace) ?? {}) : {}
+  const providers =
+    typeof current.providers === 'object' && current.providers !== null && !Array.isArray(current.providers)
+      ? current.providers
+      : {}
+  if (!Object.hasOwn(providers, DEEPSEEK_OFFICIAL.upstreamProviderId)) return
+  if (typeof settings.mutate === 'function') {
+    await settings.mutate(DEEPSEEK_OFFICIAL.settingsNamespace, [
+      {
+        op: 'unset',
+        path: ['providers', DEEPSEEK_OFFICIAL.upstreamProviderId],
+      },
+    ])
+    return
+  }
+  if (typeof settings.replace === 'function' && typeof settings.get === 'function') {
+    const { [DEEPSEEK_OFFICIAL.upstreamProviderId]: _removed, ...remaining } = providers
+    await settings.replace(DEEPSEEK_OFFICIAL.settingsNamespace, {
+      ...current,
+      providers: remaining,
+    })
+    return
+  }
+  throw new Error('当前 settings 服务无法隐藏备用线路模型')
 }
 
 /** Public gate status. It intentionally contains neither the key nor its fingerprint. */
@@ -2273,9 +2454,10 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
   // model. Wait for the model namespace and its initial route activation so a
   // startup status can never masquerade as the user's saved configuration.
   await managerRuntime(ctx).settingsReady
-  const [credential, verification] = await Promise.all([
+  const [credential, verification, officialCredential] = await Promise.all([
     ctx.credentials.describe(TOKENSAPI.credentialRef),
     ctx.credentials.describe(TOKENSAPI.verificationRef),
+    ctx.credentials.describe(DEEPSEEK_OFFICIAL.credentialRef),
   ])
   let authenticated = false
   if (credential.configured === true && verification.configured === true) {
@@ -2300,19 +2482,32 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
       modelListError = String(error?.message ?? error)
     }
   }
+  const officialActive = runtime.activeChannel === 'official'
   return {
     configured: credential.configured === true,
     authenticated,
     writable: credential.writable === true,
     provider: 'TokensAPI',
+    channel: officialActive ? 'official' : 'tokensapi',
     mainModel: runtime.mainModel,
     mainProvider: runtime.mainProvider,
+    activeMainModel: officialActive ? runtime.fallbackModel : runtime.mainModel,
     visionMode: runtime.visionMode,
     visionModel: runtime.visionModel,
     models: publicModels(runtime),
     modelsAvailable: authenticated && runtime.models.length > 0,
     ...(modelListError === '' ? {} : { modelListError }),
     baseURL: runtime.baseURL,
+    official: {
+      configured: officialCredential.configured === true,
+      writable: officialCredential.writable === true,
+      active: officialActive,
+      provider: DEEPSEEK_OFFICIAL.providerId,
+      upstreamProvider: DEEPSEEK_OFFICIAL.upstreamProviderId,
+      baseURL: runtime.fallbackBaseURL,
+      mainModel: runtime.fallbackModel,
+      models: officialCredential.configured === true ? publicFallbackModels(runtime) : [],
+    },
     ...(lastVisionFailure === null ? {} : { visionDiagnostic: lastVisionFailure }),
   }
 }
@@ -2459,6 +2654,172 @@ async function revealManagedCredential(ctx) {
   return { apiKey }
 }
 
+async function setOfficialCredential(ctx, value, request = globalThis.fetch) {
+  const apiKey = normalizeManagedCredential(value)
+  await ctx.credentials.set(DEEPSEEK_OFFICIAL.credentialRef, apiKey)
+  return modelManagerStatus(ctx, request)
+}
+
+async function revealOfficialCredential(ctx) {
+  const credential = await ctx.credentials.resolve(DEEPSEEK_OFFICIAL.credentialRef)
+  const apiKey = resolvedCredentialValue(credential).trim()
+  if (!apiKey) {
+    throw new ManagedCredentialError('unauthenticated', '没有可查看的备用线路 API Key')
+  }
+  return { apiKey }
+}
+
+/** Discover the current endpoint's real model catalog without persisting or switching anything. */
+async function discoverFallback(ctx, value, request = globalThis.fetch) {
+  const status = await modelManagerStatus(ctx, request)
+  if (!status.authenticated) {
+    throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
+  }
+  const runtime = managerRuntime(ctx)
+  const baseURL = Object.hasOwn(value ?? {}, 'baseURL')
+    ? normalizeManagedBaseURL(value.baseURL)
+    : runtime.fallbackBaseURL
+  let apiKey = ''
+  if (Object.hasOwn(value ?? {}, 'apiKey') && String(value.apiKey ?? '').trim() !== '') {
+    apiKey = normalizeManagedCredential(value.apiKey)
+  } else {
+    apiKey = resolvedCredentialValue(await ctx.credentials.resolve(DEEPSEEK_OFFICIAL.credentialRef)).trim()
+  }
+  if (!apiKey) {
+    throw new ManagedCredentialError('unauthenticated', '请先填写备用线路 API Key')
+  }
+  return {
+    baseURL,
+    models: await validateFallbackCredential(apiKey, baseURL, request),
+  }
+}
+
+async function configureFallback(ctx, value, request = globalThis.fetch) {
+  const status = await modelManagerStatus(ctx, request)
+  if (!status.authenticated) {
+    throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
+  }
+  const runtime = managerRuntime(ctx)
+  const baseURL = Object.hasOwn(value ?? {}, 'baseURL')
+    ? normalizeManagedBaseURL(value.baseURL)
+    : runtime.fallbackBaseURL
+  let apiKey = ''
+  let replaceCredential = false
+  if (Object.hasOwn(value ?? {}, 'apiKey') && String(value.apiKey ?? '').trim() !== '') {
+    apiKey = normalizeManagedCredential(value.apiKey)
+    replaceCredential = true
+  } else {
+    apiKey = resolvedCredentialValue(await ctx.credentials.resolve(DEEPSEEK_OFFICIAL.credentialRef)).trim()
+  }
+  if (!apiKey) {
+    throw new ManagedCredentialError('unauthenticated', '请先填写备用线路 API Key')
+  }
+  const models = await validateFallbackCredential(apiKey, baseURL, request)
+  const fallbackModel = normalizeModelId(value?.mainModel, runtime.fallbackModel)
+  if (!models.some((model) => model.id === fallbackModel)) {
+    throw new ManagedCredentialError('invalid_model', '所选模型不在备用线路可用列表中')
+  }
+  const previous = {
+    baseURL: runtime.fallbackBaseURL,
+    model: runtime.fallbackModel,
+    models: runtime.fallbackModels,
+    channel: runtime.activeChannel,
+    provider: runtime.mainProvider,
+  }
+  runtime.fallbackBaseURL = baseURL
+  runtime.fallbackModel = fallbackModel
+  runtime.fallbackModels = models
+  runtime.activeChannel = 'official'
+  runtime.mainProvider = DEEPSEEK_OFFICIAL.providerId
+  try {
+    await synchronizeFallbackModel(ctx)
+    if (runtime.settings?.update) {
+      await runtime.settings.update(TOKENSAPI.settingsNamespace, {
+        fallbackBaseURL: baseURL,
+        fallbackModel,
+      })
+    }
+    if (replaceCredential) {
+      await ctx.credentials.set(DEEPSEEK_OFFICIAL.credentialRef, apiKey)
+    }
+    if (typeof runtime.agentDefaultModel?.saveSelection === 'function') {
+      await runtime.agentDefaultModel.saveSelection({
+        provider: DEEPSEEK_OFFICIAL.providerId,
+        model: fallbackModel,
+      })
+    }
+  } catch (error) {
+    runtime.fallbackBaseURL = previous.baseURL
+    runtime.fallbackModel = previous.model
+    runtime.fallbackModels = previous.models
+    runtime.activeChannel = previous.channel
+    runtime.mainProvider = previous.provider
+    if (previous.channel === 'official' && previous.model) {
+      await synchronizeFallbackModel(ctx).catch(() => {})
+    } else {
+      await hideFallbackModel(ctx).catch(() => {})
+    }
+    throw error
+  }
+  return modelManagerStatus(ctx, request)
+}
+
+async function switchToOfficial(ctx, request = globalThis.fetch) {
+  const status = await modelManagerStatus(ctx, request)
+  if (!status.authenticated) {
+    throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
+  }
+  const runtime = managerRuntime(ctx)
+  const credential = await ctx.credentials.resolve(DEEPSEEK_OFFICIAL.credentialRef)
+  if (!resolvedCredentialValue(credential).trim()) {
+    throw new ManagedCredentialError('unauthenticated', '请先保存备用线路 API Key')
+  }
+  if (!runtime.fallbackModel) {
+    throw new ManagedCredentialError('invalid_model', '请先获取并选择备用线路模型')
+  }
+  const previousChannel = runtime.activeChannel
+  const previousProvider = runtime.mainProvider
+  runtime.activeChannel = 'official'
+  runtime.mainProvider = DEEPSEEK_OFFICIAL.providerId
+  try {
+    await synchronizeFallbackModel(ctx)
+    if (typeof runtime.agentDefaultModel?.saveSelection === 'function') {
+      await runtime.agentDefaultModel.saveSelection({
+        provider: DEEPSEEK_OFFICIAL.providerId,
+        model: runtime.fallbackModel,
+      })
+    }
+  } catch (error) {
+    runtime.activeChannel = previousChannel
+    runtime.mainProvider = previousProvider
+    if (previousChannel !== 'official') await hideFallbackModel(ctx).catch(() => {})
+    throw error
+  }
+  return modelManagerStatus(ctx, request)
+}
+
+async function switchToTokensAPI(ctx, request = globalThis.fetch) {
+  const status = await modelManagerStatus(ctx, request)
+  if (!status.authenticated) {
+    throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
+  }
+  const runtime = managerRuntime(ctx)
+  const previousChannel = runtime.activeChannel
+  const previousProvider = runtime.mainProvider
+  runtime.activeChannel = 'tokensapi'
+  runtime.mainProvider = runtime.tokensMainProvider
+  try {
+    await synchronizeMainModel(ctx, runtime.mainModel, runtime.models)
+    await hideFallbackModel(ctx)
+  } catch (error) {
+    runtime.activeChannel = previousChannel
+    runtime.mainProvider = previousProvider
+    if (previousChannel === 'official') await synchronizeFallbackModel(ctx).catch(() => {})
+    throw error
+  }
+  return modelManagerStatus(ctx, request)
+}
+
 function registerModelManagerRoute(ctx, host) {
   ctx.webServer.register({
     name: 'tokens-model-manager',
@@ -2503,6 +2864,18 @@ function registerModelManagerRoute(ctx, host) {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         if (body?.action === 'revealApiKey') {
           send(200, await revealManagedCredential(host))
+        } else if (body?.action === 'revealOfficialApiKey') {
+          send(200, await revealOfficialCredential(host))
+        } else if (body?.action === 'switchOfficial') {
+          send(200, await switchToOfficial(host))
+        } else if (body?.action === 'switchTokensAPI') {
+          send(200, await switchToTokensAPI(host))
+        } else if (body?.action === 'discoverFallback') {
+          send(200, await discoverFallback(host, body))
+        } else if (body?.action === 'configureFallback') {
+          send(200, await configureFallback(host, body))
+        } else if (Object.hasOwn(body ?? {}, 'officialApiKey')) {
+          send(200, await setOfficialCredential(host, body?.officialApiKey))
         } else if (Object.hasOwn(body ?? {}, 'apiKey')) {
           send(200, await setManagedCredential(host, body?.apiKey))
         } else {
@@ -2601,6 +2974,16 @@ export const __modelManager = {
   setManagedCredential,
   setManagedModels,
   revealManagedCredential,
+  setOfficialCredential,
+  revealOfficialCredential,
+  discoverFallback,
+  configureFallback,
+  switchToOfficial,
+  switchToTokensAPI,
+  validateFallbackCredential,
+  parseFallbackModels,
+  synchronizeFallbackModel,
+  hideFallbackModel,
   parseManagedModels,
   managedModelApi,
   managedModelInput,

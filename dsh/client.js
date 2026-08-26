@@ -865,6 +865,22 @@ window.__ModuleLoader__.load({
         verifying: 'Verifying...',
         show: 'Show',
         hide: 'Hide',
+        officialEntry: 'Fallback route',
+        officialTitle: 'Fallback model route',
+        officialIntro:
+          'This route has its own endpoint, model, and API key. It never changes the TokensAPI sign-in key; images continue through the existing TokensAPI vision bridge.',
+        officialKey: 'Fallback API Key',
+        officialStored: 'Fallback API key saved',
+        officialFetchModels: 'Get models',
+        officialFetchingModels: 'Getting models...',
+        officialModelsLoaded: '{count} models loaded from the current endpoint. Select one before switching.',
+        officialModelsHint: 'Enter the endpoint and fallback API key, then get the model list from /models.',
+        officialSaveSwitch: 'Save and switch',
+        officialSwitch: 'Switch to fallback',
+        officialActive: 'Fallback route active',
+        backTokens: 'Back to TokensAPI',
+        fixedValue: 'Fixed',
+        officialVision: 'Chat uses {mainModel}. Images continue through the TokensAPI vision model {visionModel}.',
       },
       zh: {
         nav: '模型',
@@ -900,6 +916,22 @@ window.__ModuleLoader__.load({
         verifying: '正在验证…',
         show: '显示',
         hide: '隐藏',
+        officialEntry: '备用线路',
+        officialTitle: '备用模型线路',
+        officialIntro:
+          '这里使用独立的请求地址、模型和 API Key，不会修改 TokensAPI 登录 Key；图片继续使用现有 TokensAPI 视觉桥接。',
+        officialKey: '备用线路 API Key',
+        officialStored: '备用线路 API Key 已保存',
+        officialFetchModels: '获取模型',
+        officialFetchingModels: '正在获取模型…',
+        officialModelsLoaded: '已从当前接口获取 {count} 个模型，请选择后再切换。',
+        officialModelsHint: '填写接口地址和备用线路 API Key，然后从 /models 获取真实模型列表。',
+        officialSaveSwitch: '保存并切换备用线路',
+        officialSwitch: '切换备用线路',
+        officialActive: '当前正在使用备用线路',
+        backTokens: '切回 TokensAPI',
+        fixedValue: '固定配置',
+        officialVision: '对话由 {mainModel} 处理，图片继续由 TokensAPI 视觉模型 {visionModel} 读取。',
       },
     }
 
@@ -926,6 +958,13 @@ window.__ModuleLoader__.load({
       var template =
         visionMode === 'native' ? t.nativeVision : visionMode === 'bridge' ? t.bridgeVision : t.directVision
       return template.replace('{mainModel}', mainModel || '—').replace('{visionModel}', visionModel || '—')
+    }
+
+    function activeSelectionFromStatus(status) {
+      return {
+        model: status?.activeMainModel || status?.mainModel || '',
+        provider: status?.mainProvider || '',
+      }
     }
 
     /**
@@ -1107,31 +1146,46 @@ window.__ModuleLoader__.load({
       return function TokensModelManager() {
         var statePair = react.useState(null)
         var keyPair = react.useState('')
+        var officialKeyPair = react.useState('')
+        var fallbackBasePair = react.useState('')
+        var fallbackModelPair = react.useState('')
+        var fallbackModelsPair = react.useState([])
         var basePair = react.useState('')
         var mainPair = react.useState('')
         var visionPair = react.useState('')
         var revealPair = react.useState(false)
+        var officialRevealPair = react.useState(false)
+        var officialPanelPair = react.useState(false)
         var pickerPair = react.useState('')
         var queryPair = react.useState('')
         var notePair = react.useState('')
         var busyPair = react.useState(false)
         var state = statePair[0]
         var apiKey = keyPair[0]
+        var officialApiKey = officialKeyPair[0]
+        var fallbackBaseURL = fallbackBasePair[0]
+        var fallbackModel = fallbackModelPair[0]
+        var fallbackModels = fallbackModelsPair[0]
         var baseURL = basePair[0]
         var mainModel = mainPair[0]
         var visionModel = visionPair[0]
         var keyVisible = revealPair[0]
+        var officialKeyVisible = officialRevealPair[0]
+        var officialPanelOpen = officialPanelPair[0]
         var openPicker = pickerPair[0]
         var modelQuery = queryPair[0]
         var note = notePair[0]
         var busy = busyPair[0]
         var t = managerLabels()
+        var officialPanel = state?.channel === 'official' || officialPanelOpen
         var draftVisionMode = selectedModelVisionMode(state, mainModel)
         var routeDescription = modelRouteDescription(t, draftVisionMode, mainModel, visionModel)
         var routingDirty =
           baseURL.trim() !== (state?.baseURL || '') ||
           mainModel !== state?.mainModel ||
           visionModel !== state?.visionModel
+        var fallbackDirty =
+          fallbackBaseURL.trim() !== (state?.official?.baseURL || '') || fallbackModel !== state?.official?.mainModel
 
         var load = react.useCallback(
           () =>
@@ -1147,11 +1201,17 @@ window.__ModuleLoader__.load({
                 basePair[1](body.baseURL || '')
                 mainPair[1](body.mainModel || '')
                 visionPair[1](body.visionModel || '')
+                fallbackBasePair[1](body.official?.baseURL || 'https://api.deepseek.com')
+                fallbackModelsPair[1](Array.isArray(body.official?.models) ? body.official.models : [])
+                fallbackModelPair[1](body.official?.configured ? body.official?.mainModel || '' : '')
                 notePair[1]('')
                 if (body.authenticated === true) {
-                  return Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider)).catch((error) => {
-                    notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`)
-                  })
+                  var selection = activeSelectionFromStatus(body)
+                  return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider)).catch(
+                    (error) => {
+                      notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`)
+                    },
+                  )
                 }
               })
               .catch((error) => {
@@ -1187,7 +1247,8 @@ window.__ModuleLoader__.load({
               visionPair[1](body.visionModel || '')
               keyPair[1]('')
               revealPair[1](false)
-              return Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider))
+              var selection = activeSelectionFromStatus(body)
+              return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider))
                 .then(() => notePair[1](t.ready))
                 .catch((error) => notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`))
             })
@@ -1220,7 +1281,8 @@ window.__ModuleLoader__.load({
               basePair[1](body.baseURL || '')
               mainPair[1](body.mainModel || '')
               visionPair[1](body.visionModel || '')
-              return Promise.resolve(synchronizeMainSelection(body.mainModel, body.mainProvider))
+              var selection = activeSelectionFromStatus(body)
+              return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider))
                 .then(() => notePair[1](t.modelsSaved))
                 .catch((error) => notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`))
             })
@@ -1269,18 +1331,150 @@ window.__ModuleLoader__.load({
             .finally(() => busyPair[1](false))
         }
 
-        var endpointRow = () =>
-          h(
+        var postManager = (payload) =>
+          fetch('/tokens/model-manager', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          }).then((response) =>
+            response.json().then((body) => {
+              if (!response.ok) throw new Error(body.error || 'request failed')
+              return body
+            }),
+          )
+
+        var activateStatus = (body, message) => {
+          statePair[1](body)
+          var selection = activeSelectionFromStatus(body)
+          return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider))
+            .then(() => notePair[1](message))
+            .catch((error) => notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`))
+        }
+
+        var fetchOfficialKey = () =>
+          postManager({ action: 'revealOfficialApiKey' }).then((body) => {
+            if (typeof body.apiKey !== 'string') throw new Error('load failed')
+            officialKeyPair[1](body.apiKey)
+            return body.apiKey
+          })
+
+        var toggleOfficialKey = () => {
+          if (busy) return
+          if (officialApiKey) {
+            officialRevealPair[1](!officialKeyVisible)
+            return
+          }
+          busyPair[1](true)
+          notePair[1]('')
+          fetchOfficialKey()
+            .then(() => officialRevealPair[1](true))
+            .catch((error) => notePair[1](String(error.message || error)))
+            .finally(() => busyPair[1](false))
+        }
+
+        var copyOfficialKey = () => {
+          if (busy) return
+          busyPair[1](true)
+          notePair[1]('')
+          Promise.resolve(officialApiKey || fetchOfficialKey())
+            .then((value) => {
+              if (typeof navigator.clipboard?.writeText !== 'function') throw new Error(t.copyFailed)
+              return navigator.clipboard.writeText(value)
+            })
+            .then(() => notePair[1](t.copied))
+            .catch((error) => notePair[1](String(error.message || error)))
+            .finally(() => busyPair[1](false))
+        }
+
+        var clearFallbackModels = () => {
+          fallbackModelsPair[1]([])
+          fallbackModelPair[1]('')
+          pickerPair[1]('')
+          queryPair[1]('')
+          notePair[1]('')
+        }
+
+        var discoverFallbackModels = () => {
+          if (busy || !fallbackBaseURL.trim() || (!officialApiKey.trim() && !state?.official?.configured)) return
+          busyPair[1](true)
+          notePair[1]('')
+          postManager({
+            action: 'discoverFallback',
+            baseURL: fallbackBaseURL,
+            ...(officialApiKey.trim() ? { apiKey: officialApiKey } : {}),
+          })
+            .then((body) => {
+              var models = Array.isArray(body.models) ? body.models : []
+              if (models.length === 0) throw new Error(t.modelsUnavailable)
+              fallbackModelsPair[1](models)
+              fallbackModelPair[1](models.some((model) => model.id === fallbackModel) ? fallbackModel : '')
+              notePair[1](t.officialModelsLoaded.replace('{count}', String(models.length)))
+            })
+            .catch((error) => notePair[1](String(error.message || error)))
+            .finally(() => busyPair[1](false))
+        }
+
+        var switchOfficial = (event) => {
+          event?.preventDefault?.()
+          if (
+            busy ||
+            !fallbackBaseURL.trim() ||
+            !fallbackModel ||
+            !fallbackModels.some((model) => model.id === fallbackModel) ||
+            (!officialApiKey.trim() && !state?.official?.configured)
+          )
+            return
+          busyPair[1](true)
+          notePair[1]('')
+          postManager({
+            action: 'configureFallback',
+            baseURL: fallbackBaseURL,
+            mainModel: fallbackModel,
+            ...(officialApiKey.trim() ? { apiKey: officialApiKey } : {}),
+          })
+            .then((body) => {
+              officialKeyPair[1]('')
+              officialRevealPair[1](false)
+              fallbackBasePair[1](body.official?.baseURL || fallbackBaseURL)
+              fallbackModelPair[1](body.official?.mainModel || fallbackModel)
+              fallbackModelsPair[1](Array.isArray(body.official?.models) ? body.official.models : [])
+              officialPanelPair[1](true)
+              return activateStatus(body, t.officialActive)
+            })
+            .catch((error) => notePair[1](String(error.message || error)))
+            .finally(() => busyPair[1](false))
+        }
+
+        var switchTokens = () => {
+          if (busy) return
+          if (state?.channel !== 'official') {
+            officialPanelPair[1](false)
+            notePair[1]('')
+            return
+          }
+          busyPair[1](true)
+          notePair[1]('')
+          postManager({ action: 'switchTokensAPI' })
+            .then((body) => activateStatus(body, t.ready))
+            .then(() => officialPanelPair[1](false))
+            .catch((error) => notePair[1](String(error.message || error)))
+            .finally(() => busyPair[1](false))
+        }
+
+        var endpointRow = (value, setValue) => {
+          var currentValue = value === undefined ? baseURL : value
+          var updateValue = setValue || basePair[1]
+          return h(
             'div',
             { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, padding: '8px 0' } },
             h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)', paddingTop: 10 } }, t.endpoint),
             h('input', {
               type: 'url',
-              value: baseURL,
+              value: currentValue,
               disabled: busy,
               spellCheck: false,
               autoCapitalize: 'none',
-              onChange: (event) => basePair[1](event.target.value),
+              onChange: (event) => updateValue(event.target.value),
               style: {
                 width: '100%',
                 minWidth: 0,
@@ -1296,11 +1490,12 @@ window.__ModuleLoader__.load({
               },
             }),
           )
+        }
 
-        var modelRow = (label, value, setValue, pickerId) => {
+        var modelRow = (label, value, setValue, pickerId, modelSource, modelsEnabled) => {
           var expanded = openPicker === pickerId
           var query = modelQuery.trim().toLowerCase()
-          var models = (state?.models || []).filter((model) => {
+          var models = (modelSource || state?.models || []).filter((model) => {
             if (!query) return true
             return `${model.id} ${model.name || ''}`.toLowerCase().includes(query)
           })
@@ -1320,7 +1515,7 @@ window.__ModuleLoader__.load({
                 'button',
                 {
                   type: 'button',
-                  disabled: busy || !state?.modelsAvailable,
+                  disabled: busy || (modelsEnabled === undefined ? !state?.modelsAvailable : !modelsEnabled),
                   'aria-expanded': expanded,
                   onClick: () => {
                     pickerPair[1](expanded ? '' : pickerId)
@@ -1474,9 +1669,43 @@ window.__ModuleLoader__.load({
         return h(
           'div',
           { style: { maxWidth: 760, padding: '8px 0 32px' } },
-          h('h2', { style: { margin: '0 0 8px' } }, t.title),
-          h('p', { style: { margin: '0 0 20px', color: 'var(--dsw-alias-label-secondary, #666)' } }, t.intro),
-          state
+          h(
+            'div',
+            { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 } },
+            h('h2', { style: { margin: '0 0 8px' } }, officialPanel ? t.officialTitle : t.title),
+            h(
+              'button',
+              {
+                type: 'button',
+                disabled: busy,
+                onClick: () => {
+                  if (officialPanel) switchTokens()
+                  else {
+                    officialPanelPair[1](true)
+                    notePair[1]('')
+                  }
+                },
+                style: {
+                  padding: 0,
+                  border: 0,
+                  background: 'transparent',
+                  color: 'var(--dsw-alias-label-secondary, #666)',
+                  font: 'inherit',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  textDecoration: 'underline',
+                  textUnderlineOffset: 3,
+                },
+              },
+              officialPanel ? t.backTokens : t.officialEntry,
+            ),
+          ),
+          h(
+            'p',
+            { style: { margin: '0 0 20px', color: 'var(--dsw-alias-label-secondary, #666)' } },
+            officialPanel ? t.officialIntro : t.intro,
+          ),
+          !officialPanel && state
             ? h(
                 'div',
                 {
@@ -1524,135 +1753,372 @@ window.__ModuleLoader__.load({
                 ),
               )
             : null,
-          h(
-            'form',
-            {
-              onSubmit: save,
-              style: { border: '1px solid var(--dsw-alias-border-l2, #ddd)', borderRadius: 12, padding: 16 },
-            },
-            h(
-              'div',
-              { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 } },
-              h('strong', null, t.key),
-              h(
-                'span',
+          !officialPanel
+            ? h(
+                'form',
                 {
-                  style: {
-                    color: state?.authenticated
-                      ? 'var(--dsw-alias-state-success-primary)'
-                      : 'var(--dsw-alias-state-error-primary)',
+                  onSubmit: save,
+                  style: { border: '1px solid var(--dsw-alias-border-l2, #ddd)', borderRadius: 12, padding: 16 },
+                },
+                h(
+                  'div',
+                  {
+                    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
                   },
-                },
-                state?.authenticated ? t.ready : t.missing,
-              ),
-            ),
-            h(
-              'div',
-              { style: { display: 'flex', gap: 8, marginBottom: 10 } },
-              h('input', {
-                value: apiKey,
-                disabled: busy || (state && state.writable === false),
-                placeholder: state?.configured ? t.stored : t.key,
-                onChange: (event) => {
-                  keyPair[1](event.target.value)
-                  notePair[1]('')
-                },
-                style: {
-                  width: '100%',
-                  minWidth: 0,
-                  flex: 1,
-                  boxSizing: 'border-box',
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: '1px solid var(--dsw-alias-border-l2, #ccc)',
-                  ...(keyVisible ? { WebkitTextSecurity: 'none' } : secretFieldProps().style || {}),
-                },
-                type: keyVisible ? 'text' : secretFieldProps().type,
-                autoComplete: 'off',
-                autoCorrect: 'off',
-                autoCapitalize: 'off',
-                spellCheck: false,
-              }),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  disabled: busy || !state?.configured,
-                  onClick: toggleKey,
-                  style: {
-                    padding: '0 13px',
-                    border: '1px solid var(--dsw-alias-border-l2, #ccc)',
-                    borderRadius: 8,
-                    background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
-                    color: 'inherit',
-                    cursor: 'pointer',
-                  },
-                },
-                keyVisible ? t.hide : t.show,
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  disabled: busy || !state?.configured,
-                  onClick: copyKey,
-                  style: {
-                    padding: '0 13px',
-                    border: '1px solid var(--dsw-alias-border-l2, #ccc)',
-                    borderRadius: 8,
-                    background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
-                    color: 'inherit',
-                    cursor: 'pointer',
-                  },
-                },
-                t.copy,
-              ),
-            ),
-            state?.configured
-              ? h(
+                  h('strong', null, t.key),
+                  h(
+                    'span',
+                    {
+                      style: {
+                        color: state?.authenticated
+                          ? 'var(--dsw-alias-state-success-primary)'
+                          : 'var(--dsw-alias-state-error-primary)',
+                      },
+                    },
+                    state?.authenticated ? t.ready : t.missing,
+                  ),
+                ),
+                h(
+                  'div',
+                  { style: { display: 'flex', gap: 8, marginBottom: 10 } },
+                  h('input', {
+                    value: apiKey,
+                    disabled: busy || (state && state.writable === false),
+                    placeholder: state?.configured ? t.stored : t.key,
+                    onChange: (event) => {
+                      keyPair[1](event.target.value)
+                      notePair[1]('')
+                    },
+                    style: {
+                      width: '100%',
+                      minWidth: 0,
+                      flex: 1,
+                      boxSizing: 'border-box',
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                      ...(keyVisible ? { WebkitTextSecurity: 'none' } : secretFieldProps().style || {}),
+                    },
+                    type: keyVisible ? 'text' : secretFieldProps().type,
+                    autoComplete: 'off',
+                    autoCorrect: 'off',
+                    autoCapitalize: 'off',
+                    spellCheck: false,
+                  }),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: busy || !state?.configured,
+                      onClick: toggleKey,
+                      style: {
+                        padding: '0 13px',
+                        border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                        borderRadius: 8,
+                        background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
+                        color: 'inherit',
+                        cursor: 'pointer',
+                      },
+                    },
+                    keyVisible ? t.hide : t.show,
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: busy || !state?.configured,
+                      onClick: copyKey,
+                      style: {
+                        padding: '0 13px',
+                        border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                        borderRadius: 8,
+                        background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
+                        color: 'inherit',
+                        cursor: 'pointer',
+                      },
+                    },
+                    t.copy,
+                  ),
+                ),
+                state?.configured
+                  ? h(
+                      'p',
+                      {
+                        style: {
+                          margin: '-2px 0 8px',
+                          fontSize: 13,
+                          color: 'var(--dsw-alias-label-secondary, #666)',
+                        },
+                      },
+                      t.keyHint,
+                    )
+                  : null,
+                h(
                   'p',
                   {
                     style: {
-                      margin: '-2px 0 8px',
+                      minHeight: 20,
+                      margin: '0 0 10px',
                       fontSize: 13,
-                      color: 'var(--dsw-alias-label-secondary, #666)',
+                      color: note ? 'var(--dsw-alias-label-secondary, #666)' : 'transparent',
+                    },
+                    role: 'status',
+                  },
+                  note || '.',
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'submit',
+                    disabled: busy || !apiKey.trim() || (state && state.writable === false),
+                    style: {
+                      padding: '9px 16px',
+                      border: 0,
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      background: 'var(--dsw-alias-state-business-primary)',
+                      color: 'var(--dsw-alias-bg-layer-2)',
+                      fontWeight: 700,
+                      opacity: busy || !apiKey.trim() || (state && state.writable === false) ? 0.5 : 1,
                     },
                   },
-                  t.keyHint,
-                )
-              : null,
-            h(
-              'p',
-              {
-                style: {
-                  minHeight: 20,
-                  margin: '0 0 10px',
-                  fontSize: 13,
-                  color: note ? 'var(--dsw-alias-label-secondary, #666)' : 'transparent',
-                },
-                role: 'status',
-              },
-              note || '.',
-            ),
-            h(
-              'button',
-              {
-                type: 'submit',
-                disabled: busy || !apiKey.trim() || (state && state.writable === false),
-                style: {
-                  padding: '9px 16px',
-                  border: 0,
-                  borderRadius: 8,
-                  cursor: 'pointer',
-                  background: 'var(--dsw-alias-state-business-primary)',
-                  color: 'var(--dsw-alias-bg-layer-2)',
-                  fontWeight: 700,
-                  opacity: busy || !apiKey.trim() || (state && state.writable === false) ? 0.5 : 1,
-                },
-              },
-              busy ? t.saving : t.save,
-            ),
-          ),
+                  busy ? t.saving : t.save,
+                ),
+              )
+            : null,
+          officialPanel && state
+            ? h(
+                'div',
+                null,
+                h(
+                  'div',
+                  {
+                    style: {
+                      border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+                      borderRadius: 12,
+                      padding: 16,
+                      marginBottom: 16,
+                    },
+                  },
+                  endpointRow(fallbackBaseURL, (value) => {
+                    fallbackBasePair[1](value)
+                    clearFallbackModels()
+                  }),
+                  modelRow(
+                    t.main,
+                    fallbackModel,
+                    fallbackModelPair[1],
+                    'fallback-main',
+                    fallbackModels,
+                    fallbackModels.length > 0,
+                  ),
+                  h(
+                    'p',
+                    {
+                      style: {
+                        margin: '4px 0 0 132px',
+                        color: 'var(--dsw-alias-label-secondary, #666)',
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                      },
+                    },
+                    fallbackModels.length > 0
+                      ? t.officialModelsLoaded.replace('{count}', String(fallbackModels.length))
+                      : t.officialModelsHint,
+                  ),
+                  h(
+                    'div',
+                    {
+                      style: {
+                        marginTop: 8,
+                        padding: '10px 12px',
+                        borderRadius: 10,
+                        background: 'var(--dsw-alias-bg-layer-2)',
+                        color: 'var(--dsw-alias-label-secondary, #666)',
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                      },
+                    },
+                    t.officialVision
+                      .replace('{mainModel}', fallbackModel || '—')
+                      .replace('{visionModel}', visionModel || state.visionModel || '—'),
+                  ),
+                ),
+                h(
+                  'form',
+                  {
+                    onSubmit: switchOfficial,
+                    style: { border: '1px solid var(--dsw-alias-border-l2, #ddd)', borderRadius: 12, padding: 16 },
+                  },
+                  h(
+                    'div',
+                    {
+                      style: {
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: 12,
+                      },
+                    },
+                    h('strong', null, t.officialKey),
+                    h(
+                      'span',
+                      {
+                        style: {
+                          color: state.official?.active
+                            ? 'var(--dsw-alias-state-success-primary)'
+                            : state.official?.configured
+                              ? 'var(--dsw-alias-label-secondary, #666)'
+                              : 'var(--dsw-alias-state-error-primary)',
+                        },
+                      },
+                      state.official?.active ? t.officialActive : state.official?.configured ? t.ready : t.missing,
+                    ),
+                  ),
+                  h(
+                    'div',
+                    { style: { display: 'flex', gap: 8, marginBottom: 10 } },
+                    h('input', {
+                      value: officialApiKey,
+                      disabled: busy || state.official?.writable === false,
+                      placeholder: state.official?.configured ? t.officialStored : t.officialKey,
+                      onChange: (event) => {
+                        officialKeyPair[1](event.target.value)
+                        clearFallbackModels()
+                      },
+                      style: {
+                        width: '100%',
+                        minWidth: 0,
+                        flex: 1,
+                        boxSizing: 'border-box',
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                        ...(officialKeyVisible ? { WebkitTextSecurity: 'none' } : secretFieldProps().style || {}),
+                      },
+                      type: officialKeyVisible ? 'text' : secretFieldProps().type,
+                      autoComplete: 'off',
+                      autoCorrect: 'off',
+                      autoCapitalize: 'off',
+                      spellCheck: false,
+                    }),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        disabled: busy || (!state.official?.configured && !officialApiKey),
+                        onClick: toggleOfficialKey,
+                        style: {
+                          padding: '0 13px',
+                          border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                          borderRadius: 8,
+                          background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
+                          color: 'inherit',
+                          cursor: 'pointer',
+                        },
+                      },
+                      officialKeyVisible ? t.hide : t.show,
+                    ),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        disabled: busy || (!state.official?.configured && !officialApiKey),
+                        onClick: copyOfficialKey,
+                        style: {
+                          padding: '0 13px',
+                          border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                          borderRadius: 8,
+                          background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
+                          color: 'inherit',
+                          cursor: 'pointer',
+                        },
+                      },
+                      t.copy,
+                    ),
+                  ),
+                  h(
+                    'p',
+                    {
+                      style: {
+                        minHeight: 20,
+                        margin: '0 0 10px',
+                        fontSize: 13,
+                        color: note ? 'var(--dsw-alias-label-secondary, #666)' : 'transparent',
+                      },
+                      role: 'status',
+                    },
+                    note || '.',
+                  ),
+                  h(
+                    'div',
+                    { style: { display: 'flex', flexWrap: 'wrap', gap: 10 } },
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        disabled:
+                          busy || !fallbackBaseURL.trim() || (!officialApiKey.trim() && !state.official?.configured),
+                        onClick: discoverFallbackModels,
+                        style: {
+                          padding: '9px 16px',
+                          border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                          borderRadius: 8,
+                          cursor: 'pointer',
+                          background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
+                          color: 'inherit',
+                          fontWeight: 700,
+                          opacity:
+                            busy || !fallbackBaseURL.trim() || (!officialApiKey.trim() && !state.official?.configured)
+                              ? 0.5
+                              : 1,
+                        },
+                      },
+                      busy ? t.officialFetchingModels : t.officialFetchModels,
+                    ),
+                    h(
+                      'button',
+                      {
+                        type: 'submit',
+                        disabled:
+                          busy ||
+                          !fallbackBaseURL.trim() ||
+                          !fallbackModel ||
+                          !fallbackModels.some((model) => model.id === fallbackModel) ||
+                          (!officialApiKey.trim() && !state.official?.configured) ||
+                          (officialApiKey.trim() && state.official?.writable === false) ||
+                          (state.official?.active && !officialApiKey.trim() && !fallbackDirty),
+                        style: {
+                          padding: '9px 16px',
+                          border: 0,
+                          borderRadius: 8,
+                          cursor: 'pointer',
+                          background: 'var(--dsw-alias-state-business-primary)',
+                          color: 'var(--dsw-alias-bg-layer-2)',
+                          fontWeight: 700,
+                          opacity:
+                            busy ||
+                            !fallbackBaseURL.trim() ||
+                            !fallbackModel ||
+                            !fallbackModels.some((model) => model.id === fallbackModel) ||
+                            (!officialApiKey.trim() && !state.official?.configured) ||
+                            (state.official?.active && !officialApiKey.trim() && !fallbackDirty)
+                              ? 0.5
+                              : 1,
+                        },
+                      },
+                      busy
+                        ? t.saving
+                        : officialApiKey.trim() || fallbackDirty
+                          ? t.officialSaveSwitch
+                          : state.official?.active
+                            ? t.officialActive
+                            : t.officialSwitch,
+                    ),
+                  ),
+                ),
+              )
+            : null,
         )
       }
     }
@@ -1667,7 +2133,12 @@ window.__ModuleLoader__.load({
      */
     async function synchronizeCurrentSessionModel(sessions, modelDirectories, mainModel, mainProvider, retry) {
       if (typeof mainModel !== 'string' || mainModel.trim() === '') return false
-      var provider = mainProvider === 'tokensapi' ? 'tokensapi' : 'modlens-tokensapi'
+      var provider =
+        mainProvider === 'tokensapi' ||
+        mainProvider === 'modlens-tokens-fallback' ||
+        mainProvider === 'modlens-tokensapi'
+          ? mainProvider
+          : 'modlens-tokensapi'
       var model = mainModel.trim()
       var sessionId = sessions?.list?.getSnapshot?.()?.current
       if (!sessionId || typeof modelDirectories?.directoryFor !== 'function') return false
@@ -1766,8 +2237,9 @@ window.__ModuleLoader__.load({
           .then(({ response, body }) => {
             if (!response.ok || body?.provider !== 'TokensAPI') return
             var react = require('react')
-            var desiredMainModel = body.mainModel
-            var desiredMainProvider = body.mainProvider
+            var initialSelection = activeSelectionFromStatus(body)
+            var desiredMainModel = initialSelection.model
+            var desiredMainProvider = initialSelection.provider
             var desiredSelectionEnabled = body.authenticated === true
             var lastActivationKey = ''
             var activateDesiredSelection = () => {
@@ -1779,7 +2251,12 @@ window.__ModuleLoader__.load({
               try {
                 var directory = scope.modelDirectories?.directoryFor?.(sessionId)
                 var snapshot = directory?.store?.getSnapshot?.()
-                var provider = desiredMainProvider === 'tokensapi' ? 'tokensapi' : 'modlens-tokensapi'
+                var provider =
+                  desiredMainProvider === 'tokensapi' ||
+                  desiredMainProvider === 'modlens-tokens-fallback' ||
+                  desiredMainProvider === 'modlens-tokensapi'
+                    ? desiredMainProvider
+                    : 'modlens-tokensapi'
                 selectionAlreadyVisible =
                   snapshot?.current?.provider === provider &&
                   snapshot?.current?.model === desiredMainModel &&
@@ -1896,6 +2373,7 @@ window.__ModuleLoader__.load({
       registerManagerSection: registerManagerSection,
       selectedModelVisionMode: selectedModelVisionMode,
       modelRouteDescription: modelRouteDescription,
+      activeSelectionFromStatus: activeSelectionFromStatus,
       synchronizeCurrentSessionModel: synchronizeCurrentSessionModel,
     }
     // Settings integration is optional, so its services are acquired through
