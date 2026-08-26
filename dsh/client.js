@@ -866,6 +866,11 @@ window.__ModuleLoader__.load({
         show: 'Show',
         hide: 'Hide',
         officialEntry: 'Fallback route',
+        tokensEntry: 'TokensAPI settings',
+        currentRoute: 'Current route',
+        tokensRoute: 'TokensAPI',
+        fallbackRoute: 'Fallback route',
+        routeActive: 'Currently active',
         officialTitle: 'Fallback model route',
         officialIntro:
           'This route has its own endpoint, model, and API key. It never changes the TokensAPI sign-in key; images continue through the existing TokensAPI vision bridge.',
@@ -917,6 +922,11 @@ window.__ModuleLoader__.load({
         show: '显示',
         hide: '隐藏',
         officialEntry: '备用线路',
+        tokensEntry: 'TokensAPI 配置',
+        currentRoute: '当前线路',
+        tokensRoute: 'TokensAPI',
+        fallbackRoute: '备用线路',
+        routeActive: '当前正在使用',
         officialTitle: '备用模型线路',
         officialIntro:
           '这里使用独立的请求地址、模型和 API Key，不会修改 TokensAPI 登录 Key；图片继续使用现有 TokensAPI 视觉桥接。',
@@ -936,8 +946,26 @@ window.__ModuleLoader__.load({
     }
 
     function managerLabels() {
-      var lang = (document.documentElement.lang || navigator.language || 'en').toLowerCase()
+      var lang = (document.documentElement?.lang || globalThis.navigator?.language || 'en').toLowerCase()
       return lang.indexOf('zh') === 0 ? MANAGER_TEXT.zh : MANAGER_TEXT.en
+    }
+
+    /**
+     * Keep configuration-page navigation separate from route activation.
+     *
+     * A user must be able to inspect either route without changing the model
+     * used by conversations. Only the explicit action returned here switches
+     * the active route.
+     */
+    function routeControlState(channel, officialPanel) {
+      var activeChannel = channel === 'official' ? 'official' : 'tokensapi'
+      var pageChannel = officialPanel ? 'official' : 'tokensapi'
+      return {
+        activeChannel: activeChannel,
+        pageChannel: pageChannel,
+        pageActive: activeChannel === pageChannel,
+        action: activeChannel === pageChannel ? '' : pageChannel === 'official' ? 'switchOfficial' : 'switchTokensAPI',
+      }
     }
 
     function selectedModelVisionMode(state, mainModel) {
@@ -1177,7 +1205,10 @@ window.__ModuleLoader__.load({
         var note = notePair[0]
         var busy = busyPair[0]
         var t = managerLabels()
-        var officialPanel = state?.channel === 'official' || officialPanelOpen
+        // This state controls only which configuration page is visible. The
+        // active route is tracked independently by state.channel.
+        var officialPanel = officialPanelOpen
+        var routeControl = routeControlState(state?.channel, officialPanel)
         var draftVisionMode = selectedModelVisionMode(state, mainModel)
         var routeDescription = modelRouteDescription(t, draftVisionMode, mainModel, visionModel)
         var routingDirty =
@@ -1448,7 +1479,6 @@ window.__ModuleLoader__.load({
         var switchTokens = () => {
           if (busy) return
           if (state?.channel !== 'official') {
-            officialPanelPair[1](false)
             notePair[1]('')
             return
           }
@@ -1459,6 +1489,79 @@ window.__ModuleLoader__.load({
             .then(() => officialPanelPair[1](false))
             .catch((error) => notePair[1](String(error.message || error)))
             .finally(() => busyPair[1](false))
+        }
+
+        var routeStatusCard = () => {
+          if (!state) return null
+          var currentRouteName = routeControl.activeChannel === 'official' ? t.fallbackRoute : t.tokensRoute
+          var switchFallbackDisabled =
+            busy ||
+            !fallbackBaseURL.trim() ||
+            !fallbackModel ||
+            !fallbackModels.some((model) => model.id === fallbackModel) ||
+            (!officialApiKey.trim() && !state.official?.configured)
+          var actionDisabled = busy || (routeControl.action === 'switchOfficial' && switchFallbackDisabled)
+          var actionLabel = routeControl.action === 'switchOfficial' ? t.officialSwitch : t.backTokens
+          var performAction = routeControl.action === 'switchOfficial' ? switchOfficial : switchTokens
+
+          return h(
+            'div',
+            {
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 16,
+                marginBottom: 16,
+                padding: '12px 16px',
+                border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+                borderRadius: 12,
+                background: 'var(--dsw-alias-bg-layer-2)',
+              },
+            },
+            h(
+              'div',
+              { style: { minWidth: 0 } },
+              h(
+                'span',
+                { style: { color: 'var(--dsw-alias-label-secondary, #666)', marginRight: 8 } },
+                `${t.currentRoute}：`,
+              ),
+              h('strong', null, currentRouteName),
+            ),
+            routeControl.pageActive
+              ? h(
+                  'span',
+                  {
+                    style: {
+                      flexShrink: 0,
+                      color: 'var(--dsw-alias-state-success-primary)',
+                      fontWeight: 700,
+                    },
+                  },
+                  t.routeActive,
+                )
+              : h(
+                  'button',
+                  {
+                    type: 'button',
+                    disabled: actionDisabled,
+                    onClick: performAction,
+                    style: {
+                      flexShrink: 0,
+                      padding: '8px 14px',
+                      border: 0,
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      background: 'var(--dsw-alias-state-business-primary)',
+                      color: 'var(--dsw-alias-bg-layer-2)',
+                      fontWeight: 700,
+                      opacity: actionDisabled ? 0.5 : 1,
+                    },
+                  },
+                  actionLabel,
+                ),
+          )
         }
 
         var endpointRow = (value, setValue) => {
@@ -1679,11 +1782,8 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 disabled: busy,
                 onClick: () => {
-                  if (officialPanel) switchTokens()
-                  else {
-                    officialPanelPair[1](true)
-                    notePair[1]('')
-                  }
+                  officialPanelPair[1](!officialPanel)
+                  notePair[1]('')
                 },
                 style: {
                   padding: 0,
@@ -1697,7 +1797,7 @@ window.__ModuleLoader__.load({
                   textUnderlineOffset: 3,
                 },
               },
-              officialPanel ? t.backTokens : t.officialEntry,
+              officialPanel ? t.tokensEntry : t.officialEntry,
             ),
           ),
           h(
@@ -1705,6 +1805,7 @@ window.__ModuleLoader__.load({
             { style: { margin: '0 0 20px', color: 'var(--dsw-alias-label-secondary, #666)' } },
             officialPanel ? t.officialIntro : t.intro,
           ),
+          routeStatusCard(),
           !officialPanel && state
             ? h(
                 'div',
@@ -2124,6 +2225,62 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Present one product-owned model instead of every internal route.
+     *
+     * The Host catalog must keep both the pi-ai upstream and the ModLens
+     * wrapper routable: the wrapper delegates text after reading images. The
+     * generic selector otherwise exposes both implementation routes, plus any
+     * unrelated bundled provider, which makes one logical choice appear two
+     * or more times. The branded settings section is the only place where a
+     * user changes the managed model, so the ordinary conversation selector
+     * should describe only the route that is actually active.
+     */
+    function managedCatalogProjection(snapshot, mainModel, mainProvider) {
+      var provider = typeof mainProvider === 'string' ? mainProvider.trim() : ''
+      var model = typeof mainModel === 'string' ? mainModel.trim() : ''
+      var groups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
+      var failures = Array.isArray(snapshot?.failures) ? snapshot.failures : []
+      if (!provider || !model) return { groups: groups, failures: failures }
+
+      var group = groups.find((entry) => entry?.id === provider)
+      var selected = Array.isArray(group?.models) ? group.models.find((entry) => entry?.id === model) : undefined
+      var visibleGroups = []
+      if (group && selected) {
+        var providerName = provider === 'modlens-tokens-fallback' ? '备用线路' : 'TokensAPI'
+        var rawName = typeof selected.name === 'string' && selected.name.trim() ? selected.name.trim() : model
+        var modelName = rawName.replace(/\s*\(modlens vision\)\s*$/i, '')
+        visibleGroups = [
+          {
+            ...group,
+            name: providerName,
+            models: [{ ...selected, name: modelName }],
+          },
+        ]
+      }
+      return {
+        groups: visibleGroups,
+        failures: failures.filter((entry) => entry?.id === provider),
+      }
+    }
+
+    function sameManagedCatalog(left, right) {
+      if (left.length !== right.length) return false
+      return left.every((entry, index) => {
+        var candidate = right[index]
+        if (entry?.id !== candidate?.id || entry?.name !== candidate?.name) return false
+        var models = Array.isArray(entry?.models) ? entry.models : []
+        var candidateModels = Array.isArray(candidate?.models) ? candidate.models : []
+        return (
+          models.length === candidateModels.length &&
+          models.every(
+            (model, modelIndex) =>
+              model?.id === candidateModels[modelIndex]?.id && model?.name === candidateModels[modelIndex]?.name,
+          )
+        )
+      })
+    }
+
+    /**
      * Apply the managed main model to the currently open ordinary session.
      *
      * The Host setting changed by /tokens/model-manager is the default for new
@@ -2242,6 +2399,51 @@ window.__ModuleLoader__.load({
             var desiredMainProvider = initialSelection.provider
             var desiredSelectionEnabled = body.authenticated === true
             var lastActivationKey = ''
+            var projectedDirectories = new WeakMap()
+            var projectionStops = []
+            var ensureManagedCatalogProjection = (directory) => {
+              var store = directory?.store
+              if (
+                !store ||
+                typeof store.getSnapshot !== 'function' ||
+                typeof store.update !== 'function' ||
+                typeof store.subscribe !== 'function'
+              ) {
+                return
+              }
+              var installed = projectedDirectories.get(directory)
+              if (installed) {
+                installed.apply()
+                return
+              }
+              var applying = false
+              var applyProjection = () => {
+                if (applying) return
+                var snapshot = store.getSnapshot()
+                var projection = managedCatalogProjection(snapshot, desiredMainModel, desiredMainProvider)
+                var currentGroups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
+                var currentFailures = Array.isArray(snapshot?.failures) ? snapshot.failures : []
+                if (
+                  sameManagedCatalog(currentGroups, projection.groups) &&
+                  sameManagedCatalog(currentFailures, projection.failures)
+                ) {
+                  return
+                }
+                applying = true
+                try {
+                  store.update((state) => {
+                    state.groups = projection.groups
+                    state.failures = projection.failures
+                  })
+                } finally {
+                  applying = false
+                }
+              }
+              var stop = store.subscribe(applyProjection)
+              projectedDirectories.set(directory, { apply: applyProjection })
+              if (typeof stop === 'function') projectionStops.push(stop)
+              applyProjection()
+            }
             var activateDesiredSelection = () => {
               if (!desiredSelectionEnabled) return Promise.resolve(false)
               var sessionId = scope.sessions?.list?.getSnapshot?.()?.current
@@ -2250,6 +2452,7 @@ window.__ModuleLoader__.load({
               var selectionAlreadyVisible = false
               try {
                 var directory = scope.modelDirectories?.directoryFor?.(sessionId)
+                ensureManagedCatalogProjection(directory)
                 var snapshot = directory?.store?.getSnapshot?.()
                 var provider =
                   desiredMainProvider === 'tokensapi' ||
@@ -2281,6 +2484,12 @@ window.__ModuleLoader__.load({
                 ),
               )
                 .then((activated) => {
+                  try {
+                    ensureManagedCatalogProjection(scope.modelDirectories?.directoryFor?.(sessionId))
+                  } catch {
+                    // The session may have closed while the Host selection was
+                    // settling. Its next activation installs the projection.
+                  }
                   if (!activated && lastActivationKey === activationKey) lastActivationKey = ''
                   return activated
                 })
@@ -2314,7 +2523,10 @@ window.__ModuleLoader__.load({
               })
               if (typeof ctx.effect === 'function') {
                 ctx.effect(
-                  () => () => stopSessionSelectionSync(),
+                  () => () => {
+                    stopSessionSelectionSync()
+                    for (var stopProjection of projectionStops.splice(0)) stopProjection()
+                  },
                   'tokens-model-manager: synchronize selected session model',
                 )
               }
@@ -2373,7 +2585,9 @@ window.__ModuleLoader__.load({
       registerManagerSection: registerManagerSection,
       selectedModelVisionMode: selectedModelVisionMode,
       modelRouteDescription: modelRouteDescription,
+      routeControlState: routeControlState,
       activeSelectionFromStatus: activeSelectionFromStatus,
+      managedCatalogProjection: managedCatalogProjection,
       synchronizeCurrentSessionModel: synchronizeCurrentSessionModel,
     }
     // Settings integration is optional, so its services are acquired through

@@ -647,6 +647,9 @@ describe('independent fallback route', () => {
             channel: 'official',
             mainProvider: DEEPSEEK_OFFICIAL.providerId,
         });
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            activeChannel: 'official',
+        });
 
         expect(updates.some((entry) => entry.namespace === 'llm-deepseek')).toBe(false);
         const fallbackUpdate = [...updates]
@@ -677,6 +680,9 @@ describe('independent fallback route', () => {
             mainProvider: TOKENSAPI.providerId,
             official: { active: false, configured: true },
         });
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            activeChannel: 'tokensapi',
+        });
         expect(fallbackProvider()).toBeUndefined();
         expect(mutations).toContainEqual({
             namespace: TOKENSAPI.llmSettingsNamespace,
@@ -692,9 +698,105 @@ describe('independent fallback route', () => {
             channel: 'official',
             mainProvider: DEEPSEEK_OFFICIAL.providerId,
         });
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            activeChannel: 'official',
+        });
         expect(fallbackProvider()).toMatchObject({
             displayName: '备用线路',
             baseURL: 'https://backup.example/v1',
+        });
+    });
+
+    it('restores the saved fallback channel before the initial model is displayed', async () => {
+        const credential = credentialHarness('tk-primary', true);
+        credential.official = 'sk-fallback';
+        const selections: Array<{ provider: string; model: string }> = [];
+        const values = new Map<string, Record<string, unknown>>([
+            [
+                TOKENSAPI.settingsNamespace,
+                {
+                    baseURL: TOKENSAPI.baseURL,
+                    mainModel: 'deepseek-v4-flash',
+                    visionModel: TOKENSAPI.visionModel,
+                    fallbackBaseURL: 'https://api.deepseek.com',
+                    fallbackModel: 'deepseek-v4-pro',
+                    activeChannel: 'official',
+                },
+            ],
+            [TOKENSAPI.llmSettingsNamespace, { providers: {} }],
+        ]);
+        const settings = {
+            register: (
+                namespace: string,
+                _schema: unknown,
+                options?: { base?: Record<string, unknown> },
+            ) => {
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Record<string, unknown>) => {
+                const previous = values.get(namespace) ?? {};
+                const next = { ...previous, ...patch };
+                if (
+                    typeof previous.providers === 'object' &&
+                    previous.providers !== null &&
+                    typeof patch.providers === 'object' &&
+                    patch.providers !== null
+                ) {
+                    next.providers = {
+                        ...(previous.providers as Record<string, unknown>),
+                        ...(patch.providers as Record<string, unknown>),
+                    };
+                }
+                values.set(namespace, next);
+            },
+        };
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) callback({ settings });
+                if (services.includes('agentDefaultModel')) {
+                    callback({
+                        agentDefaultModel: {
+                            saveSelection: async (selection: {
+                                provider: string;
+                                model: string;
+                            }) => {
+                                selections.push(selection);
+                            },
+                        },
+                    });
+                }
+            },
+        };
+
+        apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
+        const status = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE);
+        await Promise.resolve();
+
+        expect(status).toMatchObject({
+            channel: 'official',
+            activeMainModel: 'deepseek-v4-pro',
+            mainProvider: DEEPSEEK_OFFICIAL.providerId,
+            official: {
+                active: true,
+                mainModel: 'deepseek-v4-pro',
+            },
+        });
+        expect(values.get(TOKENSAPI.llmSettingsNamespace)).toMatchObject({
+            providers: {
+                [DEEPSEEK_OFFICIAL.upstreamProviderId]: {
+                    displayName: '备用线路',
+                    baseURL: 'https://api.deepseek.com',
+                    models: [{ id: 'deepseek-v4-pro' }],
+                },
+            },
+        });
+        expect(selections.at(-1)).toEqual({
+            provider: DEEPSEEK_OFFICIAL.providerId,
+            model: 'deepseek-v4-pro',
         });
     });
 

@@ -251,6 +251,10 @@ describe('Desktop model-manager settings section', () => {
         expect(SOURCE).toContain('t.bridgeVision');
         expect(SOURCE).toContain('t.directVision');
         expect(SOURCE).toContain("officialEntry: '备用线路'");
+        expect(SOURCE).toContain("tokensEntry: 'TokensAPI 配置'");
+        expect(SOURCE).toContain("currentRoute: '当前线路'");
+        expect(SOURCE).toContain('var officialPanel = officialPanelOpen');
+        expect(SOURCE).toContain('routeStatusCard()');
         expect(SOURCE).toContain('body: JSON.stringify(payload)');
         expect(SOURCE).toContain("action: 'discoverFallback'");
         expect(SOURCE).toContain("action: 'configureFallback'");
@@ -396,6 +400,157 @@ describe('Desktop model-manager settings section', () => {
         ).toEqual({ model: 'deepseek-chat', provider: 'modlens-tokens-fallback' });
     });
 
+    it('separates route-page navigation from the explicit route switch action', () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const control = loaded.factory(() => ({})).__manager.routeControlState as (
+            channel: string,
+            officialPanel: boolean,
+        ) => {
+            activeChannel: string;
+            pageChannel: string;
+            pageActive: boolean;
+            action: string;
+        };
+
+        expect(control('tokensapi', false)).toEqual({
+            activeChannel: 'tokensapi',
+            pageChannel: 'tokensapi',
+            pageActive: true,
+            action: '',
+        });
+        expect(control('official', false)).toEqual({
+            activeChannel: 'official',
+            pageChannel: 'tokensapi',
+            pageActive: false,
+            action: 'switchTokensAPI',
+        });
+        expect(control('tokensapi', true)).toEqual({
+            activeChannel: 'tokensapi',
+            pageChannel: 'official',
+            pageActive: false,
+            action: 'switchOfficial',
+        });
+        expect(control('official', true)).toEqual({
+            activeChannel: 'official',
+            pageChannel: 'official',
+            pageActive: true,
+            action: '',
+        });
+    });
+
+    it('projects the public selector to only the active managed model', () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const project = loaded.factory(() => ({})).__manager.managedCatalogProjection as (
+            snapshot: Record<string, unknown>,
+            model: string,
+            provider: string,
+        ) => {
+            groups: Array<{
+                id: string;
+                name: string;
+                models: Array<{ id: string; name: string }>;
+            }>;
+            failures: Array<{ id: string }>;
+        };
+        const snapshot = {
+            groups: [
+                {
+                    id: 'deepseek-official',
+                    name: 'DeepSeek',
+                    models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' }],
+                },
+                {
+                    id: 'modlens-tokensapi',
+                    name: 'TokensAPI (modlens vision)',
+                    models: [
+                        {
+                            id: 'deepseek-v4-flash',
+                            name: 'deepseek-v4-flash (modlens vision)',
+                        },
+                    ],
+                },
+                {
+                    id: 'tokensapi',
+                    name: 'TokensAPI',
+                    models: [{ id: 'gpt-5.5', name: 'GPT-5.5' }],
+                },
+                {
+                    id: 'tokens-fallback',
+                    name: '备用线路',
+                    models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' }],
+                },
+                {
+                    id: 'modlens-tokens-fallback',
+                    name: '备用线路 (modlens vision)',
+                    models: [
+                        {
+                            id: 'deepseek-v4-pro',
+                            name: 'DeepSeek-V4-Pro (modlens vision)',
+                        },
+                    ],
+                },
+            ],
+            failures: [
+                { id: 'unrelated', name: 'Unrelated', message: 'offline' },
+                { id: 'modlens-tokensapi', name: 'TokensAPI', message: 'refreshing' },
+            ],
+        };
+        expect(project(snapshot, 'deepseek-v4-flash', 'modlens-tokensapi')).toEqual({
+            groups: [
+                {
+                    id: 'modlens-tokensapi',
+                    name: 'TokensAPI',
+                    models: [
+                        {
+                            id: 'deepseek-v4-flash',
+                            name: 'deepseek-v4-flash',
+                        },
+                    ],
+                },
+            ],
+            failures: [{ id: 'modlens-tokensapi', name: 'TokensAPI', message: 'refreshing' }],
+        });
+        expect(project(snapshot, 'gpt-5.5', 'tokensapi').groups).toEqual([
+            {
+                id: 'tokensapi',
+                name: 'TokensAPI',
+                models: [{ id: 'gpt-5.5', name: 'GPT-5.5' }],
+            },
+        ]);
+        expect(project(snapshot, 'deepseek-v4-pro', 'modlens-tokens-fallback').groups).toEqual([
+            {
+                id: 'modlens-tokens-fallback',
+                name: '备用线路',
+                models: [
+                    {
+                        id: 'deepseek-v4-pro',
+                        name: 'DeepSeek-V4-Pro',
+                    },
+                ],
+            },
+        ]);
+    });
+
     it('does not mount the redundant legacy vision-engine plugin card', () => {
         expect(SOURCE).not.toContain('registerCard(ctx)');
     });
@@ -507,6 +662,129 @@ describe('Desktop model-manager settings section', () => {
             { provider: 'tokensapi', model: 'claude-opus-5' },
             { provider: 'tokensapi', model: 'claude-opus-5' },
         ]);
+    });
+
+    it('keeps the shared conversation selector projected after catalog reloads', async () => {
+        let loaded:
+            | {
+                  factory: (require: () => unknown) => {
+                      __manager: { registerManagerSection: (ctx: Record<string, unknown>) => void };
+                  };
+              }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            async () => ({
+                ok: true,
+                json: async () => ({
+                    provider: 'TokensAPI',
+                    authenticated: true,
+                    mainModel: 'deepseek-v4-flash',
+                    mainProvider: 'modlens-tokensapi',
+                }),
+            }),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+
+        const rawGroups = [
+            {
+                id: 'deepseek-official',
+                name: 'DeepSeek',
+                models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' }],
+            },
+            {
+                id: 'modlens-tokensapi',
+                name: 'TokensAPI (modlens vision)',
+                models: [
+                    {
+                        id: 'deepseek-v4-flash',
+                        name: 'deepseek-v4-flash (modlens vision)',
+                    },
+                ],
+            },
+            {
+                id: 'tokensapi',
+                name: 'TokensAPI',
+                models: [{ id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' }],
+            },
+            {
+                id: 'tokens-fallback',
+                name: '备用线路',
+                models: [{ id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro' }],
+            },
+            {
+                id: 'modlens-tokens-fallback',
+                name: '备用线路 (modlens vision)',
+                models: [
+                    {
+                        id: 'deepseek-v4-pro',
+                        name: 'DeepSeek-V4-Pro (modlens vision)',
+                    },
+                ],
+            },
+        ];
+        const state = {
+            current: null as null | { provider: string; model: string },
+            groups: rawGroups.map((group) => ({ ...group, models: [...group.models] })),
+            failures: [{ id: 'deepseek-official', name: 'DeepSeek', message: 'offline' }],
+        };
+        const listeners = new Set<() => void>();
+        const store = {
+            getSnapshot: () => state,
+            subscribe: (listener: () => void) => {
+                listeners.add(listener);
+                return () => listeners.delete(listener);
+            },
+            update: (mutator: (draft: typeof state) => void) => {
+                mutator(state);
+                for (const listener of [...listeners]) listener();
+            },
+        };
+        const directory = {
+            store,
+            load: async () => {
+                state.groups = rawGroups.map((group) => ({ ...group, models: [...group.models] }));
+                for (const listener of [...listeners]) listener();
+                return { groups: rawGroups, failures: [] };
+            },
+            select: async (selection: { provider: string; model: string }) => {
+                state.current = selection;
+            },
+        };
+
+        loaded
+            .factory(() => ({}))
+            .__manager.registerManagerSection({
+                inject: (_services: string[], callback: (scope: Record<string, unknown>) => void) =>
+                    callback({
+                        sessions: {
+                            list: {
+                                getSnapshot: () => ({ current: 'session-projected' }),
+                                subscribe: () => () => undefined,
+                            },
+                            subagentAddress: () => undefined,
+                        },
+                        modelDirectories: { directoryFor: () => directory },
+                        slots: { inject: () => undefined },
+                    }),
+            });
+        for (let index = 0; index < 30; index++) await Promise.resolve();
+
+        expect(state.current).toEqual({
+            provider: 'modlens-tokensapi',
+            model: 'deepseek-v4-flash',
+        });
+        expect(state.groups).toEqual([
+            {
+                id: 'modlens-tokensapi',
+                name: 'TokensAPI',
+                models: [{ id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' }],
+            },
+        ]);
+        expect(state.failures).toEqual([]);
     });
 
     it('switches the currently open session after the managed main model is saved', async () => {

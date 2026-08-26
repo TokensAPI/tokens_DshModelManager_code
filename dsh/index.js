@@ -255,6 +255,7 @@ export function apply(ctx, config = {}) {
                   visionModel: TOKENSAPI.visionModel,
                   fallbackBaseURL: DEEPSEEK_OFFICIAL.baseURL,
                   fallbackModel: DEEPSEEK_OFFICIAL.mainModel,
+                  activeChannel: 'tokensapi',
                 },
               },
               dict: {},
@@ -268,6 +269,7 @@ export function apply(ctx, config = {}) {
             visionModel: TOKENSAPI.visionModel,
             fallbackBaseURL: DEEPSEEK_OFFICIAL.baseURL,
             fallbackModel: DEEPSEEK_OFFICIAL.mainModel,
+            activeChannel: 'tokensapi',
           },
         })
         const runtime = managerRuntime(ctx)
@@ -291,10 +293,18 @@ export function apply(ctx, config = {}) {
         if (runtime.fallbackModel && !runtime.fallbackModels.some((model) => model.id === runtime.fallbackModel)) {
           runtime.fallbackModels.push({ id: runtime.fallbackModel, name: runtime.fallbackModel })
         }
-        Promise.all([
-          synchronizeMainModel(ctx, runtime.mainModel, [{ id: runtime.mainModel, name: runtime.mainModel }]),
-          hideFallbackModel(ctx),
-        ])
+        runtime.activeChannel = normalizeActiveChannel(saved.activeChannel)
+        if (runtime.activeChannel === 'official' && !runtime.fallbackModel) runtime.activeChannel = 'tokensapi'
+        runtime.mainProvider =
+          runtime.activeChannel === 'official' ? DEEPSEEK_OFFICIAL.providerId : runtime.tokensMainProvider
+        Promise.resolve()
+          .then(async () => {
+            // Keep the parked TokensAPI route current even while the fallback
+            // route is active, so switching back never resurrects defaults.
+            await synchronizeMainModel(ctx, runtime.mainModel, [{ id: runtime.mainModel, name: runtime.mainModel }])
+            if (runtime.activeChannel === 'official') await synchronizeFallbackModel(ctx)
+            else await hideFallbackModel(ctx)
+          })
           .catch((error) => {
             console.error(`[tokens-model-manager] saved model route activation skipped: ${error}`)
           })
@@ -308,14 +318,18 @@ export function apply(ctx, config = {}) {
       if (typeof scope.agentDefaultModel?.saveSelection !== 'function') return
       const runtime = managerRuntime(ctx)
       runtime.agentDefaultModel = scope.agentDefaultModel
-      Promise.resolve(
-        runtime.agentDefaultModel.saveSelection({
-          provider: runtime.mainProvider,
-          model: runtime.mainModel,
-        }),
-      ).catch((error) => {
-        console.error(`[tokens-model-manager] saved Agent model activation skipped: ${error}`)
-      })
+      Promise.resolve(runtime.settingsReady)
+        .then(() => {
+          const model = runtime.activeChannel === 'official' ? runtime.fallbackModel : runtime.mainModel
+          if (!model) return
+          return runtime.agentDefaultModel.saveSelection({
+            provider: runtime.mainProvider,
+            model,
+          })
+        })
+        .catch((error) => {
+          console.error(`[tokens-model-manager] saved Agent model activation skipped: ${error}`)
+        })
     })
   }
   // Registered as a raw JSON-Schema tool definition (no dsh package imports:
@@ -2169,6 +2183,10 @@ function normalizeModelId(value, fallback) {
   return model
 }
 
+function normalizeActiveChannel(value) {
+  return value === 'official' ? 'official' : 'tokensapi'
+}
+
 function normalizeEndpointTypes(value) {
   if (!Array.isArray(value) || value.length > MAX_ENDPOINT_TYPE_COUNT) return []
   const endpointTypes = []
@@ -2737,6 +2755,7 @@ async function configureFallback(ctx, value, request = globalThis.fetch) {
       await runtime.settings.update(TOKENSAPI.settingsNamespace, {
         fallbackBaseURL: baseURL,
         fallbackModel,
+        activeChannel: 'official',
       })
     }
     if (replaceCredential) {
@@ -2783,6 +2802,9 @@ async function switchToOfficial(ctx, request = globalThis.fetch) {
   runtime.mainProvider = DEEPSEEK_OFFICIAL.providerId
   try {
     await synchronizeFallbackModel(ctx)
+    if (runtime.settings?.update) {
+      await runtime.settings.update(TOKENSAPI.settingsNamespace, { activeChannel: 'official' })
+    }
     if (typeof runtime.agentDefaultModel?.saveSelection === 'function') {
       await runtime.agentDefaultModel.saveSelection({
         provider: DEEPSEEK_OFFICIAL.providerId,
@@ -2811,10 +2833,20 @@ async function switchToTokensAPI(ctx, request = globalThis.fetch) {
   try {
     await synchronizeMainModel(ctx, runtime.mainModel, runtime.models)
     await hideFallbackModel(ctx)
+    if (runtime.settings?.update) {
+      await runtime.settings.update(TOKENSAPI.settingsNamespace, { activeChannel: 'tokensapi' })
+    }
   } catch (error) {
     runtime.activeChannel = previousChannel
     runtime.mainProvider = previousProvider
-    if (previousChannel === 'official') await synchronizeFallbackModel(ctx).catch(() => {})
+    if (previousChannel === 'official') {
+      await synchronizeFallbackModel(ctx).catch(() => {})
+      if (runtime.fallbackModel && typeof runtime.agentDefaultModel?.saveSelection === 'function') {
+        await runtime.agentDefaultModel
+          .saveSelection({ provider: DEEPSEEK_OFFICIAL.providerId, model: runtime.fallbackModel })
+          .catch(() => {})
+      }
+    }
     throw error
   }
   return modelManagerStatus(ctx, request)
