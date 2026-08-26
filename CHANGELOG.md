@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.12 - 2026-08-26
+
+- Default TokensAPI OpenAI-compatible models to Chat Completions, matching the native DSH request route and avoiding the repeated tool-call behavior observed through Responses-compatible gateways.
+- Add a per-model request-protocol selector for models that advertise both Chat Completions and Responses API support. Saved choices are restored when returning to a model, while unsupported or withdrawn protocols safely fall back to the model's current default.
+- Keep the independent fallback route fixed on Chat Completions. Changing the TokensAPI protocol never changes the fallback endpoint, model, API key, or transport.
+
 ## 0.2.11 - 2026-08-26
 
 - Persist the active TokensAPI or fallback route and restore the selected route and model before synchronizing the Desktop session after restart.
