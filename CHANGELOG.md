@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.11 - 2026-08-26
+
+- Persist the active TokensAPI or fallback route and restore the selected route and model before synchronizing the Desktop session after restart.
+- Separate configuration-page navigation from route activation. Opening the TokensAPI or fallback settings no longer changes the route used by conversations.
+- Show the currently active route on both settings pages. The inactive page now provides an explicit **Switch back to TokensAPI** or **Switch to fallback** button, while the active page clearly reports that it is in use.
+- Keep the outer model selector intentionally minimal: show only the active model name, without multimodal labels, visual-model names, inactive routes, internal providers, or implementation suffixes.
+
 ## 0.2.7 - 2026-08-26
 
 - Hide the fallback upstream and its visual wrapper from Desktop's outer conversation model selector whenever TokensAPI is active. The saved endpoint, selected model, and independent credential remain available inside the fallback panel and the route is registered again only when the user switches to it.
