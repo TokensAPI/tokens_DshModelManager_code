@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.13 - 2026-08-27
+
+- Declare the verified `deepseek-v4-flash` capacity explicitly as a 262,144-token context window with a 32,768-token output limit, so Desktop no longer relies on adapter fallback guesses.
+- Preserve valid capacity metadata returned by the model catalog and fall back to the verified product values when those fields are missing or invalid.
+
 ## 0.2.12 - 2026-08-26
 
 - Default TokensAPI OpenAI-compatible models to Chat Completions, matching the native DSH request route and avoiding the repeated tool-call behavior observed through Responses-compatible gateways.
