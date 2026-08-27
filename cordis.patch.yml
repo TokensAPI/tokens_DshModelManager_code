@@ -16,9 +16,12 @@
         apiKeyEnv: TOKENSAPI_API_KEY
         api: openai-completions
         baseURL: https://tokensapi.ai/v1
+        defaultContextWindow: 262144
         models:
           - id: deepseek-v4-flash
             name: DeepSeek V4 Flash
+            contextWindow: 262144
+            maxTokens: 32768
 
 - id: agent-default-model
   config:

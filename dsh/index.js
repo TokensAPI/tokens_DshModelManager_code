@@ -2182,6 +2182,10 @@ function resolvedCredentialValue(result) {
 const MAX_MODEL_COUNT = 1000
 const MAX_MODEL_ID_LENGTH = 160
 const MAX_ENDPOINT_TYPE_COUNT = 16
+const MAX_MODEL_TOKEN_LIMIT = 16_000_000
+const KNOWN_MODEL_CAPACITIES = Object.freeze({
+  'deepseek-v4-flash': Object.freeze({ contextWindow: 262144, maxTokens: 32768 }),
+})
 
 function normalizeModelId(value, fallback) {
   if (typeof value !== 'string') return fallback
@@ -2213,6 +2217,26 @@ function normalizeManagedModelApi(value, fallback = '') {
   if (typeof value !== 'string') return fallback
   const api = value.trim().toLowerCase()
   return MANAGED_MODEL_APIS.has(api) ? api : fallback
+}
+
+function normalizeModelTokenLimit(value) {
+  return Number.isSafeInteger(value) && value > 0 && value <= MAX_MODEL_TOKEN_LIMIT ? value : undefined
+}
+
+function managedModelContextWindow(model) {
+  for (const value of [model?.contextWindow, model?.context_window, model?.context_length]) {
+    const contextWindow = normalizeModelTokenLimit(value)
+    if (contextWindow !== undefined) return contextWindow
+  }
+  return KNOWN_MODEL_CAPACITIES[normalizeModelId(model?.id, '')]?.contextWindow
+}
+
+function managedModelMaxTokens(model) {
+  for (const value of [model?.maxTokens, model?.max_tokens, model?.max_output_tokens]) {
+    const maxTokens = normalizeModelTokenLimit(value)
+    if (maxTokens !== undefined) return maxTokens
+  }
+  return KNOWN_MODEL_CAPACITIES[normalizeModelId(model?.id, '')]?.maxTokens
 }
 
 function normalizeProtocolByModel(value) {
@@ -2352,12 +2376,16 @@ async function parseManagedModels(response) {
     const input = Array.isArray(declaredInput)
       ? [...new Set(declaredInput.filter((value) => value === 'text' || value === 'image'))]
       : []
+    const contextWindow = managedModelContextWindow({ ...entry, id })
+    const maxTokens = managedModelMaxTokens({ ...entry, id })
     models.push({
       id,
       name,
       ...(ownedBy ? { ownedBy } : {}),
       ...(hasEndpointTypes ? { endpointTypes } : {}),
       ...(Array.isArray(declaredInput) ? { input } : {}),
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
     })
   }
   if (models.length === 0) {
@@ -2391,6 +2419,8 @@ async function synchronizeMainModel(ctx, mainModel, models) {
     // wrapper mirrors this upstream catalog, so narrowing it here also keeps
     // unrelated chat and vision-wrapper models out of the composer picker.
     const selected = models.find((model) => model.id === mainModel)
+    const contextWindow = managedModelContextWindow(selected ?? { id: mainModel })
+    const maxTokens = managedModelMaxTokens(selected ?? { id: mainModel })
     await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
       providers: {
         [TOKENSAPI.providerId]: {
@@ -2398,7 +2428,16 @@ async function synchronizeMainModel(ctx, mainModel, models) {
           apiKeyEnv: TOKENSAPI.credentialRef,
           api: route.api,
           baseURL: runtime.baseURL,
-          models: [{ id: mainModel, name: selected?.name ?? mainModel, input: route.input }],
+          ...(contextWindow === undefined ? {} : { defaultContextWindow: contextWindow }),
+          models: [
+            {
+              id: mainModel,
+              name: selected?.name ?? mainModel,
+              input: route.input,
+              ...(contextWindow === undefined ? {} : { contextWindow }),
+              ...(maxTokens === undefined ? {} : { maxTokens }),
+            },
+          ],
         },
       },
     })
@@ -3118,6 +3157,8 @@ export const __modelManager = {
   managedModelApi,
   normalizeProtocolByModel,
   managedModelInput,
+  managedModelContextWindow,
+  managedModelMaxTokens,
   modelUsesVisionBridge,
   managedVisionMode,
   resolveManagedMainRoute,

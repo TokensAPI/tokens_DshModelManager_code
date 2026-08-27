@@ -74,6 +74,8 @@ const API_MODELS = [
         name: 'DeepSeek V4 Flash',
         ownedBy: 'deepseek',
         endpointTypes: ['openai', 'openai-response', 'anthropic'],
+        contextWindow: 262144,
+        maxTokens: 32768,
     },
     {
         id: 'qwen3.6-35b-a3b',
@@ -133,6 +135,8 @@ const VALID_RESPONSE = async () => ({
             name: model.name,
             owned_by: model.ownedBy,
             supported_endpoint_types: model.endpointTypes,
+            context_window: model.contextWindow,
+            max_output_tokens: model.maxTokens,
         })),
     }),
 });
@@ -1124,7 +1128,19 @@ describe('TokensAPI model discovery and selection', () => {
                 .reverse()
                 .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch,
         ).toMatchObject({
-            providers: { tokensapi: { api: 'openai-responses' } },
+            providers: {
+                tokensapi: {
+                    api: 'openai-responses',
+                    defaultContextWindow: 262144,
+                    models: [
+                        {
+                            id: 'deepseek-v4-flash',
+                            contextWindow: 262144,
+                            maxTokens: 32768,
+                        },
+                    ],
+                },
+            },
         });
     });
 
@@ -1290,6 +1306,35 @@ describe('TokensAPI model discovery and selection', () => {
         expect(__modelManager.managedModelInput({ id: 'deepseek-v4-flash' })).toEqual(['text']);
     });
 
+    it('uses the production capacity for DeepSeek V4 Flash', () => {
+        expect(__modelManager.managedModelContextWindow({ id: 'deepseek-v4-flash' })).toBe(262144);
+        expect(__modelManager.managedModelMaxTokens({ id: 'deepseek-v4-flash' })).toBe(32768);
+        expect(
+            __modelManager.managedModelContextWindow({
+                id: 'deepseek-v4-flash',
+                context_window: 196608,
+            }),
+        ).toBe(196608);
+        expect(
+            __modelManager.managedModelContextWindow({
+                id: 'deepseek-v4-flash',
+                context_window: -1,
+            }),
+        ).toBe(262144);
+        expect(
+            __modelManager.managedModelMaxTokens({
+                id: 'deepseek-v4-flash',
+                max_output_tokens: 65536,
+            }),
+        ).toBe(65536);
+        expect(
+            __modelManager.managedModelMaxTokens({
+                id: 'deepseek-v4-flash',
+                max_output_tokens: 0,
+            }),
+        ).toBe(32768);
+    });
+
     it('parses, trims and deduplicates the OpenAI-compatible model list', async () => {
         const models = await __modelManager.parseManagedModels({
             json: async () => ({
@@ -1306,6 +1351,8 @@ describe('TokensAPI model discovery and selection', () => {
                             'openai-response',
                         ],
                         input_modalities: ['text', 'image', 'audio', 'image'],
+                        context_window: 196608,
+                        max_output_tokens: 16384,
                     },
                     { id: 'deepseek-v4-flash', name: 'duplicate' },
                     { id: '' },
@@ -1321,6 +1368,8 @@ describe('TokensAPI model discovery and selection', () => {
                 ownedBy: 'deepseek',
                 endpointTypes: ['openai-response', 'openai'],
                 input: ['text', 'image'],
+                contextWindow: 196608,
+                maxTokens: 16384,
             },
             { id: 'qwen3.6-35b-a3b', name: 'qwen3.6-35b-a3b' },
         ]);
