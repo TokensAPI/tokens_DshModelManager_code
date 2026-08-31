@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.14 - 2026-08-31
+
+- Make model image capability fail closed: structured provider metadata wins, verified built-in classifications cover known routes, and every unclassified future model requires an explicit per-model choice between native image handling and the TokensAPI vision bridge.
+- Persist manual image-routing choices across restarts, keep unconfirmed models out of the conversation catalog, immediately apply native/bridge changes without re-registering the adapter, and automatically remove an old manual choice once the provider publishes authoritative modality metadata.
+- Present every active TokensAPI model through one managed Desktop provider while preserving each model's actual native or bridged request behavior. The model selector no longer exposes duplicate implementation routes, and its provider heading remains aligned while scrolling.
+- Refine the Models settings layout: saved API keys stay masked by default, the fallback credential and model discovery flow are grouped clearly, route switching uses one explicit action, and the separate visual-model picker appears only when the selected main model actually uses the bridge.
+
 ## 0.2.13 - 2026-08-27
 
 - Declare the verified `deepseek-v4-flash` capacity explicitly as a 262,144-token context window with a 32,768-token output limit, so Desktop no longer relies on adapter fallback guesses.
