@@ -32,6 +32,8 @@ describe('builtin vision table', () => {
         expect(isVisionModel('Claude-Fable-5')).toBe(true);
         expect(isVisionModel('glm-5v-turbo')).toBe(true);
         expect(isVisionModel('qwen3-vl-32b')).toBe(true);
+        expect(isVisionModel('qwen3.6-35b-a3b')).toBe(true);
+        expect(isVisionModel('kimi-k3')).toBe(true);
     });
 
     it('does not claim text-only coding models', () => {
@@ -43,6 +45,7 @@ describe('builtin vision table', () => {
 
     it('matches provider-prefixed ids by their bare model id', () => {
         expect(isVisionModel('openrouter/gemini-3-flash')).toBe(true);
+        expect(isVisionModel('tokensapi/kimi-k3-preview')).toBe(true);
         expect(isVisionModel('deepseek/deepseek-chat')).toBe(false);
     });
 });

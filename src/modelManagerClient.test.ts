@@ -220,9 +220,12 @@ describe('Desktop model-manager settings section', () => {
             SOURCE.indexOf('{ style: { maxWidth: 760', SOURCE.indexOf('var modelRow')),
         );
         expect(pickerSource).not.toContain("'select'");
-        expect(SOURCE).toContain(
-            'body: JSON.stringify({ baseURL: baseURL, mainModel: mainModel, api: protocol, visionModel: visionModel })',
-        );
+        expect(SOURCE).toContain('body: JSON.stringify({');
+        expect(SOURCE).toContain('baseURL: baseURL');
+        expect(SOURCE).toContain('mainModel: mainModel');
+        expect(SOURCE).toContain('api: protocol');
+        expect(SOURCE).toContain('visionModel: visionModel');
+        expect(SOURCE).toContain('visionMode: draftVisionMode');
         expect(SOURCE).toContain("var basePair = react.useState('')");
         expect(SOURCE).toContain("var protocolPair = react.useState('')");
         expect(SOURCE).toContain("role: 'radiogroup'");
@@ -302,6 +305,7 @@ describe('Desktop model-manager settings section', () => {
         expect(discoverSource).toContain("action: 'discoverFallback'");
         expect(discoverSource).toContain('apiKey: officialApiKey');
         expect(discoverSource).toContain('fallbackModelsPair[1](models)');
+        expect(discoverSource).toContain('fallbackModelPair[1](models[0].id)');
         expect(switchSource).toContain(
             '!fallbackModels.some((model) => model.id === fallbackModel)',
         );
@@ -313,6 +317,10 @@ describe('Desktop model-manager settings section', () => {
                   factory: (require: (id: string) => unknown) => {
                       __manager: {
                           selectedModelVisionMode: (
+                              state: Record<string, unknown>,
+                              mainModel: string,
+                          ) => string;
+                          selectedModelVisionSource: (
                               state: Record<string, unknown>,
                               mainModel: string,
                           ) => string;
@@ -343,19 +351,23 @@ describe('Desktop model-manager settings section', () => {
             models: [
                 { id: 'deepseek-v4-flash', visionMode: 'bridge' },
                 { id: 'gpt-5.5', visionMode: 'native' },
+                { id: 'kimi-k3', visionMode: 'native' },
                 { id: 'direct-text-model', visionMode: 'direct' },
             ],
         };
 
         expect(manager.selectedModelVisionMode(state, 'gpt-5.5')).toBe('native');
+        expect(manager.selectedModelVisionMode(state, 'kimi-k3')).toBe('native');
         expect(manager.selectedModelVisionMode(state, 'deepseek-v4-flash')).toBe('bridge');
         expect(manager.selectedModelVisionMode(state, 'direct-text-model')).toBe('direct');
-        expect(manager.selectedModelVisionMode(state, 'new-unclassified-model')).toBe('bridge');
+        expect(manager.selectedModelVisionMode(state, 'new-unclassified-model')).toBe('unknown');
+        expect(manager.selectedModelVisionSource(state, 'new-unclassified-model')).toBe('unknown');
 
         const labels = {
             nativeVision: '对话和图片均由 {mainModel} 原生处理。',
             bridgeVision: '对话由 {mainModel} 处理，图片由 {visionModel} 读取后交给主模型。',
             directVision: '对话由 {mainModel} 处理，当前不能处理图片。',
+            unknownVision: '{mainModel} 没有声明图片能力，请先选择图片处理方式再保存。',
         };
         expect(manager.modelRouteDescription(labels, 'native', 'gpt-5.5', 'unused')).toBe(
             '对话和图片均由 gpt-5.5 原生处理。',
@@ -363,18 +375,60 @@ describe('Desktop model-manager settings section', () => {
         expect(
             manager.modelRouteDescription(labels, 'bridge', 'deepseek-v4-flash', 'qwen3.6-35b-a3b'),
         ).toBe('对话由 deepseek-v4-flash 处理，图片由 qwen3.6-35b-a3b 读取后交给主模型。');
+        expect(manager.modelRouteDescription(labels, 'unknown', 'future-model', 'unused')).toBe(
+            'future-model 没有声明图片能力，请先选择图片处理方式再保存。',
+        );
     });
 
     it('reveals and copies a saved key only after an explicit user action', () => {
         expect(SOURCE).toContain("type: keyVisible ? 'text' : secretFieldProps().type");
         expect(SOURCE).toContain('keyVisible ? t.hide : t.show');
-        expect(SOURCE).toContain('placeholder: state?.configured ? t.stored : t.key');
+        expect(SOURCE).toContain('placeholder: state?.configured ? t.maskedKey : t.key');
         expect(SOURCE).toContain("body: JSON.stringify({ action: 'revealApiKey' })");
         expect(SOURCE).toContain('navigator.clipboard.writeText(value)');
         expect(SOURCE).toContain("postManager({ action: 'revealOfficialApiKey' })");
         expect(SOURCE).toContain("type: officialKeyVisible ? 'text' : secretFieldProps().type");
+        expect(SOURCE).toContain(
+            'placeholder: state.official?.configured ? t.maskedKey : t.officialKey',
+        );
         expect(SOURCE).not.toContain('state.apiKey');
         expect(SOURCE).not.toContain('返回浏览器');
+    });
+
+    it('puts discovery below the fallback key and the only route action below model settings', () => {
+        const panelStart = SOURCE.lastIndexOf('officialPanel && state');
+        const panelSource = SOURCE.slice(
+            panelStart,
+            SOURCE.indexOf('    /**\n     * Present one', panelStart),
+        );
+
+        expect(panelSource).toContain('order: 1');
+        expect(panelSource).toContain('order: 2');
+        const endpointCardStart = panelSource.indexOf('endpointRow(fallbackBaseURL');
+        const keyCardStart = panelSource.indexOf("h('strong', null, t.officialKey)");
+        const endpointCardSource = panelSource.slice(endpointCardStart, keyCardStart);
+        const keyCardSource = panelSource.slice(keyCardStart);
+
+        expect(keyCardSource).toContain('onClick: discoverFallbackModels');
+        expect(keyCardSource.indexOf('placeholder: state.official?.configured')).toBeLessThan(
+            keyCardSource.indexOf('onClick: discoverFallbackModels'),
+        );
+        expect(endpointCardSource).toContain('fallbackRouteAction()');
+        expect(panelSource).not.toContain("type: 'submit'");
+        expect(SOURCE).toContain(
+            'var performFallbackRouteAction = returnToTokens ? switchTokens : switchOfficial',
+        );
+        expect(SOURCE).toContain(
+            "var showReturnAction = !officialPanel && routeControl.action === 'switchTokensAPI'",
+        );
+        expect(SOURCE).toContain("cursor: actionDisabled ? 'not-allowed' : 'pointer'");
+        expect(SOURCE).toContain("cursor: busy ? 'wait' : 'pointer'");
+        expect(SOURCE).toContain("color: '#fff'");
+        expect(SOURCE).toContain("cursor: saveModelsDisabled ? 'not-allowed' : 'pointer'");
+        expect(SOURCE).toContain("draftVisionMode === 'unknown'");
+        expect(SOURCE).toContain(
+            "busy || !apiKey.trim() || (state && state.writable === false) ? 'not-allowed' : 'pointer'",
+        );
     });
 
     it('uses the active fallback selection without overwriting the parked TokensAPI model', () => {
@@ -453,7 +507,7 @@ describe('Desktop model-manager settings section', () => {
         });
     });
 
-    it('projects the public selector to only the active managed model', () => {
+    it('projects every active-route model without exposing duplicate implementation routes', () => {
         let loaded:
             | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
             | undefined;
@@ -492,12 +546,24 @@ describe('Desktop model-manager settings section', () => {
                             id: 'deepseek-v4-flash',
                             name: 'deepseek-v4-flash (modlens vision)',
                         },
+                        {
+                            id: 'deepseek-v3.2',
+                            name: 'DeepSeek V3.2 (modlens vision)',
+                        },
+                        {
+                            id: 'gpt-5.5',
+                            name: 'GPT-5.5',
+                        },
                     ],
                 },
                 {
                     id: 'tokensapi',
                     name: 'TokensAPI',
-                    models: [{ id: 'gpt-5.5', name: 'GPT-5.5' }],
+                    models: [
+                        { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
+                        { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
+                        { id: 'gpt-5.5', name: 'GPT-5.5' },
+                    ],
                 },
                 {
                     id: 'tokens-fallback',
@@ -511,6 +577,10 @@ describe('Desktop model-manager settings section', () => {
                         {
                             id: 'deepseek-v4-pro',
                             name: 'DeepSeek-V4-Pro (modlens vision)',
+                        },
+                        {
+                            id: 'deepseek-chat',
+                            name: 'DeepSeek Chat (modlens vision)',
                         },
                     ],
                 },
@@ -530,6 +600,14 @@ describe('Desktop model-manager settings section', () => {
                             id: 'deepseek-v4-flash',
                             name: 'deepseek-v4-flash',
                         },
+                        {
+                            id: 'deepseek-v3.2',
+                            name: 'DeepSeek V3.2',
+                        },
+                        {
+                            id: 'gpt-5.5',
+                            name: 'GPT-5.5',
+                        },
                     ],
                 },
             ],
@@ -537,9 +615,13 @@ describe('Desktop model-manager settings section', () => {
         });
         expect(project(snapshot, 'gpt-5.5', 'tokensapi').groups).toEqual([
             {
-                id: 'tokensapi',
+                id: 'modlens-tokensapi',
                 name: 'TokensAPI',
-                models: [{ id: 'gpt-5.5', name: 'GPT-5.5' }],
+                models: [
+                    { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' },
+                    { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
+                    { id: 'gpt-5.5', name: 'GPT-5.5' },
+                ],
             },
         ]);
         expect(project(snapshot, 'deepseek-v4-pro', 'modlens-tokens-fallback').groups).toEqual([
@@ -551,9 +633,135 @@ describe('Desktop model-manager settings section', () => {
                         id: 'deepseek-v4-pro',
                         name: 'DeepSeek-V4-Pro',
                     },
+                    {
+                        id: 'deepseek-chat',
+                        name: 'DeepSeek Chat',
+                    },
                 ],
             },
         ]);
+    });
+
+    it('skips the upstream model root only when it has no reasoning choice', () => {
+        let loaded:
+            | {
+                  factory: (require: () => unknown) => {
+                      __manager: {
+                          onModelSelectClick: (event: {
+                              target: { closest: () => unknown };
+                          }) => void;
+                      };
+                  };
+              }
+            | undefined;
+        let rootItems: Array<{ click: () => void }> = [];
+        let reasoningItems: unknown[] = [];
+        const menu = {
+            querySelectorAll: (selector: string) =>
+                selector === '[role="menuitemradio"]' ? reasoningItems : rootItems,
+        };
+        const documentStub = {
+            getElementById: (id: string) => (id === 'model-menu' ? menu : null),
+        };
+        const frames: Array<() => void> = [];
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            {
+                __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) },
+                requestAnimationFrame: (callback: () => void) => {
+                    frames.push(callback);
+                    return frames.length;
+                },
+            },
+            documentStub,
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const manager = loaded.factory(() => ({})).__manager;
+        const attributes: Record<string, string> = {
+            'aria-label': '选择模型，当前 deepseek-v4-flash',
+            'aria-expanded': 'true',
+            'aria-controls': 'model-menu',
+        };
+        const trigger = { getAttribute: (name: string) => attributes[name] ?? null };
+        const target = { closest: () => trigger };
+        const flushFrames = () => {
+            while (frames.length > 0) frames.shift()?.();
+        };
+
+        let clicks = 0;
+        rootItems = [{ click: () => (clicks += 1) }];
+        manager.onModelSelectClick({ target });
+        flushFrames();
+        expect(clicks).toBe(1);
+
+        rootItems = [{ click: () => (clicks += 1) }, { click: () => (clicks += 1) }];
+        manager.onModelSelectClick({ target });
+        flushFrames();
+        expect(clicks).toBe(1);
+
+        rootItems = [{ click: () => (clicks += 1) }];
+        reasoningItems = [{}];
+        manager.onModelSelectClick({ target });
+        flushFrames();
+        expect(clicks).toBe(1);
+    });
+
+    it('keeps the sticky provider heading opaque over the scrolling model list', () => {
+        let loaded:
+            | {
+                  factory: (require: () => unknown) => {
+                      __manager: {
+                          installModelMenuStyle: () => () => void;
+                          modelMenuStyle: string;
+                      };
+                  };
+              }
+            | undefined;
+        let previousRemoved = false;
+        let styleRemoved = false;
+        const style = {
+            id: '',
+            textContent: '',
+            remove: () => {
+                styleRemoved = true;
+            },
+        };
+        let appended: typeof style | undefined;
+        const documentStub = {
+            head: {
+                appendChild: (element: typeof style) => {
+                    appended = element;
+                },
+            },
+            getElementById: () => ({
+                remove: () => {
+                    previousRemoved = true;
+                },
+            }),
+            createElement: () => style,
+        };
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            documentStub,
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const manager = loaded.factory(() => ({})).__manager;
+        const dispose = manager.installModelMenuStyle();
+
+        expect(previousRemoved).toBe(true);
+        expect(appended).toBe(style);
+        expect(style.id).toBe('tokens-model-manager-menu-style');
+        expect(manager.modelMenuStyle).toContain('[aria-label="模型与推理等级"]');
+        expect(manager.modelMenuStyle).toContain('[aria-label="Model and reasoning effort"]');
+        expect(manager.modelMenuStyle).toContain('Canvas 94%');
+
+        dispose();
+        expect(styleRemoved).toBe(true);
     });
 
     it('does not mount the redundant legacy vision-engine plugin card', () => {
@@ -583,7 +791,7 @@ describe('Desktop model-manager settings section', () => {
                 provider: 'TokensAPI',
                 authenticated: true,
                 mainModel: 'claude-opus-5',
-                mainProvider: 'tokensapi',
+                mainProvider: 'modlens-tokensapi',
             }),
         });
         const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
@@ -627,7 +835,7 @@ describe('Desktop model-manager settings section', () => {
                                     load: async () => {
                                         state.groups = [
                                             {
-                                                id: 'tokensapi',
+                                                id: 'modlens-tokensapi',
                                                 models: [{ id: 'claude-opus-5' }],
                                             },
                                         ];
@@ -663,9 +871,9 @@ describe('Desktop model-manager settings section', () => {
         for (let index = 0; index < 20; index++) await Promise.resolve();
 
         expect(selected).toEqual([
-            { provider: 'tokensapi', model: 'claude-opus-5' },
-            { provider: 'tokensapi', model: 'claude-opus-5' },
-            { provider: 'tokensapi', model: 'claude-opus-5' },
+            { provider: 'modlens-tokensapi', model: 'claude-opus-5' },
+            { provider: 'modlens-tokensapi', model: 'claude-opus-5' },
+            { provider: 'modlens-tokensapi', model: 'claude-opus-5' },
         ]);
     });
 
@@ -708,12 +916,24 @@ describe('Desktop model-manager settings section', () => {
                         id: 'deepseek-v4-flash',
                         name: 'deepseek-v4-flash (modlens vision)',
                     },
+                    {
+                        id: 'deepseek-v3.2',
+                        name: 'DeepSeek V3.2 (modlens vision)',
+                    },
+                    {
+                        id: 'gpt-5.5',
+                        name: 'GPT-5.5',
+                    },
                 ],
             },
             {
                 id: 'tokensapi',
                 name: 'TokensAPI',
-                models: [{ id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' }],
+                models: [
+                    { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' },
+                    { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
+                    { id: 'gpt-5.5', name: 'GPT-5.5' },
+                ],
             },
             {
                 id: 'tokens-fallback',
@@ -786,7 +1006,11 @@ describe('Desktop model-manager settings section', () => {
             {
                 id: 'modlens-tokensapi',
                 name: 'TokensAPI',
-                models: [{ id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' }],
+                models: [
+                    { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' },
+                    { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
+                    { id: 'gpt-5.5', name: 'GPT-5.5' },
+                ],
             },
         ]);
         expect(state.failures).toEqual([]);
@@ -845,7 +1069,7 @@ describe('Desktop model-manager settings section', () => {
         expect(selected).toEqual([{ provider: 'modlens-tokensapi', model: 'qwen3.6-35b-x' }]);
     });
 
-    it('selects the upstream route for a native multimodal main model', async () => {
+    it('selects the unified managed route for a native multimodal main model', async () => {
         let loaded:
             | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
             | undefined;
@@ -879,10 +1103,62 @@ describe('Desktop model-manager settings section', () => {
                     }),
                 },
                 'claude-opus-4-6',
-                'tokensapi',
+                'modlens-tokensapi',
             ),
         ).resolves.toBe(true);
-        expect(selected).toEqual([{ provider: 'tokensapi', model: 'claude-opus-4-6' }]);
+        expect(selected).toEqual([{ provider: 'modlens-tokensapi', model: 'claude-opus-4-6' }]);
+    });
+
+    it('preserves an existing per-session model during startup synchronization', async () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const synchronize = loaded.factory(() => ({})).__manager.synchronizeCurrentSessionModel as (
+            sessions: Record<string, unknown>,
+            modelDirectories: Record<string, unknown>,
+            model: string,
+            provider: string,
+            retry: undefined,
+            respectExisting: boolean,
+        ) => Promise<boolean>;
+        const selected: Array<{ provider: string; model: string }> = [];
+
+        await expect(
+            synchronize(
+                {
+                    list: { getSnapshot: () => ({ current: 'session-existing' }) },
+                    subagentAddress: () => undefined,
+                },
+                {
+                    directoryFor: () => ({
+                        store: {
+                            getSnapshot: () => ({
+                                current: {
+                                    provider: 'other-provider',
+                                    model: 'user-selected-model',
+                                },
+                            }),
+                        },
+                        select: async (selection: { provider: string; model: string }) => {
+                            selected.push(selection);
+                        },
+                    }),
+                },
+                'deepseek-v4-flash',
+                'modlens-tokensapi',
+                undefined,
+                true,
+            ),
+        ).resolves.toBe(false);
+        expect(selected).toEqual([]);
     });
 
     it('selects the fallback wrapper without remapping it to TokensAPI', async () => {

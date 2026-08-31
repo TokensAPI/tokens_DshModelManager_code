@@ -11,81 +11,48 @@ import { execFileSync, spawn } from "child_process";
 import { createRequire } from "module";
 import * as crypto from "crypto";
 import * as readline from "readline";
-function denyPatterns(guards) {
-  return stringPatterns(guards?.denyModels);
-}
-function allowPatterns(guards) {
-  return stringPatterns(guards?.allowModels);
-}
-function stringPatterns(raw) {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.filter((pattern) => typeof pattern === "string");
-}
-function globMatch(pattern, value) {
+const BUILTIN_VISION_MODEL_PATTERNS = Object.freeze([
+  "claude-*",
+  "gpt-4o*",
+  "gpt-4.1*",
+  "gpt-5*",
+  "o3*",
+  "o4*",
+  "gemini-*",
+  "glm-*v*",
+  "qwen*-vl*",
+  "qwen3.5-plus*",
+  "qwen3.6-plus*",
+  "qwen3.6-35b-a3b*",
+  "kimi-k2.5*",
+  "kimi-k2.6*",
+  "kimi-k2.7*",
+  "kimi-k3*",
+  "moonshot-v1-*vision*",
+  "minimax-vl*",
+  "minimax-m3*",
+  "deepseek-vl*",
+  "deepseek-ocr*",
+  "janus*",
+  "pixtral*",
+  "llama-4*",
+  "llama-3.2-*vision*",
+  "grok-4*",
+  "grok-2-vision*",
+  "internvl*"
+]);
+function globMatch$1(pattern, value) {
   const regex = pattern.split(/([*?])/).map((part) => {
-    if (part === "*") {
-      return ".*";
-    }
-    if (part === "?") {
-      return ".";
-    }
+    if (part === "*") return ".*";
+    if (part === "?") return ".";
     return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }).join("");
   return new RegExp(`^${regex}$`, "i").test(value);
 }
-function evaluateGuard(guards, detection) {
-  const deny = denyPatterns(guards);
-  const allow = allowPatterns(guards);
-  if (!detection.model) {
-    if (guards?.denyWhenUnknown === true) {
-      return {
-        ...detection,
-        guard: "deny",
-        reason: "model unknown and denyWhenUnknown is set"
-      };
-    }
-    return {
-      ...detection,
-      guard: "allow",
-      reason: deny.length === 0 && allow.length === 0 ? "no deny rules configured" : "model unknown, failing open"
-    };
-  }
-  if (deny.length === 0 && allow.length === 0) {
-    return { ...detection, guard: "allow", reason: "no deny rules configured" };
-  }
-  const candidates = [detection.model];
-  if (detection.provider) {
-    candidates.push(`${detection.provider}/${detection.model}`);
-  }
-  const firstMatch = (patterns) => patterns.find((pattern) => candidates.some((candidate) => globMatch(pattern, candidate)));
-  const denied = firstMatch(deny);
-  if (denied) {
-    return {
-      ...detection,
-      guard: "deny",
-      matched: denied,
-      reason: "model has native vision per guards.denyModels"
-    };
-  }
-  if (allow.length > 0) {
-    const allowed = firstMatch(allow);
-    if (allowed) {
-      return {
-        ...detection,
-        guard: "allow",
-        matched: allowed,
-        reason: "model is on guards.allowModels"
-      };
-    }
-    return {
-      ...detection,
-      guard: "deny",
-      reason: "not on guards.allowModels: only listed models run the engine"
-    };
-  }
-  return { ...detection, guard: "allow", reason: "not on the deny list" };
+function isBuiltinVisionModel(modelId) {
+  const normalized = String(modelId ?? "").trim();
+  const bare = normalized.includes("/") ? normalized.slice(normalized.lastIndexOf("/") + 1) : normalized;
+  return BUILTIN_VISION_MODEL_PATTERNS.some((pattern) => globMatch$1(pattern, bare));
 }
 const BLOCKED_HOSTNAMES = /* @__PURE__ */ new Set([
   "localhost",
@@ -2732,38 +2699,8 @@ function resolveSpawnPlan(command, args, env = process.env, cwd, deps = REAL_DEP
     ...recipe.env ? { env: recipe.env } : {}
   };
 }
-const VISION_MODEL_PATTERNS = [
-  "claude-*",
-  "gpt-4o*",
-  "gpt-4.1*",
-  "gpt-5*",
-  "o3*",
-  "o4*",
-  "gemini-*",
-  "glm-*v*",
-  "qwen*-vl*",
-  "qwen3.5-plus*",
-  "qwen3.6-plus*",
-  "kimi-k2.5*",
-  "kimi-k2.6*",
-  "kimi-k2.7*",
-  "kimi-k3*",
-  "moonshot-v1-*vision*",
-  "minimax-vl*",
-  "minimax-m3*",
-  "deepseek-vl*",
-  "deepseek-ocr*",
-  "janus*",
-  "pixtral*",
-  "llama-4*",
-  "llama-3.2-*vision*",
-  "grok-4*",
-  "grok-2-vision*",
-  "internvl*"
-];
 function isVisionModel(modelId) {
-  const bare = modelId.includes("/") ? modelId.slice(modelId.lastIndexOf("/") + 1) : modelId;
-  return VISION_MODEL_PATTERNS.some((pattern) => globMatch(pattern, bare));
+  return isBuiltinVisionModel(modelId);
 }
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1e3;
 const CLI_TIMEOUT_MS = 1e4;
@@ -4427,6 +4364,82 @@ function sniffModel(harness, cwd, env, roots = {}) {
   } catch {
     return null;
   }
+}
+function denyPatterns(guards) {
+  return stringPatterns(guards?.denyModels);
+}
+function allowPatterns(guards) {
+  return stringPatterns(guards?.allowModels);
+}
+function stringPatterns(raw) {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.filter((pattern) => typeof pattern === "string");
+}
+function globMatch(pattern, value) {
+  const regex = pattern.split(/([*?])/).map((part) => {
+    if (part === "*") {
+      return ".*";
+    }
+    if (part === "?") {
+      return ".";
+    }
+    return part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }).join("");
+  return new RegExp(`^${regex}$`, "i").test(value);
+}
+function evaluateGuard(guards, detection) {
+  const deny = denyPatterns(guards);
+  const allow = allowPatterns(guards);
+  if (!detection.model) {
+    if (guards?.denyWhenUnknown === true) {
+      return {
+        ...detection,
+        guard: "deny",
+        reason: "model unknown and denyWhenUnknown is set"
+      };
+    }
+    return {
+      ...detection,
+      guard: "allow",
+      reason: deny.length === 0 && allow.length === 0 ? "no deny rules configured" : "model unknown, failing open"
+    };
+  }
+  if (deny.length === 0 && allow.length === 0) {
+    return { ...detection, guard: "allow", reason: "no deny rules configured" };
+  }
+  const candidates = [detection.model];
+  if (detection.provider) {
+    candidates.push(`${detection.provider}/${detection.model}`);
+  }
+  const firstMatch = (patterns) => patterns.find((pattern) => candidates.some((candidate) => globMatch(pattern, candidate)));
+  const denied = firstMatch(deny);
+  if (denied) {
+    return {
+      ...detection,
+      guard: "deny",
+      matched: denied,
+      reason: "model has native vision per guards.denyModels"
+    };
+  }
+  if (allow.length > 0) {
+    const allowed = firstMatch(allow);
+    if (allowed) {
+      return {
+        ...detection,
+        guard: "allow",
+        matched: allowed,
+        reason: "model is on guards.allowModels"
+      };
+    }
+    return {
+      ...detection,
+      guard: "deny",
+      reason: "not on guards.allowModels: only listed models run the engine"
+    };
+  }
+  return { ...detection, guard: "allow", reason: "not on the deny list" };
 }
 function detectActiveModel(options) {
   const env = options.env ?? process.env;

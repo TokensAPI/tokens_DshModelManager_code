@@ -16,6 +16,7 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'no
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { builtinModelVisionMode } from './modelCapabilities.js'
 import { spawnHidden } from './spawnHidden.js'
 
 const CLI_PATH = fileURLToPath(new URL('../dist/main.js', import.meta.url))
@@ -31,8 +32,6 @@ const DEFAULT_VISION_FAMILIES = ['deepseek', 'glm']
 // promise: every selectable chat model must remain usable in image-bearing
 // sessions, so models without confirmed native vision use the selected visual
 // model as a bridge instead of falling back to an image-rejecting direct route.
-const NATIVE_VISION_MODEL_ID =
-  /^(claude-(3(?:[.-]|$)|(opus|sonnet|haiku)-)|deepseek-(vl|ocr)|janus|glm-[\d.]*v(\b|-)|qwen3\.6-35b-a3b(?:$|-)|gpt-5\.5(?:$|-))/i
 const CLAUDE_MODEL_ID = /^claude-/i
 const MANAGED_ENDPOINT_TYPES = new Set(['anthropic', 'gemini', 'openai', 'openai-response', 'openai-response-compact'])
 const MANAGED_MODEL_APIS = new Set(['anthropic-messages', 'openai-completions', 'openai-responses'])
@@ -41,6 +40,7 @@ const MANAGED_MODEL_API_LABELS = Object.freeze({
   'openai-completions': 'Chat Completions',
   'openai-responses': 'Responses API',
 })
+const COMPLETIONS_ONLY_MODEL_IDS = new Set(['deepseek-v4-flash'])
 
 // Product defaults and stable service ids. The settings page may override the
 // runtime endpoint after sign-in; the gate itself deliberately keeps using the
@@ -85,6 +85,7 @@ function managerRuntime(ctx) {
       baseURL: TOKENSAPI.baseURL,
       mainModel: TOKENSAPI.mainModel,
       protocolByModel: {},
+      visionModeByModel: {},
       tokensMainProvider: TOKENSAPI.agentProviderId,
       mainProvider: TOKENSAPI.agentProviderId,
       activeChannel: 'tokensapi',
@@ -260,6 +261,7 @@ export function apply(ctx, config = {}) {
                   baseURL: TOKENSAPI.baseURL,
                   mainModel: TOKENSAPI.mainModel,
                   protocolByModel: {},
+                  visionModeByModel: {},
                   visionModel: TOKENSAPI.visionModel,
                   fallbackBaseURL: DEEPSEEK_OFFICIAL.baseURL,
                   fallbackModel: DEEPSEEK_OFFICIAL.mainModel,
@@ -275,6 +277,7 @@ export function apply(ctx, config = {}) {
             baseURL: TOKENSAPI.baseURL,
             mainModel: TOKENSAPI.mainModel,
             protocolByModel: {},
+            visionModeByModel: {},
             visionModel: TOKENSAPI.visionModel,
             fallbackBaseURL: DEEPSEEK_OFFICIAL.baseURL,
             fallbackModel: DEEPSEEK_OFFICIAL.mainModel,
@@ -292,6 +295,7 @@ export function apply(ctx, config = {}) {
         }
         runtime.mainModel = normalizeModelId(saved.mainModel, TOKENSAPI.mainModel)
         runtime.protocolByModel = normalizeProtocolByModel(saved.protocolByModel)
+        runtime.visionModeByModel = normalizeVisionModeByModel(saved.visionModeByModel)
         runtime.visionModel = normalizeModelId(saved.visionModel, TOKENSAPI.visionModel)
         try {
           runtime.fallbackBaseURL = normalizeManagedBaseURL(saved.fallbackBaseURL ?? DEEPSEEK_OFFICIAL.baseURL)
@@ -797,29 +801,30 @@ function modelUsesVisionBridge(info, families = DEFAULT_VISION_FAMILIES) {
 /**
  * Describe how the selected main model receives image input.
  *
- * Explicit provider metadata wins. TokensAPI does not currently return that
- * field, so a small product-verified id table fills the gap for known native
- * multimodal models. Every other managed model uses the selected visual model
- * as a bridge. This fail-safe default keeps unknown/new models selectable in
- * sessions that already contain images without pretending they natively
- * understand the original pixels.
+ * Explicit provider metadata wins. A shared verified table fills the gap for
+ * known routes. Everything else remains `unknown` until the user confirms the
+ * route, so a future model is never silently forced through the visual bridge.
  */
-function managedVisionMode(info) {
-  if (managedModelInput(info).includes('image')) return 'native'
-  return 'bridge'
+function managedVisionMode(info, preferredMode = '') {
+  return managedModelCapability(info, preferredMode).visionMode
 }
 
 function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
-  // Wrap only the text-only members of these families. Their own vision
-  // models (present or future: deepseek-vl/ocr/janus, glm-4.5v, glm-5v-...)
-  // need no bridge and are excluded by name and by declared modality.
+  // Generic routes expose only models that actually need the bridge. The
+  // managed TokensAPI route is different: it is the single product-facing
+  // provider, so it exposes every configured chat model and decides per call
+  // whether to bridge images or pass the original pixels upstream.
   const families = config.families || DEFAULT_VISION_FAMILIES
   const managedTokensApiRoute = config.upstream === TOKENSAPI.providerId
   const managedFallbackRoute = config.upstream === DEEPSEEK_OFFICIAL.upstreamProviderId
-  const shouldWrap = (info) =>
-    managedTokensApiRoute || managedFallbackRoute
-      ? !managedModelInput(info).includes('image')
-      : modelUsesVisionBridge(info, families)
+  const managedRuntime = managedTokensApiRoute ? managerRuntime(ctx) : null
+  const managedMode = (info) => managedVisionMode(info, managedRuntime?.visionModeByModel?.[info?.id])
+  const shouldExpose = (info) =>
+    managedTokensApiRoute
+      ? managedMode(info) !== 'unknown'
+      : managedFallbackRoute
+        ? !managedModelInput(info).includes('image')
+        : modelUsesVisionBridge(info, families)
   if (typeof ctx.llm?.registerAdapter !== 'function' || typeof ctx.llm?.stream !== 'function') {
     return
   }
@@ -834,6 +839,8 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
 
   const registerWrapper = (upstream, providerId, displayName) => {
     const state = { displayName, retryPolicyKey: undefined }
+    const visionModes = new Map()
+    const modelInfos = new Map()
     const withVision = (info) => {
       const inputModalities = Array.isArray(info?.inputModalities) ? [...info.inputModalities] : []
       if (!inputModalities.includes('text')) inputModalities.unshift('text')
@@ -866,14 +873,23 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
         },
         async listModels(_provider, signal) {
           const models = await ctx.llm.listModels(upstream, signal)
-          return models.filter(shouldWrap).map((model) => ({
-            ...withVision(model),
-            name: `${model.name ?? model.id} (modlens vision)`,
-          }))
+          return models.filter(shouldExpose).map((model) => {
+            modelInfos.set(model.id, model)
+            visionModes.set(model.id, managedTokensApiRoute ? managedMode(model) : 'bridge')
+            return {
+              ...withVision(model),
+              name: managedTokensApiRoute ? (model.name ?? model.id) : `${model.name ?? model.id} (modlens vision)`,
+            }
+          })
         },
         async resolveModel(_provider, model, signal) {
           const info = await ctx.llm.resolveModelInfo(upstream, model, signal)
-          if (!shouldWrap(info)) {
+          if (!shouldExpose(info)) {
+            if (managedTokensApiRoute && managedMode(info) === 'unknown') {
+              throw new Error(
+                `model "${model}" does not declare image capability. Confirm whether it uses native images or the TokensAPI vision bridge in TokensAPI model settings.`,
+              )
+            }
             // Refusing is right: wrapping a model that reads images itself
             // would claim a bridge it does not need, hand it text evidence
             // instead of the picture, and lose whatever its own vision does
@@ -892,6 +908,8 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
                 : `model "${model}" is outside the modlens vision wrap scope`,
             )
           }
+          modelInfos.set(model, info)
+          visionModes.set(model, managedTokensApiRoute ? managedMode(info) : 'bridge')
           return { ...withVision(info), id: model }
         },
         stream(options) {
@@ -901,8 +919,33 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
           // Cached per attachment, since the same history rides every step.
           const self = this
           return (async function* () {
-            const converted = await convertImagesToEvidence(ctx, options.messages, options.signal, self)
-            const messages = restoreUpstreamSource(converted, providerId, upstream)
+            let visionMode = visionModes.get(options.model)
+            if (managedTokensApiRoute) {
+              // The user may change an unknown model from native handling to
+              // the visual bridge (or back) while this adapter remains
+              // registered. Re-evaluate the cached model facts against the
+              // current per-model override for every request; otherwise the
+              // first resolved mode remains stuck in visionModes until a full
+              // provider reload. This is an in-memory lookup and does not add
+              // an upstream network request.
+              let info = modelInfos.get(options.model)
+              if (!info) {
+                info = await ctx.llm.resolveModelInfo(upstream, options.model, options.signal)
+                modelInfos.set(options.model, info)
+              }
+              visionMode = managedMode(info)
+              if (visionMode === 'unknown') {
+                throw new Error(
+                  `model "${options.model}" does not declare image capability; confirm its image route in TokensAPI model settings`,
+                )
+              }
+              visionModes.set(options.model, visionMode)
+            }
+            const routedMessages =
+              visionMode === 'native'
+                ? options.messages
+                : await convertImagesToEvidence(ctx, options.messages, options.signal, self)
+            const messages = restoreUpstreamSource(routedMessages, providerId, upstream)
             yield* ctx.llm.stream({ ...options, provider: upstream, messages })
           })()
         },
@@ -1148,7 +1191,7 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
         wrapped.delete(id)
         continue
       }
-      if (!models.some(shouldWrap)) {
+      if (!models.some(shouldExpose)) {
         // No eligible models yet: release, the route may gain some later.
         wrapped.delete(id)
         continue
@@ -2246,26 +2289,80 @@ function normalizeProtocolByModel(value) {
     const model = normalizeModelId(rawModel, '')
     const api = normalizeManagedModelApi(rawApi)
     if (!model || !api || model === '__proto__' || model === 'constructor' || model === 'prototype') continue
-    protocols[model] = api
+    protocols[model] = COMPLETIONS_ONLY_MODEL_IDS.has(model) ? 'openai-completions' : api
   }
   return protocols
 }
 
-function managedModelInput(model) {
+function normalizeVisionMode(value, fallback = '') {
+  return value === 'native' || value === 'bridge' ? value : fallback
+}
+
+function normalizeVisionModeByModel(value) {
+  const modes = {}
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return modes
+  for (const [rawModel, rawMode] of Object.entries(value).slice(0, MAX_MODEL_COUNT)) {
+    const model = normalizeModelId(rawModel, '')
+    const mode = normalizeVisionMode(rawMode)
+    if (!model || !mode || model === '__proto__' || model === 'constructor' || model === 'prototype') continue
+    modes[model] = mode
+  }
+  return modes
+}
+
+function reconcileVisionModeByModel(models, value) {
+  const modes = normalizeVisionModeByModel(value)
+  const available = new Map(models.map((model) => [model.id, model]))
+  for (const modelId of Object.keys(modes)) {
+    const model = available.get(modelId)
+    if (model && managedModelCapability(model).source !== 'unknown') delete modes[modelId]
+  }
+  return modes
+}
+
+function managedModelCapability(model, preferredMode = '') {
   const declared = Array.isArray(model?.input)
     ? model.input
     : Array.isArray(model?.inputModalities)
       ? model.inputModalities
       : []
-  if (declared.includes('image')) return ['text', 'image']
-  if (declared.length > 0) return ['text']
-  return NATIVE_VISION_MODEL_ID.test(String(model?.id ?? '')) ? ['text', 'image'] : ['text']
+  if (declared.includes('image')) {
+    return { input: ['text', 'image'], visionMode: 'native', source: 'provider' }
+  }
+  if (declared.length > 0) {
+    return { input: ['text'], visionMode: 'bridge', source: 'provider' }
+  }
+  const override = normalizeVisionMode(preferredMode)
+  if (override) {
+    return {
+      input: override === 'native' ? ['text', 'image'] : ['text'],
+      visionMode: override,
+      source: 'override',
+    }
+  }
+  const builtin = builtinModelVisionMode(model?.id)
+  if (builtin === 'native') return { input: ['text', 'image'], visionMode: 'native', source: 'builtin' }
+  if (builtin === 'bridge') return { input: ['text'], visionMode: 'bridge', source: 'builtin' }
+  return { input: ['text'], visionMode: 'unknown', source: 'unknown' }
+}
+
+function managedModelInput(model, preferredMode = '') {
+  return managedModelCapability(model, preferredMode).input
 }
 
 function managedModelApis(model) {
   const hasEndpointMetadata = Array.isArray(model?.endpointTypes)
   const endpointTypes = normalizeEndpointTypes(model?.endpointTypes)
-  const isClaude = CLAUDE_MODEL_ID.test(String(model?.id ?? ''))
+  const modelId = normalizeModelId(model?.id, '')
+  const isClaude = CLAUDE_MODEL_ID.test(modelId)
+
+  // TokensAPI advertises Responses compatibility for DeepSeek V4 Flash, but
+  // captured production sessions show repeated tool calls and long-context
+  // stream corruption on that transport. Chat Completions is the supported
+  // stable route until the upstream Responses behavior is fixed.
+  if (COMPLETIONS_ONLY_MODEL_IDS.has(modelId) && (!hasEndpointMetadata || endpointTypes.includes('openai'))) {
+    return ['openai-completions']
+  }
 
   // Older compatible catalogs may omit endpoint metadata. Keep both OpenAI
   // transports selectable there, but default to Chat Completions below. This
@@ -2339,9 +2436,14 @@ function publicModels(runtime) {
     if (!models.some((model) => model.id === id)) models.push({ id, name: id })
   }
   return models.map((model) => {
-    let visionMode = managedVisionMode(model)
+    const capability = managedModelCapability(model, runtime.visionModeByModel[model.id])
+    let visionMode = capability.visionMode
     if (!runtime.visionProviderEnabled && visionMode === 'bridge') visionMode = 'direct'
-    return publicManagedModel(runtime, { ...model, visionMode })
+    return publicManagedModel(runtime, {
+      ...model,
+      visionMode,
+      visionCapabilitySource: capability.source,
+    })
   })
 }
 
@@ -2363,11 +2465,16 @@ async function parseManagedModels(response) {
   for (const entry of payload.data) {
     const id = normalizeModelId(entry?.id, '')
     if (!id || seen.has(id)) continue
+    const endpointTypes = normalizeEndpointTypes(entry?.supported_endpoint_types)
+    const hasEndpointTypes = Array.isArray(entry?.supported_endpoint_types)
+    // A catalog that declares endpoint metadata is authoritative. Keep only
+    // models with at least one chat-capable transport; pure image/video (and
+    // future non-chat-only) models cannot be used as a DSH conversation model.
+    // Catalogs without this optional metadata remain compatible.
+    if (hasEndpointTypes && endpointTypes.length === 0) continue
     seen.add(id)
     const name = normalizeModelId(entry?.name, id)
     const ownedBy = normalizeModelId(entry?.owned_by, '')
-    const endpointTypes = normalizeEndpointTypes(entry?.supported_endpoint_types)
-    const hasEndpointTypes = Array.isArray(entry?.supported_endpoint_types)
     const declaredInput = Array.isArray(entry?.input_modalities)
       ? entry.input_modalities
       : Array.isArray(entry?.input)
@@ -2397,30 +2504,59 @@ async function parseManagedModels(response) {
 async function resolveManagedMainRoute(ctx, mainModel) {
   const runtime = managerRuntime(ctx)
   const selected = runtime.models.find((model) => model.id === mainModel) ?? { id: mainModel, name: mainModel }
-  const input = managedModelInput(selected)
+  const capability = managedModelCapability(selected, runtime.visionModeByModel[mainModel])
+  if (capability.visionMode === 'unknown') {
+    throw new ManagedCredentialError(
+      'unknown_capability',
+      `模型 "${mainModel}" 没有声明图片能力，请选择由主模型原生处理图片或使用视觉模型处理`,
+    )
+  }
+  const input = capability.input
   const api = configuredManagedModelApi(selected, runtime.protocolByModel[mainModel])
-  let visionMode = managedVisionMode({ ...selected, inputModalities: input })
+  let visionMode = capability.visionMode
   if (!runtime.visionProviderEnabled && visionMode === 'bridge') visionMode = 'direct'
   return {
-    provider: visionMode === 'bridge' ? TOKENSAPI.agentProviderId : TOKENSAPI.providerId,
+    provider: runtime.visionProviderEnabled ? TOKENSAPI.agentProviderId : TOKENSAPI.providerId,
     visionMode,
     api,
     input,
   }
 }
 
+function managedConversationModels(runtime, models, api) {
+  const visible = []
+  for (const model of models) {
+    try {
+      if (!managedModelApis(model).includes(api)) continue
+    } catch {
+      continue
+    }
+    const capability = managedModelCapability(model, runtime.visionModeByModel[model.id])
+    if (capability.visionMode === 'unknown') continue
+    const contextWindow = managedModelContextWindow(model)
+    const maxTokens = managedModelMaxTokens(model)
+    visible.push({
+      id: model.id,
+      name: model.name ?? model.id,
+      input: capability.input,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(maxTokens === undefined ? {} : { maxTokens }),
+    })
+  }
+  return visible
+}
+
 async function synchronizeMainModel(ctx, mainModel, models) {
   const runtime = managerRuntime(ctx)
   const route = await resolveManagedMainRoute(ctx, mainModel)
   if (runtime.settings?.update) {
-    // The settings page needs the complete TokensAPI response so users can
-    // choose a model, but the conversation model directory is a different
-    // surface: it must advertise only the managed main model. The modlens
-    // wrapper mirrors this upstream catalog, so narrowing it here also keeps
-    // unrelated chat and vision-wrapper models out of the composer picker.
+    // The settings page owns the default model, while the conversation picker
+    // may temporarily select any model compatible with the active protocol.
+    // The client projection below removes wrapper duplicates and unrelated
+    // providers before the catalog reaches the public composer.
     const selected = models.find((model) => model.id === mainModel)
     const contextWindow = managedModelContextWindow(selected ?? { id: mainModel })
-    const maxTokens = managedModelMaxTokens(selected ?? { id: mainModel })
+    const conversationModels = managedConversationModels(runtime, models, route.api)
     await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
       providers: {
         [TOKENSAPI.providerId]: {
@@ -2429,15 +2565,7 @@ async function synchronizeMainModel(ctx, mainModel, models) {
           api: route.api,
           baseURL: runtime.baseURL,
           ...(contextWindow === undefined ? {} : { defaultContextWindow: contextWindow }),
-          models: [
-            {
-              id: mainModel,
-              name: selected?.name ?? mainModel,
-              input: route.input,
-              ...(contextWindow === undefined ? {} : { contextWindow }),
-              ...(maxTokens === undefined ? {} : { maxTokens }),
-            },
-          ],
+          models: conversationModels,
         },
       },
     })
@@ -2482,6 +2610,9 @@ async function parseFallbackModels(response) {
   for (const entry of payload.data) {
     const id = normalizeModelId(entry?.id, '')
     if (!id || seen.has(id)) continue
+    const endpointTypes = normalizeEndpointTypes(entry?.supported_endpoint_types)
+    const hasEndpointTypes = Array.isArray(entry?.supported_endpoint_types)
+    if (hasEndpointTypes && endpointTypes.length === 0) continue
     seen.add(id)
     models.push({ id, name: normalizeModelId(entry?.name, id) })
   }
@@ -2520,7 +2651,10 @@ async function validateFallbackCredential(apiKey, baseURL, request = globalThis.
 async function synchronizeFallbackModel(ctx) {
   const runtime = managerRuntime(ctx)
   if (!runtime.fallbackModel) return
-  const selected = runtime.fallbackModels.find((model) => model.id === runtime.fallbackModel)
+  const models =
+    runtime.fallbackModels.length > 0
+      ? runtime.fallbackModels
+      : [{ id: runtime.fallbackModel, name: runtime.fallbackModel }]
   if (runtime.settings?.update) {
     await runtime.settings.update(DEEPSEEK_OFFICIAL.settingsNamespace, {
       providers: {
@@ -2529,13 +2663,11 @@ async function synchronizeFallbackModel(ctx) {
           apiKeyEnv: DEEPSEEK_OFFICIAL.credentialRef,
           api: DEEPSEEK_OFFICIAL.api,
           baseURL: runtime.fallbackBaseURL,
-          models: [
-            {
-              id: runtime.fallbackModel,
-              name: selected?.name ?? runtime.fallbackModel,
-              input: ['text'],
-            },
-          ],
+          models: models.map((model) => ({
+            id: model.id,
+            name: model.name ?? model.id,
+            input: ['text'],
+          })),
         },
       },
     })
@@ -2608,7 +2740,17 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
         resolvedCredentialValue(await ctx.credentials.resolve(TOKENSAPI.credentialRef)),
         request,
       )
+      const previousVisionModeByModel = runtime.visionModeByModel
+      runtime.visionModeByModel = reconcileVisionModeByModel(runtime.models, runtime.visionModeByModel)
       await synchronizeMainModel(ctx, runtime.mainModel, runtime.models)
+      if (
+        runtime.settings?.update &&
+        JSON.stringify(previousVisionModeByModel) !== JSON.stringify(runtime.visionModeByModel)
+      ) {
+        await runtime.settings.update(TOKENSAPI.settingsNamespace, {
+          visionModeByModel: runtime.visionModeByModel,
+        })
+      }
     } catch (error) {
       modelListError = String(error?.message ?? error)
     }
@@ -2736,11 +2878,22 @@ async function setManagedCredential(ctx, value, request = globalThis.fetch) {
   const models = await validateManagedCredential(apiKey, request)
   const runtime = managerRuntime(ctx)
   const previousModels = runtime.models
+  const previousVisionModeByModel = runtime.visionModeByModel
   runtime.models = models
+  runtime.visionModeByModel = reconcileVisionModeByModel(models, runtime.visionModeByModel)
   try {
     await synchronizeMainModel(ctx, runtime.mainModel, models)
+    if (
+      runtime.settings?.update &&
+      JSON.stringify(previousVisionModeByModel) !== JSON.stringify(runtime.visionModeByModel)
+    ) {
+      await runtime.settings.update(TOKENSAPI.settingsNamespace, {
+        visionModeByModel: runtime.visionModeByModel,
+      })
+    }
   } catch (error) {
     runtime.models = previousModels
+    runtime.visionModeByModel = previousVisionModeByModel
     throw error
   }
   await ctx.credentials.set(TOKENSAPI.credentialRef, apiKey)
@@ -2769,10 +2922,28 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
   const api = Object.hasOwn(value ?? {}, 'api')
     ? managedModelApi(selected, value.api)
     : configuredManagedModelApi(selected, runtime.protocolByModel[mainModel])
+  const automaticCapability = managedModelCapability(selected)
+  const nextVisionModeByModel = reconcileVisionModeByModel(runtime.models, runtime.visionModeByModel)
+  if (automaticCapability.source === 'unknown') {
+    const requestedMode = Object.hasOwn(value ?? {}, 'visionMode')
+      ? normalizeVisionMode(value.visionMode)
+      : normalizeVisionMode(runtime.visionModeByModel[mainModel])
+    if (!requestedMode) {
+      throw new ManagedCredentialError(
+        'unknown_capability',
+        `模型 "${mainModel}" 没有声明图片能力，请先选择图片处理方式`,
+      )
+    }
+    nextVisionModeByModel[mainModel] = requestedMode
+  } else {
+    delete nextVisionModeByModel[mainModel]
+  }
   const previousBaseURL = runtime.baseURL
   const previousProtocolByModel = runtime.protocolByModel
+  const previousVisionModeByModel = runtime.visionModeByModel
   runtime.baseURL = baseURL
   runtime.protocolByModel = { ...runtime.protocolByModel, [mainModel]: api }
+  runtime.visionModeByModel = nextVisionModeByModel
   try {
     await synchronizeMainModel(ctx, mainModel, runtime.models)
     if (runtime.settings?.update) {
@@ -2780,12 +2951,14 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
         baseURL,
         mainModel,
         protocolByModel: runtime.protocolByModel,
+        visionModeByModel: runtime.visionModeByModel,
         visionModel,
       })
     }
   } catch (error) {
     runtime.baseURL = previousBaseURL
     runtime.protocolByModel = previousProtocolByModel
+    runtime.visionModeByModel = previousVisionModeByModel
     await synchronizeMainModel(ctx, runtime.mainModel, runtime.models).catch(() => {})
     throw error
   }
@@ -3156,6 +3329,9 @@ export const __modelManager = {
   managedModelApis,
   managedModelApi,
   normalizeProtocolByModel,
+  normalizeVisionModeByModel,
+  reconcileVisionModeByModel,
+  managedModelCapability,
   managedModelInput,
   managedModelContextWindow,
   managedModelMaxTokens,

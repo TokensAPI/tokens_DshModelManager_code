@@ -7,52 +7,14 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { globMatch } from '../guard/rules.ts';
+import { isBuiltinVisionModel } from '../../dsh/modelCapabilities.js';
 import { findOnPath } from '../providers/availability.ts';
 import { redactSecrets } from '../util/redact.ts';
 import { execFileSyncHidden } from '../util/spawnHidden.ts';
 import { resolveSpawnPlan } from '../util/winExec.ts';
 
-/**
- * Mainstream vision-capable model names, as glob patterns against the bare
- * model id (a provider/ prefix is stripped before matching). Deliberately
- * hardcoded: the field moves fast but a release cadence keeps up, and harness
- * metadata (codex input_modalities, pi input) outranks this table wherever it
- * exists. Snapshot: 2026-08.
- */
-const VISION_MODEL_PATTERNS = [
-    'claude-*',
-    'gpt-4o*',
-    'gpt-4.1*',
-    'gpt-5*',
-    'o3*',
-    'o4*',
-    'gemini-*',
-    'glm-*v*',
-    'qwen*-vl*',
-    'qwen3.5-plus*',
-    'qwen3.6-plus*',
-    'kimi-k2.5*',
-    'kimi-k2.6*',
-    'kimi-k2.7*',
-    'kimi-k3*',
-    'moonshot-v1-*vision*',
-    'minimax-vl*',
-    'minimax-m3*',
-    'deepseek-vl*',
-    'deepseek-ocr*',
-    'janus*',
-    'pixtral*',
-    'llama-4*',
-    'llama-3.2-*vision*',
-    'grok-4*',
-    'grok-2-vision*',
-    'internvl*',
-];
-
 export function isVisionModel(modelId: string): boolean {
-    const bare = modelId.includes('/') ? modelId.slice(modelId.lastIndexOf('/') + 1) : modelId;
-    return VISION_MODEL_PATTERNS.some((pattern) => globMatch(pattern, bare));
+    return isBuiltinVisionModel(modelId);
 }
 
 export type AutoHarness = 'claude-code' | 'codex' | 'opencode' | 'pi' | 'grok';

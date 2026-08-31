@@ -136,6 +136,81 @@ window.__ModuleLoader__.load({
       refreshVerdict(currentModelLabel())
     }
 
+    /**
+     * Skip the upstream selector's otherwise-empty root pane.
+     *
+     * DSH normally opens a Model / Reasoning pair before the actual model
+     * list. TokensAPI models currently expose no selectable reasoning levels,
+     * so that root contains only one "Model" row and costs an unnecessary
+     * second click. Auto-drill only in that exact one-row case. If a future
+     * model exposes reasoning levels, the two-row upstream menu remains
+     * untouched so users can still choose them.
+     */
+    function singleModelMenuItem(trigger) {
+      if (trigger?.getAttribute('aria-expanded') !== 'true') return null
+      var menuId = trigger.getAttribute('aria-controls')
+      var menu = menuId && typeof document.getElementById === 'function' ? document.getElementById(menuId) : null
+      if (!menu || typeof menu.querySelectorAll !== 'function') return null
+      if (menu.querySelectorAll('[role="menuitemradio"]').length > 0) return null
+      var rootItems = menu.querySelectorAll('button[role="menuitem"]')
+      return rootItems.length === 1 ? rootItems[0] : null
+    }
+
+    var modelMenuDrillEpoch = 0
+
+    function onModelSelectClick(event) {
+      var target = event?.target
+      var trigger =
+        target && typeof target.closest === 'function' ? target.closest('button[aria-haspopup="menu"]') : null
+      if (!trigger) return
+      var label = trigger.getAttribute('aria-label') || ''
+      if (!/选择模型|select model|current model/i.test(label)) return
+
+      var epoch = modelMenuDrillEpoch
+      var attempts = 0
+      var drill = () => {
+        if (epoch !== modelMenuDrillEpoch) return
+        var item = singleModelMenuItem(trigger)
+        if (item && typeof item.click === 'function') {
+          item.click()
+          return
+        }
+        attempts += 1
+        if (attempts < 4 && trigger.getAttribute('aria-expanded') !== 'false') {
+          window.requestAnimationFrame(drill)
+        }
+      }
+      window.requestAnimationFrame(drill)
+    }
+
+    var MODEL_MENU_STYLE_ID = 'tokens-model-manager-menu-style'
+    var MODEL_MENU_STYLE = `
+[role="menu"][aria-label="模型与推理等级"] [role="group"] > [id]:first-child,
+[role="menu"][aria-label="Model and reasoning effort"] [role="group"] > [id]:first-child {
+  background: color-mix(in srgb, Canvas 94%, var(--theme-accent-primary, currentColor) 6%) !important;
+  box-shadow: 0 1px 0 var(--theme-border-subtle, var(--dsw-alias-border-l1, transparent));
+}`
+
+    /**
+     * Keep the sticky provider heading opaque inside the tenant's glass menu.
+     * The product theme intentionally makes floating menus translucent, but a
+     * sticky heading must cover the rows scrolling underneath it or the group
+     * name appears offset and mixed with model text.
+     */
+    function installModelMenuStyle() {
+      var root = document.head || document.documentElement
+      if (!root || typeof document.createElement !== 'function' || typeof root.appendChild !== 'function') {
+        return () => {}
+      }
+      var previous = document.getElementById?.(MODEL_MENU_STYLE_ID)
+      if (previous && typeof previous.remove === 'function') previous.remove()
+      var style = document.createElement('style')
+      style.id = MODEL_MENU_STYLE_ID
+      style.textContent = MODEL_MENU_STYLE
+      root.appendChild(style)
+      return () => style.remove()
+    }
+
     function onPaste(event) {
       if (!routeAvailable) return
       var files = imageFilesOf(event)
@@ -843,6 +918,7 @@ window.__ModuleLoader__.load({
         sessionSwitchFailed: 'Settings were saved, but the current session could not switch: ',
         modelsUnavailable: 'The model list is temporarily unavailable.',
         stored: 'Saved API key',
+        maskedKey: '••••••••••••••••',
         keyHint: 'Use Show or Copy, or type a new key to replace the saved value.',
         copy: 'Copy',
         copied: 'API key copied',
@@ -853,11 +929,15 @@ window.__ModuleLoader__.load({
         protocol: 'Request protocol',
         protocolHint: 'Applies to new requests. Start a new conversation when changing protocol for an active task.',
         vision: 'Vision model',
+        imageHandling: 'Image handling',
+        nativeImageChoice: 'Use main model natively',
+        bridgeImageChoice: 'Use vision model',
         nativeVision: 'Conversations and images are both handled natively by {mainModel}.',
         bridgeVision:
           'Conversations are handled by {mainModel}. Images are read by {visionModel} and passed to the main model.',
         directVision:
           'Conversations are handled by {mainModel}. Images are unavailable because native image support is not confirmed and the vision bridge is disabled.',
+        unknownVision: '{mainModel} does not publish image capability. Choose how images are handled before saving.',
         endpoint: 'Endpoint',
         gateTitle: 'Enter your TokensAPI API key',
         gateIntro: 'The key is verified before Desktop opens. Chat and vision stay locked until verification succeeds.',
@@ -877,12 +957,12 @@ window.__ModuleLoader__.load({
         officialIntro:
           'This route has its own endpoint, model, and API key. It never changes the TokensAPI sign-in key; images continue through the existing TokensAPI vision bridge.',
         officialKey: 'Fallback API Key',
-        officialStored: 'Fallback API key saved',
         officialFetchModels: 'Get models',
         officialFetchingModels: 'Getting models...',
-        officialModelsLoaded: '{count} models loaded from the current endpoint. Select one before switching.',
+        officialModelsLoaded:
+          '{count} models loaded from the current endpoint. The first model is selected by default.',
         officialModelsHint: 'Enter the endpoint and fallback API key, then get the model list from /models.',
-        officialSaveSwitch: 'Save and switch',
+        officialSave: 'Save fallback settings',
         officialSwitch: 'Switch to fallback',
         officialActive: 'Fallback route active',
         backTokens: 'Back to TokensAPI',
@@ -903,6 +983,7 @@ window.__ModuleLoader__.load({
         sessionSwitchFailed: '配置已保存，但当前会话切换失败：',
         modelsUnavailable: '暂时无法获取模型列表。',
         stored: 'API Key 已保存',
+        maskedKey: '••••••••••••••••',
         keyHint: '可点击“显示”或“复制”，也可以直接输入新 Key 进行替换。',
         copy: '复制',
         copied: 'API Key 已复制',
@@ -913,9 +994,13 @@ window.__ModuleLoader__.load({
         protocol: '请求协议',
         protocolHint: '从下一次请求开始生效；进行中的任务切换协议后，建议新建会话。',
         vision: '视觉模型',
+        imageHandling: '图片处理方式',
+        nativeImageChoice: '主模型原生处理',
+        bridgeImageChoice: '使用视觉模型处理',
         nativeVision: '对话和图片均由 {mainModel} 原生处理。',
         bridgeVision: '对话由 {mainModel} 处理，图片由 {visionModel} 读取后交给主模型。',
         directVision: '对话由 {mainModel} 处理；由于未确认原生图片能力且视觉桥接已关闭，当前不能处理图片。',
+        unknownVision: '{mainModel} 没有声明图片能力，请先选择图片处理方式再保存。',
         endpoint: '接口地址',
         gateTitle: '请输入 TokensAPI API Key',
         gateIntro: 'Desktop 会先验证 Key；验证成功前，聊天和识图功能保持锁定。',
@@ -935,12 +1020,11 @@ window.__ModuleLoader__.load({
         officialIntro:
           '这里使用独立的请求地址、模型和 API Key，不会修改 TokensAPI 登录 Key；图片继续使用现有 TokensAPI 视觉桥接。',
         officialKey: '备用线路 API Key',
-        officialStored: '备用线路 API Key 已保存',
         officialFetchModels: '获取模型',
         officialFetchingModels: '正在获取模型…',
-        officialModelsLoaded: '已从当前接口获取 {count} 个模型，请选择后再切换。',
+        officialModelsLoaded: '已从当前接口获取 {count} 个模型，并默认选中第一个模型。',
         officialModelsHint: '填写接口地址和备用线路 API Key，然后从 /models 获取真实模型列表。',
-        officialSaveSwitch: '保存并切换备用线路',
+        officialSave: '保存备用线路配置',
         officialSwitch: '切换备用线路',
         officialActive: '当前正在使用备用线路',
         backTokens: '切回 TokensAPI',
@@ -974,7 +1058,12 @@ window.__ModuleLoader__.load({
 
     function selectedModelVisionMode(state, mainModel) {
       var selected = Array.isArray(state?.models) ? state.models.find((model) => model?.id === mainModel) : null
-      if (selected?.visionMode === 'native' || selected?.visionMode === 'bridge' || selected?.visionMode === 'direct') {
+      if (
+        selected?.visionMode === 'native' ||
+        selected?.visionMode === 'bridge' ||
+        selected?.visionMode === 'direct' ||
+        selected?.visionMode === 'unknown'
+      ) {
         return selected.visionMode
       }
       if (
@@ -983,7 +1072,12 @@ window.__ModuleLoader__.load({
       ) {
         return state.visionMode
       }
-      return 'bridge'
+      return 'unknown'
+    }
+
+    function selectedModelVisionSource(state, mainModel) {
+      var selected = Array.isArray(state?.models) ? state.models.find((model) => model?.id === mainModel) : null
+      return typeof selected?.visionCapabilitySource === 'string' ? selected.visionCapabilitySource : 'unknown'
     }
 
     function selectedModelProtocol(state, mainModel) {
@@ -995,7 +1089,13 @@ window.__ModuleLoader__.load({
 
     function modelRouteDescription(t, visionMode, mainModel, visionModel) {
       var template =
-        visionMode === 'native' ? t.nativeVision : visionMode === 'bridge' ? t.bridgeVision : t.directVision
+        visionMode === 'native'
+          ? t.nativeVision
+          : visionMode === 'bridge'
+            ? t.bridgeVision
+            : visionMode === 'unknown'
+              ? t.unknownVision
+              : t.directVision
       return template.replace('{mainModel}', mainModel || '—').replace('{visionModel}', visionModel || '—')
     }
 
@@ -1193,6 +1293,7 @@ window.__ModuleLoader__.load({
         var mainPair = react.useState('')
         var protocolPair = react.useState('')
         var visionPair = react.useState('')
+        var visionHandlingPair = react.useState('')
         var revealPair = react.useState(false)
         var officialRevealPair = react.useState(false)
         var officialPanelPair = react.useState(false)
@@ -1210,6 +1311,7 @@ window.__ModuleLoader__.load({
         var mainModel = mainPair[0]
         var protocol = protocolPair[0]
         var visionModel = visionPair[0]
+        var visionHandling = visionHandlingPair[0]
         var keyVisible = revealPair[0]
         var officialKeyVisible = officialRevealPair[0]
         var officialPanelOpen = officialPanelPair[0]
@@ -1222,13 +1324,30 @@ window.__ModuleLoader__.load({
         // active route is tracked independently by state.channel.
         var officialPanel = officialPanelOpen
         var routeControl = routeControlState(state?.channel, officialPanel)
-        var draftVisionMode = selectedModelVisionMode(state, mainModel)
+        var selectedVisionSource = selectedModelVisionSource(state, mainModel)
+        var automaticVisionMode = selectedModelVisionMode(state, mainModel)
+        var draftVisionMode =
+          selectedVisionSource === 'unknown' || selectedVisionSource === 'override'
+            ? visionHandling || automaticVisionMode
+            : automaticVisionMode
         var routeDescription = modelRouteDescription(t, draftVisionMode, mainModel, visionModel)
+        var savedVisionHandling =
+          selectedModelVisionSource(state, state?.mainModel) === 'override'
+            ? selectedModelVisionMode(state, state?.mainModel)
+            : ''
         var routingDirty =
           baseURL.trim() !== (state?.baseURL || '') ||
           mainModel !== state?.mainModel ||
           protocol !== state?.api ||
-          visionModel !== state?.visionModel
+          visionModel !== state?.visionModel ||
+          visionHandling !== savedVisionHandling
+        var saveModelsDisabled =
+          busy ||
+          !baseURL.trim() ||
+          !protocol ||
+          draftVisionMode === 'unknown' ||
+          !state?.modelsAvailable ||
+          !routingDirty
         var fallbackDirty =
           fallbackBaseURL.trim() !== (state?.official?.baseURL || '') || fallbackModel !== state?.official?.mainModel
 
@@ -1247,6 +1366,11 @@ window.__ModuleLoader__.load({
                 mainPair[1](body.mainModel || '')
                 protocolPair[1](body.api || '')
                 visionPair[1](body.visionModel || '')
+                visionHandlingPair[1](
+                  selectedModelVisionSource(body, body.mainModel) === 'override'
+                    ? selectedModelVisionMode(body, body.mainModel)
+                    : '',
+                )
                 fallbackBasePair[1](body.official?.baseURL || 'https://api.deepseek.com')
                 fallbackModelsPair[1](Array.isArray(body.official?.models) ? body.official.models : [])
                 fallbackModelPair[1](body.official?.configured ? body.official?.mainModel || '' : '')
@@ -1292,6 +1416,11 @@ window.__ModuleLoader__.load({
               mainPair[1](body.mainModel || '')
               protocolPair[1](body.api || '')
               visionPair[1](body.visionModel || '')
+              visionHandlingPair[1](
+                selectedModelVisionSource(body, body.mainModel) === 'override'
+                  ? selectedModelVisionMode(body, body.mainModel)
+                  : '',
+              )
               keyPair[1]('')
               revealPair[1](false)
               var selection = activeSelectionFromStatus(body)
@@ -1309,13 +1438,28 @@ window.__ModuleLoader__.load({
 
         var saveModels = (event) => {
           event.preventDefault()
-          if (!baseURL.trim() || !mainModel || !protocol || !visionModel || busy || !state?.modelsAvailable) return
+          if (
+            !baseURL.trim() ||
+            !mainModel ||
+            !protocol ||
+            !visionModel ||
+            draftVisionMode === 'unknown' ||
+            busy ||
+            !state?.modelsAvailable
+          )
+            return
           busyPair[1](true)
           notePair[1]('')
           fetch('/tokens/model-manager', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ baseURL: baseURL, mainModel: mainModel, api: protocol, visionModel: visionModel }),
+            body: JSON.stringify({
+              baseURL: baseURL,
+              mainModel: mainModel,
+              api: protocol,
+              visionModel: visionModel,
+              visionMode: draftVisionMode,
+            }),
           })
             .then((response) =>
               response.json().then((body) => {
@@ -1329,6 +1473,11 @@ window.__ModuleLoader__.load({
               mainPair[1](body.mainModel || '')
               protocolPair[1](body.api || '')
               visionPair[1](body.visionModel || '')
+              visionHandlingPair[1](
+                selectedModelVisionSource(body, body.mainModel) === 'override'
+                  ? selectedModelVisionMode(body, body.mainModel)
+                  : '',
+              )
               var selection = activeSelectionFromStatus(body)
               return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider))
                 .then(() => notePair[1](t.modelsSaved))
@@ -1455,7 +1604,7 @@ window.__ModuleLoader__.load({
               var models = Array.isArray(body.models) ? body.models : []
               if (models.length === 0) throw new Error(t.modelsUnavailable)
               fallbackModelsPair[1](models)
-              fallbackModelPair[1](models.some((model) => model.id === fallbackModel) ? fallbackModel : '')
+              fallbackModelPair[1](models[0].id)
               notePair[1](t.officialModelsLoaded.replace('{count}', String(models.length)))
             })
             .catch((error) => notePair[1](String(error.message || error)))
@@ -1508,18 +1657,48 @@ window.__ModuleLoader__.load({
             .finally(() => busyPair[1](false))
         }
 
-        var routeStatusCard = () => {
+        var fallbackRouteAction = () => {
           if (!state) return null
-          var currentRouteName = routeControl.activeChannel === 'official' ? t.fallbackRoute : t.tokensRoute
           var switchFallbackDisabled =
             busy ||
             !fallbackBaseURL.trim() ||
             !fallbackModel ||
             !fallbackModels.some((model) => model.id === fallbackModel) ||
-            (!officialApiKey.trim() && !state.official?.configured)
-          var actionDisabled = busy || (routeControl.action === 'switchOfficial' && switchFallbackDisabled)
-          var actionLabel = routeControl.action === 'switchOfficial' ? t.officialSwitch : t.backTokens
-          var performAction = routeControl.action === 'switchOfficial' ? switchOfficial : switchTokens
+            (!officialApiKey.trim() && !state.official?.configured) ||
+            (officialApiKey.trim() && state.official?.writable === false)
+          var saveFallbackDraft = Boolean(officialApiKey.trim() || fallbackDirty)
+          var returnToTokens = state.channel === 'official' && !saveFallbackDraft
+          var actionDisabled = busy || (!returnToTokens && switchFallbackDisabled)
+          var actionLabel = returnToTokens ? t.backTokens : saveFallbackDraft ? t.officialSave : t.officialSwitch
+          var performFallbackRouteAction = returnToTokens ? switchTokens : switchOfficial
+
+          return h(
+            'button',
+            {
+              type: 'button',
+              disabled: actionDisabled,
+              onClick: performFallbackRouteAction,
+              style: {
+                marginTop: 16,
+                padding: '9px 16px',
+                border: 0,
+                borderRadius: 8,
+                cursor: actionDisabled ? 'not-allowed' : 'pointer',
+                background: 'var(--dsw-alias-state-business-primary)',
+                color: '#fff',
+                fontWeight: 700,
+                boxShadow: actionDisabled ? 'none' : '0 1px 3px rgba(0, 0, 0, 0.18)',
+                opacity: actionDisabled ? 0.5 : 1,
+              },
+            },
+            actionLabel,
+          )
+        }
+
+        var routeStatusCard = () => {
+          if (!state) return null
+          var currentRouteName = routeControl.activeChannel === 'official' ? t.fallbackRoute : t.tokensRoute
+          var showReturnAction = !officialPanel && routeControl.action === 'switchTokensAPI'
 
           return h(
             'div',
@@ -1546,38 +1725,41 @@ window.__ModuleLoader__.load({
               ),
               h('strong', null, currentRouteName),
             ),
-            routeControl.pageActive
+            showReturnAction
               ? h(
-                  'span',
-                  {
-                    style: {
-                      flexShrink: 0,
-                      color: 'var(--dsw-alias-state-success-primary)',
-                      fontWeight: 700,
-                    },
-                  },
-                  t.routeActive,
-                )
-              : h(
                   'button',
                   {
                     type: 'button',
-                    disabled: actionDisabled,
-                    onClick: performAction,
+                    disabled: busy,
+                    onClick: switchTokens,
                     style: {
                       flexShrink: 0,
                       padding: '8px 14px',
                       border: 0,
                       borderRadius: 8,
-                      cursor: 'pointer',
+                      cursor: busy ? 'wait' : 'pointer',
                       background: 'var(--dsw-alias-state-business-primary)',
-                      color: 'var(--dsw-alias-bg-layer-2)',
+                      color: '#fff',
                       fontWeight: 700,
-                      opacity: actionDisabled ? 0.5 : 1,
+                      boxShadow: busy ? 'none' : '0 1px 3px rgba(0, 0, 0, 0.18)',
+                      opacity: busy ? 0.5 : 1,
                     },
                   },
-                  actionLabel,
-                ),
+                  t.backTokens,
+                )
+              : routeControl.pageActive
+                ? h(
+                    'span',
+                    {
+                      style: {
+                        flexShrink: 0,
+                        color: 'var(--dsw-alias-state-success-primary)',
+                        fontWeight: 700,
+                      },
+                    },
+                    t.routeActive,
+                  )
+                : null,
           )
         }
 
@@ -1838,6 +2020,69 @@ window.__ModuleLoader__.load({
           )
         }
 
+        var visionHandlingRow = () => {
+          if (selectedVisionSource !== 'unknown' && selectedVisionSource !== 'override') return null
+          var options = [
+            { id: 'native', label: t.nativeImageChoice },
+            { id: 'bridge', label: t.bridgeImageChoice },
+          ]
+          return h(
+            'div',
+            { style: { display: 'grid', gridTemplateColumns: '120px 1fr', gap: 12, padding: '8px 0' } },
+            h('span', { style: { color: 'var(--dsw-alias-label-secondary, #666)', paddingTop: 10 } }, t.imageHandling),
+            h(
+              'div',
+              {
+                role: 'radiogroup',
+                'aria-label': t.imageHandling,
+                style: {
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                  gap: 6,
+                  padding: 4,
+                  border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+                  borderRadius: 10,
+                  background: 'var(--dsw-alias-bg-layer-2)',
+                },
+              },
+              options.map((option) =>
+                h(
+                  'button',
+                  {
+                    key: option.id,
+                    type: 'button',
+                    role: 'radio',
+                    'aria-checked': draftVisionMode === option.id,
+                    disabled: busy,
+                    onClick: () => {
+                      visionHandlingPair[1](option.id)
+                      notePair[1]('')
+                    },
+                    style: {
+                      minHeight: 36,
+                      padding: '7px 10px',
+                      border:
+                        draftVisionMode === option.id
+                          ? '1px solid var(--dsw-alias-state-business-primary)'
+                          : '1px solid transparent',
+                      borderRadius: 7,
+                      background:
+                        draftVisionMode === option.id
+                          ? 'var(--dsw-alias-background-selected, var(--dsw-alias-bg-layer-1))'
+                          : 'transparent',
+                      color: 'inherit',
+                      font: 'inherit',
+                      fontWeight: draftVisionMode === option.id ? 700 : 500,
+                      cursor: busy ? 'default' : 'pointer',
+                    },
+                  },
+                  option.label,
+                ),
+              ),
+            ),
+          )
+        }
+
         var routeNote = () =>
           h(
             'div',
@@ -1913,13 +2158,18 @@ window.__ModuleLoader__.load({
                     (value) => {
                       mainPair[1](value)
                       protocolPair[1](selectedModelProtocol(state, value))
+                      visionHandlingPair[1](
+                        selectedModelVisionSource(state, value) === 'override'
+                          ? selectedModelVisionMode(state, value)
+                          : '',
+                      )
                     },
                     'main',
                   ),
                   protocolRow(),
-                  draftVisionMode === 'bridge'
-                    ? h('div', null, modelRow(t.vision, visionModel, visionPair[1], 'vision'), routeNote())
-                    : routeNote(),
+                  visionHandlingRow(),
+                  draftVisionMode === 'bridge' ? modelRow(t.vision, visionModel, visionPair[1], 'vision') : null,
+                  routeNote(),
                   !state.modelsAvailable
                     ? h(
                         'p',
@@ -1931,18 +2181,18 @@ window.__ModuleLoader__.load({
                     'button',
                     {
                       type: 'submit',
-                      disabled: busy || !baseURL.trim() || !protocol || !state.modelsAvailable || !routingDirty,
+                      disabled: saveModelsDisabled,
                       style: {
                         marginTop: 10,
                         padding: '9px 16px',
                         border: 0,
                         borderRadius: 8,
-                        cursor: 'pointer',
+                        cursor: saveModelsDisabled ? 'not-allowed' : 'pointer',
                         background: 'var(--dsw-alias-state-business-primary)',
-                        color: 'var(--dsw-alias-bg-layer-2)',
+                        color: '#fff',
                         fontWeight: 700,
-                        opacity:
-                          busy || !baseURL.trim() || !protocol || !state.modelsAvailable || !routingDirty ? 0.5 : 1,
+                        boxShadow: saveModelsDisabled ? 'none' : '0 1px 3px rgba(0, 0, 0, 0.18)',
+                        opacity: saveModelsDisabled ? 0.5 : 1,
                       },
                     },
                     busy ? t.saving : t.saveModels,
@@ -1981,7 +2231,7 @@ window.__ModuleLoader__.load({
                   h('input', {
                     value: apiKey,
                     disabled: busy || (state && state.writable === false),
-                    placeholder: state?.configured ? t.stored : t.key,
+                    placeholder: state?.configured ? t.maskedKey : t.key,
                     onChange: (event) => {
                       keyPair[1](event.target.value)
                       notePair[1]('')
@@ -2072,10 +2322,14 @@ window.__ModuleLoader__.load({
                       padding: '9px 16px',
                       border: 0,
                       borderRadius: 8,
-                      cursor: 'pointer',
+                      cursor: busy || !apiKey.trim() || (state && state.writable === false) ? 'not-allowed' : 'pointer',
                       background: 'var(--dsw-alias-state-business-primary)',
-                      color: 'var(--dsw-alias-bg-layer-2)',
+                      color: '#fff',
                       fontWeight: 700,
+                      boxShadow:
+                        busy || !apiKey.trim() || (state && state.writable === false)
+                          ? 'none'
+                          : '0 1px 3px rgba(0, 0, 0, 0.18)',
                       opacity: busy || !apiKey.trim() || (state && state.writable === false) ? 0.5 : 1,
                     },
                   },
@@ -2086,15 +2340,15 @@ window.__ModuleLoader__.load({
           officialPanel && state
             ? h(
                 'div',
-                null,
+                { style: { display: 'flex', flexDirection: 'column' } },
                 h(
                   'div',
                   {
                     style: {
+                      order: 2,
                       border: '1px solid var(--dsw-alias-border-l2, #ddd)',
                       borderRadius: 12,
                       padding: 16,
-                      marginBottom: 16,
                     },
                   },
                   endpointRow(fallbackBaseURL, (value) => {
@@ -2108,20 +2362,6 @@ window.__ModuleLoader__.load({
                     'fallback-main',
                     fallbackModels,
                     fallbackModels.length > 0,
-                  ),
-                  h(
-                    'p',
-                    {
-                      style: {
-                        margin: '4px 0 0 132px',
-                        color: 'var(--dsw-alias-label-secondary, #666)',
-                        fontSize: 13,
-                        lineHeight: 1.5,
-                      },
-                    },
-                    fallbackModels.length > 0
-                      ? t.officialModelsLoaded.replace('{count}', String(fallbackModels.length))
-                      : t.officialModelsHint,
                   ),
                   h(
                     'div',
@@ -2140,12 +2380,18 @@ window.__ModuleLoader__.load({
                       .replace('{mainModel}', fallbackModel || '—')
                       .replace('{visionModel}', visionModel || state.visionModel || '—'),
                   ),
+                  fallbackRouteAction(),
                 ),
                 h(
-                  'form',
+                  'div',
                   {
-                    onSubmit: switchOfficial,
-                    style: { border: '1px solid var(--dsw-alias-border-l2, #ddd)', borderRadius: 12, padding: 16 },
+                    style: {
+                      order: 1,
+                      border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+                      borderRadius: 12,
+                      padding: 16,
+                      marginBottom: 16,
+                    },
                   },
                   h(
                     'div',
@@ -2178,7 +2424,7 @@ window.__ModuleLoader__.load({
                     h('input', {
                       value: officialApiKey,
                       disabled: busy || state.official?.writable === false,
-                      placeholder: state.official?.configured ? t.officialStored : t.officialKey,
+                      placeholder: state.official?.configured ? t.maskedKey : t.officialKey,
                       onChange: (event) => {
                         officialKeyPair[1](event.target.value)
                         clearFallbackModels()
@@ -2235,83 +2481,41 @@ window.__ModuleLoader__.load({
                     ),
                   ),
                   h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled:
+                        busy || !fallbackBaseURL.trim() || (!officialApiKey.trim() && !state.official?.configured),
+                      onClick: discoverFallbackModels,
+                      style: {
+                        marginTop: 2,
+                        padding: '9px 16px',
+                        border: '1px solid var(--dsw-alias-border-l2, #ccc)',
+                        borderRadius: 8,
+                        cursor: 'pointer',
+                        background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
+                        color: 'inherit',
+                        fontWeight: 700,
+                        opacity:
+                          busy || !fallbackBaseURL.trim() || (!officialApiKey.trim() && !state.official?.configured)
+                            ? 0.5
+                            : 1,
+                      },
+                    },
+                    busy ? t.officialFetchingModels : t.officialFetchModels,
+                  ),
+                  h(
                     'p',
                     {
                       style: {
                         minHeight: 20,
-                        margin: '0 0 10px',
+                        margin: '10px 0 0',
                         fontSize: 13,
-                        color: note ? 'var(--dsw-alias-label-secondary, #666)' : 'transparent',
+                        color: 'var(--dsw-alias-label-secondary, #666)',
                       },
                       role: 'status',
                     },
-                    note || '.',
-                  ),
-                  h(
-                    'div',
-                    { style: { display: 'flex', flexWrap: 'wrap', gap: 10 } },
-                    h(
-                      'button',
-                      {
-                        type: 'button',
-                        disabled:
-                          busy || !fallbackBaseURL.trim() || (!officialApiKey.trim() && !state.official?.configured),
-                        onClick: discoverFallbackModels,
-                        style: {
-                          padding: '9px 16px',
-                          border: '1px solid var(--dsw-alias-border-l2, #ccc)',
-                          borderRadius: 8,
-                          cursor: 'pointer',
-                          background: 'var(--dsw-alias-background-layer-1, var(--dsw-alias-bg-layer-2))',
-                          color: 'inherit',
-                          fontWeight: 700,
-                          opacity:
-                            busy || !fallbackBaseURL.trim() || (!officialApiKey.trim() && !state.official?.configured)
-                              ? 0.5
-                              : 1,
-                        },
-                      },
-                      busy ? t.officialFetchingModels : t.officialFetchModels,
-                    ),
-                    h(
-                      'button',
-                      {
-                        type: 'submit',
-                        disabled:
-                          busy ||
-                          !fallbackBaseURL.trim() ||
-                          !fallbackModel ||
-                          !fallbackModels.some((model) => model.id === fallbackModel) ||
-                          (!officialApiKey.trim() && !state.official?.configured) ||
-                          (officialApiKey.trim() && state.official?.writable === false) ||
-                          (state.official?.active && !officialApiKey.trim() && !fallbackDirty),
-                        style: {
-                          padding: '9px 16px',
-                          border: 0,
-                          borderRadius: 8,
-                          cursor: 'pointer',
-                          background: 'var(--dsw-alias-state-business-primary)',
-                          color: 'var(--dsw-alias-bg-layer-2)',
-                          fontWeight: 700,
-                          opacity:
-                            busy ||
-                            !fallbackBaseURL.trim() ||
-                            !fallbackModel ||
-                            !fallbackModels.some((model) => model.id === fallbackModel) ||
-                            (!officialApiKey.trim() && !state.official?.configured) ||
-                            (state.official?.active && !officialApiKey.trim() && !fallbackDirty)
-                              ? 0.5
-                              : 1,
-                        },
-                      },
-                      busy
-                        ? t.saving
-                        : officialApiKey.trim() || fallbackDirty
-                          ? t.officialSaveSwitch
-                          : state.official?.active
-                            ? t.officialActive
-                            : t.officialSwitch,
-                    ),
+                    note || t.officialModelsHint,
                   ),
                 ),
               )
@@ -2321,41 +2525,53 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Present one product-owned model instead of every internal route.
+     * Expose the active managed route as one ordinary DSH model group.
      *
-     * The Host catalog must keep both the pi-ai upstream and the ModLens
-     * wrapper routable: the wrapper delegates text after reading images. The
-     * generic selector otherwise exposes both implementation routes, plus any
-     * unrelated bundled provider, which makes one logical choice appear two
-     * or more times. The branded settings section is the only place where a
-     * user changes the managed model, so the ordinary conversation selector
-     * should describe only the route that is actually active.
+     * The managed provider decides internally whether the selected model uses
+     * the visual bridge or accepts the original pixels. Keeping that routing
+     * behind one provider preserves the upstream selector's native one-group
+     * layout and prevents a duplicate TokensAPI foldout.
      */
-    function managedCatalogProjection(snapshot, mainModel, mainProvider) {
+    function managedCatalogProjection(snapshot, _mainModel, mainProvider) {
       var provider = typeof mainProvider === 'string' ? mainProvider.trim() : ''
-      var model = typeof mainModel === 'string' ? mainModel.trim() : ''
       var groups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
       var failures = Array.isArray(snapshot?.failures) ? snapshot.failures : []
-      if (!provider || !model) return { groups: groups, failures: failures }
+      if (!provider) return { groups: groups, failures: failures }
 
-      var group = groups.find((entry) => entry?.id === provider)
-      var selected = Array.isArray(group?.models) ? group.models.find((entry) => entry?.id === model) : undefined
-      var visibleGroups = []
-      if (group && selected) {
-        var providerName = provider === 'modlens-tokens-fallback' ? '备用线路' : 'TokensAPI'
-        var rawName = typeof selected.name === 'string' && selected.name.trim() ? selected.name.trim() : model
-        var modelName = rawName.replace(/\s*\(modlens vision\)\s*$/i, '')
-        visibleGroups = [
-          {
-            ...group,
-            name: providerName,
-            models: [{ ...selected, name: modelName }],
-          },
-        ]
+      var cleanModels = (group) =>
+        (Array.isArray(group?.models) ? group.models : []).map((model) => {
+          var id = typeof model?.id === 'string' ? model.id : ''
+          var rawName = typeof model?.name === 'string' && model.name.trim() ? model.name.trim() : id
+          return { ...model, name: rawName.replace(/\s*\(modlens vision\)\s*$/i, '') }
+        })
+      var projectGroup = (group, name) => {
+        if (!group) return null
+        var models = cleanModels(group)
+        return models.length > 0 ? { ...group, name: name, models: models } : null
       }
+      var visibleGroups = []
+      if (provider === 'tokensapi' || provider === 'modlens-tokensapi') {
+        var bridgeGroup = groups.find((entry) => entry?.id === 'modlens-tokensapi')
+        var directGroup = groups.find((entry) => entry?.id === 'tokensapi')
+        var tokens = projectGroup(bridgeGroup || directGroup, 'TokensAPI')
+        if (tokens) visibleGroups = [tokens]
+      } else if (provider === 'modlens-tokens-fallback') {
+        var fallback = projectGroup(
+          groups.find((entry) => entry?.id === 'modlens-tokens-fallback'),
+          '备用线路',
+        )
+        if (fallback) visibleGroups = [fallback]
+      } else {
+        var current = projectGroup(
+          groups.find((entry) => entry?.id === provider),
+          'TokensAPI',
+        )
+        if (current) visibleGroups = [current]
+      }
+      var visibleIds = new Set(visibleGroups.map((entry) => entry.id))
       return {
         groups: visibleGroups,
-        failures: failures.filter((entry) => entry?.id === provider),
+        failures: failures.filter((entry) => visibleIds.has(entry?.id)),
       }
     }
 
@@ -2384,7 +2600,14 @@ window.__ModuleLoader__.load({
      * composer must submit session.selectModel through its shared directory as
      * well or it keeps displaying and using the previous model.
      */
-    async function synchronizeCurrentSessionModel(sessions, modelDirectories, mainModel, mainProvider, retry) {
+    async function synchronizeCurrentSessionModel(
+      sessions,
+      modelDirectories,
+      mainModel,
+      mainProvider,
+      retry,
+      respectExisting,
+    ) {
       if (typeof mainModel !== 'string' || mainModel.trim() === '') return false
       var provider =
         mainProvider === 'tokensapi' ||
@@ -2425,6 +2648,15 @@ window.__ModuleLoader__.load({
       if (!directory) {
         if (directoryError) throw new Error('会话模型目录尚未就绪，请稍后重试')
         return false
+      }
+      // The Host keeps a durable selection per session. During startup and
+      // session navigation, preserve any existing manual or restored choice;
+      // the managed model is only the default for sessions without a choice.
+      if (respectExisting === true) {
+        var existingSelection = directory.store?.getSnapshot?.()?.current
+        if (existingSelection && typeof existingSelection.model === 'string' && existingSelection.model !== '') {
+          return false
+        }
       }
       var selectionVisible = () => {
         var snapshot = directory.store?.getSnapshot?.()
@@ -2540,7 +2772,7 @@ window.__ModuleLoader__.load({
               if (typeof stop === 'function') projectionStops.push(stop)
               applyProjection()
             }
-            var activateDesiredSelection = () => {
+            var activateDesiredSelection = (respectExisting) => {
               if (!desiredSelectionEnabled) return Promise.resolve(false)
               var sessionId = scope.sessions?.list?.getSnapshot?.()?.current
               if (!sessionId) return Promise.resolve(false)
@@ -2577,6 +2809,8 @@ window.__ModuleLoader__.load({
                   scope.modelDirectories,
                   desiredMainModel,
                   desiredMainProvider,
+                  undefined,
+                  respectExisting === true,
                 ),
               )
                 .then((activated) => {
@@ -2603,17 +2837,16 @@ window.__ModuleLoader__.load({
             }
             var Section = ModelManagerSection(react, synchronizeMainSelection)
             // Existing sessions retain their own model selection across Host
-            // restarts. Re-apply the centrally saved TokensAPI choice when the
-            // browser plugin starts so the composer, settings card, and actual
-            // request route cannot drift apart after a restart.
+            // restarts. Only apply the centrally saved model when a session has
+            // no manual or restored selection of its own.
             if (body.authenticated === true) {
-              Promise.resolve(activateDesiredSelection()).catch((error) => {
+              Promise.resolve(activateDesiredSelection(true)).catch((error) => {
                 console.error(`[tokens-model-manager] saved session model activation skipped: ${error}`)
               })
             }
             if (typeof scope.sessions?.list?.subscribe === 'function') {
               var stopSessionSelectionSync = scope.sessions.list.subscribe(() => {
-                Promise.resolve(activateDesiredSelection()).catch((error) => {
+                Promise.resolve(activateDesiredSelection(true)).catch((error) => {
                   console.error(`[tokens-model-manager] session model activation skipped: ${error}`)
                 })
               })
@@ -2648,6 +2881,7 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       var disposeGate = registerAccessGate()
+      var disposeModelMenuStyle = installModelMenuStyle()
       // The branded Models section owns endpoint, key, chat model, and vision
       // model now. Do not also mount the legacy ModLens engine card under
       // Plugins: it duplicates the same product settings and its route is
@@ -2655,12 +2889,16 @@ window.__ModuleLoader__.load({
       registerManagerSection(ctx)
       document.addEventListener('paste', onPaste, true)
       document.addEventListener('focusin', onFocusIn, true)
+      document.addEventListener('click', onModelSelectClick, true)
       // cordis effect: unregister on plugin disposal (HMR, profile reload).
       if (typeof ctx.effect === 'function') {
         ctx.effect(
           () => () => {
+            modelMenuDrillEpoch += 1
             document.removeEventListener('paste', onPaste, true)
             document.removeEventListener('focusin', onFocusIn, true)
+            document.removeEventListener('click', onModelSelectClick, true)
+            disposeModelMenuStyle()
             disposeGate()
           },
           'modlens: paste-to-path listener',
@@ -2680,12 +2918,17 @@ window.__ModuleLoader__.load({
       registerAccessGate: registerAccessGate,
       registerManagerSection: registerManagerSection,
       selectedModelVisionMode: selectedModelVisionMode,
+      selectedModelVisionSource: selectedModelVisionSource,
       selectedModelProtocol: selectedModelProtocol,
       modelRouteDescription: modelRouteDescription,
       routeControlState: routeControlState,
       activeSelectionFromStatus: activeSelectionFromStatus,
       managedCatalogProjection: managedCatalogProjection,
       synchronizeCurrentSessionModel: synchronizeCurrentSessionModel,
+      singleModelMenuItem: singleModelMenuItem,
+      onModelSelectClick: onModelSelectClick,
+      installModelMenuStyle: installModelMenuStyle,
+      modelMenuStyle: MODEL_MENU_STYLE,
     }
     // Settings integration is optional, so its services are acquired through
     // registerManagerSection instead of making the whole browser plugin wait.

@@ -57,6 +57,10 @@ describe('dsh plugin bundle', () => {
         expect(patch).toContain('api: openai-completions');
         expect(patch).toContain('upstream: tokensapi');
         expect(patch).toContain('providerId: modlens-tokensapi');
+        expect(patch).toContain('- id: compaction-basic');
+        expect(patch).toContain('thresholdRatio: 0.7');
+        expect(patch).toContain('provider: modlens-tokensapi');
+        expect(patch).toContain('provider: tokensapi');
     });
 });
 
@@ -596,25 +600,220 @@ describe('dsh plugin vision provider (phase 3)', () => {
         }
     });
 
-    it('bridges unconfirmed text models but excludes verified native multimodal models', async () => {
-        // The managed route bridges unknown text models so image-bearing
-        // sessions remain usable, but a model already confirmed to accept the
-        // original pixels must stay on its native provider route.
+    it('exposes one managed catalog while routing bridged and native image models correctly', async () => {
+        // The selector sees one TokensAPI provider. Text-only models convert
+        // image blocks to evidence, while native multimodal models receive the
+        // original image through the same public provider id.
         // @ts-expect-error untyped on purpose
         const plugin = (await import('../dsh/index.js')) as {
             apply: (ctx: unknown, config?: Record<string, unknown>) => void;
         };
-        const registered: Array<Record<string, CallableFunction>> = [];
-        const models = [
-            { id: 'gpt-5.5', name: 'GPT 5.5', inputModalities: ['text', 'image'] },
-            { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', inputModalities: ['text'] },
-            { id: 'claude-opus-5', name: 'Claude Opus 5', inputModalities: ['text', 'image'] },
-        ];
-        plugin.apply(
-            {
+        const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-managed-route-'));
+        const cli = path.join(cliDir, 'cli.js');
+        fs.writeFileSync(
+            cli,
+            `console.log(JSON.stringify({result:{summary:'S',ocr:{full_text:'MANAGED-EVIDENCE'},uncertainty:[]}}))`,
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        try {
+            const registered: Array<Record<string, CallableFunction>> = [];
+            const streamed: Array<{
+                provider: string;
+                messages: Array<{ content: Array<{ type: string; text?: string }> }>;
+            }> = [];
+            const models = [
+                { id: 'gpt-5.5', name: 'GPT 5.5', inputModalities: ['text', 'image'] },
+                { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', inputModalities: ['text'] },
+                { id: 'claude-opus-5', name: 'Claude Opus 5', inputModalities: ['text', 'image'] },
+                { id: 'kimi-k3', name: 'Kimi K3' },
+            ];
+            plugin.apply(
+                {
+                    tools: { register: () => {} },
+                    attachments: {
+                        readImage: async () => ({
+                            data: new Uint8Array([1]),
+                            ref: { mediaType: 'image/png' },
+                        }),
+                    },
+                    on: () => {},
+                    llm: {
+                        listProviders: () => [{ id: 'tokensapi', name: 'TokensAPI' }],
+                        providerRetryPolicy: () => undefined,
+                        registerAdapter: (
+                            _ids: string[],
+                            adapter: Record<string, CallableFunction>,
+                        ) => {
+                            registered.push(adapter);
+                            const handle = () => {};
+                            handle.replace = () => {};
+                            return handle;
+                        },
+                        listModels: async () => models,
+                        resolveModelInfo: async (_provider: string, id: string) =>
+                            models.find((model) => model.id === id),
+                        stream: (options: never) => {
+                            streamed.push(options);
+                            return (async function* () {})();
+                        },
+                    },
+                } as never,
+                {
+                    upstream: 'tokensapi',
+                    providerId: 'modlens-tokensapi',
+                    settingsCard: false,
+                    pasteToPath: false,
+                },
+            );
+
+            const adapter = registered[0];
+            const listed = (await adapter.listModels('modlens-tokensapi')) as Array<{
+                id: string;
+                name: string;
+                inputModalities: string[];
+            }>;
+            expect(listed.map((model) => model.id)).toEqual([
+                'gpt-5.5',
+                'deepseek-v4-flash',
+                'claude-opus-5',
+                'kimi-k3',
+            ]);
+            expect(listed.map((model) => model.name)).toEqual([
+                'GPT 5.5',
+                'DeepSeek V4 Flash',
+                'Claude Opus 5',
+                'Kimi K3',
+            ]);
+            expect(listed.every((model) => model.inputModalities.includes('image'))).toBe(true);
+
+            const imageRequest = (model: string) => ({
+                provider: 'modlens-tokensapi',
+                model,
+                messages: [
+                    {
+                        role: 'user',
+                        content: [{ type: 'image', attachment: { id: `image-${model}` } }],
+                    },
+                ],
+            });
+
+            await adapter.resolveModel('modlens-tokensapi', 'deepseek-v4-flash');
+            for await (const _chunk of adapter.stream(
+                imageRequest('deepseek-v4-flash'),
+            ) as AsyncIterable<unknown>) {
+                // drain
+            }
+            expect(streamed[0].provider).toBe('tokensapi');
+            expect(streamed[0].messages[0].content[0]).toMatchObject({ type: 'text' });
+            expect(streamed[0].messages[0].content[0].text).toContain('MANAGED-EVIDENCE');
+
+            await expect(
+                adapter.resolveModel('modlens-tokensapi', 'gpt-5.5'),
+            ).resolves.toMatchObject({
+                id: 'gpt-5.5',
+                inputModalities: ['text', 'image'],
+            });
+            for await (const _chunk of adapter.stream(
+                imageRequest('gpt-5.5'),
+            ) as AsyncIterable<unknown>) {
+                // drain
+            }
+            expect(streamed[1].provider).toBe('tokensapi');
+            expect(streamed[1].messages[0].content[0]).toMatchObject({ type: 'image' });
+
+            await expect(
+                adapter.resolveModel('modlens-tokensapi', 'kimi-k3'),
+            ).resolves.toMatchObject({
+                id: 'kimi-k3',
+                inputModalities: ['text', 'image'],
+            });
+            for await (const _chunk of adapter.stream(
+                imageRequest('kimi-k3'),
+            ) as AsyncIterable<unknown>) {
+                // drain
+            }
+            expect(streamed[2].provider).toBe('tokensapi');
+            expect(streamed[2].messages[0].content[0]).toMatchObject({ type: 'image' });
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+            fs.rmSync(cliDir, { recursive: true, force: true });
+        }
+    });
+
+    it('applies a changed future-model image decision without re-registering the adapter', async () => {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+            TOKENSAPI: { visionModel: string };
+            __modelManager: {
+                setManagedCredential: (
+                    ctx: unknown,
+                    key: string,
+                    request: () => Promise<unknown>,
+                ) => Promise<unknown>;
+                setManagedModels: (
+                    ctx: unknown,
+                    value: Record<string, unknown>,
+                    request: () => Promise<unknown>,
+                ) => Promise<unknown>;
+            };
+        };
+        const cliDir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-future-route-'));
+        const cli = path.join(cliDir, 'cli.js');
+        fs.writeFileSync(
+            cli,
+            `console.log(JSON.stringify({result:{summary:'S',ocr:{full_text:'FUTURE-EVIDENCE'},uncertainty:[]}}))`,
+        );
+        process.env.MODLENS_DSH_CLI = cli;
+        try {
+            const futureModel = 'future-omni-2027';
+            const models = [
+                { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', inputModalities: ['text'] },
+                {
+                    id: plugin.TOKENSAPI.visionModel,
+                    name: 'Vision',
+                    inputModalities: ['text', 'image'],
+                },
+                { id: futureModel, name: 'Future Omni 2027' },
+            ];
+            const response = async () => ({
+                status: 200,
+                json: async () => ({
+                    data: models.map((model) => ({
+                        id: model.id,
+                        name: model.name,
+                        supported_endpoint_types: ['openai'],
+                    })),
+                }),
+            });
+            const credentials = new Map<string, string>();
+            const registered: Array<Record<string, CallableFunction>> = [];
+            const streamed: Array<{
+                provider: string;
+                messages: Array<{ content: Array<{ type: string; text?: string }> }>;
+            }> = [];
+            const ctx = {
                 tools: { register: () => {} },
-                attachments: {},
+                attachments: {
+                    readImage: async () => ({
+                        data: new Uint8Array([1]),
+                        ref: { mediaType: 'image/png' },
+                    }),
+                },
                 on: () => {},
+                credentials: {
+                    describe: async (ref: string) => ({
+                        configured: credentials.has(ref),
+                        writable: true,
+                    }),
+                    resolve: async (ref: string) => {
+                        const value = credentials.get(ref);
+                        return value === undefined ? undefined : { value };
+                    },
+                    set: async (ref: string, value: string) => {
+                        credentials.set(ref, value);
+                    },
+                },
                 llm: {
                     listProviders: () => [{ id: 'tokensapi', name: 'TokensAPI' }],
                     providerRetryPolicy: () => undefined,
@@ -630,32 +829,65 @@ describe('dsh plugin vision provider (phase 3)', () => {
                     listModels: async () => models,
                     resolveModelInfo: async (_provider: string, id: string) =>
                         models.find((model) => model.id === id),
-                    stream: () => (async function* () {})(),
+                    stream: (options: never) => {
+                        streamed.push(options);
+                        return (async function* () {})();
+                    },
                 },
-            } as never,
-            {
+            };
+            plugin.apply(ctx, {
                 upstream: 'tokensapi',
                 providerId: 'modlens-tokensapi',
                 settingsCard: false,
                 pasteToPath: false,
-            },
-        );
+            });
+            await plugin.__modelManager.setManagedCredential(ctx, 'tk-future-switch', response);
+            await plugin.__modelManager.setManagedModels(
+                ctx,
+                {
+                    mainModel: futureModel,
+                    visionModel: plugin.TOKENSAPI.visionModel,
+                    visionMode: 'native',
+                },
+                response,
+            );
 
-        const listed = (await registered[0].listModels('modlens-tokensapi')) as Array<{
-            id: string;
-            inputModalities: string[];
-        }>;
-        expect(listed.map((model) => model.id)).toEqual(['deepseek-v4-flash']);
-        expect(listed.every((model) => model.inputModalities.includes('image'))).toBe(true);
-        await expect(
-            registered[0].resolveModel('modlens-tokensapi', 'deepseek-v4-flash'),
-        ).resolves.toMatchObject({
-            id: 'deepseek-v4-flash',
-            inputModalities: ['text', 'image'],
-        });
-        await expect(registered[0].resolveModel('modlens-tokensapi', 'gpt-5.5')).rejects.toThrow(
-            /native image input/,
-        );
+            const adapter = registered[0];
+            await adapter.listModels('modlens-tokensapi');
+            const request = {
+                provider: 'modlens-tokensapi',
+                model: futureModel,
+                messages: [
+                    {
+                        role: 'user',
+                        content: [{ type: 'image', attachment: { id: 'future-image' } }],
+                    },
+                ],
+            };
+            for await (const _chunk of adapter.stream(request) as AsyncIterable<unknown>) {
+                // drain
+            }
+            expect(streamed[0].messages[0].content[0]).toMatchObject({ type: 'image' });
+
+            await plugin.__modelManager.setManagedModels(
+                ctx,
+                {
+                    mainModel: futureModel,
+                    visionModel: plugin.TOKENSAPI.visionModel,
+                    visionMode: 'bridge',
+                },
+                response,
+            );
+            for await (const _chunk of adapter.stream(request) as AsyncIterable<unknown>) {
+                // drain
+            }
+            expect(streamed[1].messages[0].content[0]).toMatchObject({ type: 'text' });
+            expect(streamed[1].messages[0].content[0].text).toContain('FUTURE-EVIDENCE');
+            expect(registered).toHaveLength(1);
+        } finally {
+            delete process.env.MODLENS_DSH_CLI;
+            fs.rmSync(cliDir, { recursive: true, force: true });
+        }
     });
 
     it('registers the private fallback wrapper beside the pinned TokensAPI route', async () => {

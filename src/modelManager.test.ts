@@ -108,7 +108,8 @@ const PUBLIC_API_MODELS = API_MODELS.map((model) => {
         ? [{ id: 'anthropic-messages', label: 'Anthropic Messages' }]
         : [
               { id: 'openai-completions', label: 'Chat Completions' },
-              ...(model.endpointTypes.includes('openai-response')
+              ...(model.id !== 'deepseek-v4-flash' &&
+              model.endpointTypes.includes('openai-response')
                   ? [{ id: 'openai-responses', label: 'Responses API' }]
                   : []),
           ];
@@ -119,6 +120,7 @@ const PUBLIC_API_MODELS = API_MODELS.map((model) => {
         visionMode: ['qwen3.6-35b-a3b', 'claude-opus-4-7', 'gpt-5.5'].includes(model.id)
             ? 'native'
             : 'bridge',
+        visionCapabilitySource: 'builtin',
     };
 });
 
@@ -140,6 +142,33 @@ const VALID_RESPONSE = async () => ({
         })),
     }),
 });
+
+const FUTURE_MODEL_ID = 'future-omni-2027';
+
+function managedResponseWithFuture(inputModalities?: string[]) {
+    return async () => ({
+        status: 200,
+        json: async () => ({
+            data: [
+                ...API_MODELS.map((model) => ({
+                    id: model.id,
+                    name: model.name,
+                    owned_by: model.ownedBy,
+                    supported_endpoint_types: model.endpointTypes,
+                    context_window: model.contextWindow,
+                    max_output_tokens: model.maxTokens,
+                })),
+                {
+                    id: FUTURE_MODEL_ID,
+                    name: 'Future Omni 2027',
+                    owned_by: 'future-vendor',
+                    supported_endpoint_types: ['openai'],
+                    ...(inputModalities === undefined ? {} : { input_modalities: inputModalities }),
+                },
+            ],
+        }),
+    });
+}
 
 const FALLBACK_MODELS = [
     { id: 'deepseek-chat', name: 'DeepSeek Chat' },
@@ -685,7 +714,10 @@ describe('independent fallback route', () => {
                     apiKeyEnv: DEEPSEEK_OFFICIAL.credentialRef,
                     api: 'openai-completions',
                     baseURL: 'https://backup.example/v1',
-                    models: [{ id: 'deepseek-v3.2', input: ['text'] }],
+                    models: expect.arrayContaining([
+                        expect.objectContaining({ id: 'deepseek-v3.2', input: ['text'] }),
+                        expect.objectContaining({ id: 'gpt-5.5', input: ['text'] }),
+                    ]),
                 },
             },
         });
@@ -1074,13 +1106,13 @@ describe('TokensAPI model discovery and selection', () => {
         await expect(statusPromise).resolves.toMatchObject({
             mainModel: 'gpt-5.5',
             api: 'openai-completions',
-            mainProvider: TOKENSAPI.providerId,
+            mainProvider: TOKENSAPI.agentProviderId,
             visionMode: 'native',
             visionModel: 'qwen3.6-35b-a3b',
         });
     });
 
-    it('restores a persisted Responses choice before the first conversation request', async () => {
+    it('migrates a persisted Flash Responses choice before the first conversation request', async () => {
         const credential = credentialHarness('tk-startup-protocol', true);
         const values = new Map<string, Record<string, unknown>>([
             [
@@ -1120,7 +1152,7 @@ describe('TokensAPI model discovery and selection', () => {
         await expect(__modelManager.modelManagerStatus(ctx, VALID_RESPONSE)).resolves.toMatchObject(
             {
                 mainModel: 'deepseek-v4-flash',
-                api: 'openai-responses',
+                api: 'openai-completions',
             },
         );
         expect(
@@ -1130,15 +1162,18 @@ describe('TokensAPI model discovery and selection', () => {
         ).toMatchObject({
             providers: {
                 tokensapi: {
-                    api: 'openai-responses',
+                    api: 'openai-completions',
                     defaultContextWindow: 262144,
-                    models: [
-                        {
+                    models: expect.arrayContaining([
+                        expect.objectContaining({
                             id: 'deepseek-v4-flash',
                             contextWindow: 262144,
                             maxTokens: 32768,
-                        },
-                    ],
+                        }),
+                        expect.objectContaining({ id: 'deepseek-v3.2' }),
+                        expect.objectContaining({ id: 'qwen3.6-35b-a3b' }),
+                        expect.objectContaining({ id: 'gpt-5.5' }),
+                    ]),
                 },
             },
         });
@@ -1165,7 +1200,7 @@ describe('TokensAPI model discovery and selection', () => {
         ).toBe(false);
     });
 
-    it('routes confirmed native models directly and bridges every unconfirmed text model', () => {
+    it('respects provider metadata and the verified fallback table', () => {
         expect(
             __modelManager.managedVisionMode({
                 id: 'claude-opus-4-6',
@@ -1189,9 +1224,14 @@ describe('TokensAPI model discovery and selection', () => {
                 id: 'gpt-5.5',
             }),
         ).toBe('native');
+        expect(
+            __modelManager.managedVisionMode({
+                id: 'unclassified-future-model',
+            }),
+        ).toBe('unknown');
     });
 
-    it('routes native multimodal models upstream and text-only bridge models through modlens', async () => {
+    it('routes native and bridged models through one managed provider', async () => {
         await expect(
             __modelManager.resolveManagedMainRoute({}, 'deepseek-v4-flash'),
         ).resolves.toEqual({
@@ -1203,7 +1243,7 @@ describe('TokensAPI model discovery and selection', () => {
         await expect(
             __modelManager.resolveManagedMainRoute({}, 'claude-opus-4-7'),
         ).resolves.toEqual({
-            provider: TOKENSAPI.providerId,
+            provider: TOKENSAPI.agentProviderId,
             visionMode: 'native',
             api: 'anthropic-messages',
             input: ['text', 'image'],
@@ -1217,22 +1257,29 @@ describe('TokensAPI model discovery and selection', () => {
         await expect(
             __modelManager.resolveManagedMainRoute(harness.ctx, 'gpt-5.5'),
         ).resolves.toEqual({
-            provider: TOKENSAPI.providerId,
+            provider: TOKENSAPI.agentProviderId,
             visionMode: 'native',
             api: 'openai-completions',
             input: ['text', 'image'],
         });
     });
 
-    it('uses the bridge for an unknown text model and direct only when the bridge is disabled', async () => {
+    it('rejects an unknown model until its image handling is explicitly confirmed', async () => {
         await expect(
             __modelManager.resolveManagedMainRoute({}, 'unclassified-text-model'),
-        ).resolves.toEqual({
-            provider: TOKENSAPI.agentProviderId,
-            visionMode: 'bridge',
-            api: 'openai-completions',
+        ).rejects.toMatchObject({ code: 'unknown_capability' });
+
+        expect(__modelManager.managedModelCapability({ id: 'unclassified-text-model' })).toEqual({
             input: ['text'],
+            visionMode: 'unknown',
+            source: 'unknown',
         });
+        expect(
+            __modelManager.managedModelCapability({ id: 'unclassified-text-model' }, 'native'),
+        ).toEqual({ input: ['text', 'image'], visionMode: 'native', source: 'override' });
+        expect(
+            __modelManager.managedModelCapability({ id: 'unclassified-text-model' }, 'bridge'),
+        ).toEqual({ input: ['text'], visionMode: 'bridge', source: 'override' });
 
         const credential = credentialHarness();
         const ctx = {
@@ -1248,6 +1295,197 @@ describe('TokensAPI model discovery and selection', () => {
             visionMode: 'direct',
             api: 'openai-completions',
             input: ['text'],
+        });
+    });
+
+    it('routes a future model only after the user chooses native or bridge handling', async () => {
+        const harness = credentialHarness();
+        const response = managedResponseWithFuture();
+        await __modelManager.setManagedCredential(harness.ctx, 'tk-future-route', response);
+
+        await expect(
+            __modelManager.setManagedModels(
+                harness.ctx,
+                { mainModel: FUTURE_MODEL_ID, visionModel: TOKENSAPI.visionModel },
+                response,
+            ),
+        ).rejects.toMatchObject({ code: 'unknown_capability' });
+
+        const native = await __modelManager.setManagedModels(
+            harness.ctx,
+            {
+                mainModel: FUTURE_MODEL_ID,
+                visionModel: TOKENSAPI.visionModel,
+                visionMode: 'native',
+            },
+            response,
+        );
+        expect(
+            native.models.find((model: { id: string }) => model.id === FUTURE_MODEL_ID),
+        ).toMatchObject({
+            visionMode: 'native',
+            visionCapabilitySource: 'override',
+        });
+        await expect(
+            __modelManager.resolveManagedMainRoute(harness.ctx, FUTURE_MODEL_ID),
+        ).resolves.toMatchObject({ visionMode: 'native', input: ['text', 'image'] });
+
+        const bridged = await __modelManager.setManagedModels(
+            harness.ctx,
+            {
+                mainModel: FUTURE_MODEL_ID,
+                visionModel: TOKENSAPI.visionModel,
+                visionMode: 'bridge',
+            },
+            response,
+        );
+        expect(
+            bridged.models.find((model: { id: string }) => model.id === FUTURE_MODEL_ID),
+        ).toMatchObject({
+            visionMode: 'bridge',
+            visionCapabilitySource: 'override',
+        });
+        await expect(
+            __modelManager.resolveManagedMainRoute(harness.ctx, FUTURE_MODEL_ID),
+        ).resolves.toMatchObject({ visionMode: 'bridge', input: ['text'] });
+    });
+
+    it('persists a future-model decision, restores it, and hides unconfirmed models from chat', async () => {
+        const values = new Map<string, Record<string, unknown>>();
+        const updates: Array<{ namespace: string; patch: Record<string, unknown> }> = [];
+        const settings = {
+            register: (
+                namespace: string,
+                _schema: unknown,
+                options?: { base?: Record<string, unknown> },
+            ) => {
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Record<string, unknown>) => {
+                updates.push({ namespace, patch });
+                values.set(namespace, { ...(values.get(namespace) ?? {}), ...patch });
+            },
+        };
+        const createContext = (credential: CredentialHarness) => ({
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) callback({ settings });
+            },
+        });
+        const response = managedResponseWithFuture();
+        const credential = credentialHarness();
+        const ctx = createContext(credential);
+        apply(ctx, { settingsCard: false, pasteToPath: false });
+
+        await __modelManager.setManagedCredential(ctx, 'tk-future-persist', response);
+        const beforeConfirmation = [...updates]
+            .reverse()
+            .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch;
+        expect(JSON.stringify(beforeConfirmation)).not.toContain(FUTURE_MODEL_ID);
+
+        await __modelManager.setManagedModels(
+            ctx,
+            {
+                mainModel: FUTURE_MODEL_ID,
+                visionModel: TOKENSAPI.visionModel,
+                visionMode: 'native',
+            },
+            response,
+        );
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            mainModel: FUTURE_MODEL_ID,
+            visionModeByModel: { [FUTURE_MODEL_ID]: 'native' },
+        });
+        const afterConfirmation = [...updates]
+            .reverse()
+            .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch;
+        expect(afterConfirmation).toMatchObject({
+            providers: {
+                tokensapi: {
+                    models: expect.arrayContaining([
+                        expect.objectContaining({
+                            id: FUTURE_MODEL_ID,
+                            input: ['text', 'image'],
+                        }),
+                    ]),
+                },
+            },
+        });
+
+        const restartedCredential = credentialHarness('tk-future-persist', true);
+        const restartedCtx = createContext(restartedCredential);
+        apply(restartedCtx, { settingsCard: false, pasteToPath: false });
+        await expect(
+            __modelManager.modelManagerStatus(restartedCtx, response),
+        ).resolves.toMatchObject({
+            mainModel: FUTURE_MODEL_ID,
+            models: expect.arrayContaining([
+                expect.objectContaining({
+                    id: FUTURE_MODEL_ID,
+                    visionMode: 'native',
+                    visionCapabilitySource: 'override',
+                }),
+            ]),
+        });
+        await expect(
+            __modelManager.resolveManagedMainRoute(restartedCtx, FUTURE_MODEL_ID),
+        ).resolves.toMatchObject({ visionMode: 'native', input: ['text', 'image'] });
+    });
+
+    it('lets later provider metadata replace and clear an old manual decision', async () => {
+        const values = new Map<string, Record<string, unknown>>();
+        const settings = {
+            register: (
+                namespace: string,
+                _schema: unknown,
+                options?: { base?: Record<string, unknown> },
+            ) => {
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Record<string, unknown>) => {
+                values.set(namespace, { ...(values.get(namespace) ?? {}), ...patch });
+            },
+        };
+        const credential = credentialHarness();
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) callback({ settings });
+            },
+        };
+        const unknownResponse = managedResponseWithFuture();
+        apply(ctx, { settingsCard: false, pasteToPath: false });
+        await __modelManager.setManagedCredential(ctx, 'tk-provider-wins', unknownResponse);
+        await __modelManager.setManagedModels(
+            ctx,
+            {
+                mainModel: FUTURE_MODEL_ID,
+                visionModel: TOKENSAPI.visionModel,
+                visionMode: 'native',
+            },
+            unknownResponse,
+        );
+
+        const declaredTextResponse = managedResponseWithFuture(['text']);
+        const status = await __modelManager.setManagedCredential(
+            ctx,
+            'tk-provider-wins',
+            declaredTextResponse,
+        );
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            visionModeByModel: {},
+        });
+        expect(
+            status.models.find((model: { id: string }) => model.id === FUTURE_MODEL_ID),
+        ).toMatchObject({
+            visionMode: 'bridge',
+            visionCapabilitySource: 'provider',
         });
     });
 
@@ -1267,7 +1505,7 @@ describe('TokensAPI model discovery and selection', () => {
         expect(
             __modelManager.managedModelApi(
                 {
-                    id: 'deepseek-v4-flash',
+                    id: 'deepseek-v3.2',
                     endpointTypes: ['openai', 'openai-response'],
                 },
                 'openai-responses',
@@ -1303,7 +1541,56 @@ describe('TokensAPI model discovery and selection', () => {
             'image',
         ]);
         expect(__modelManager.managedModelInput({ id: 'gpt-5.5' })).toEqual(['text', 'image']);
+        expect(__modelManager.managedModelInput({ id: 'kimi-k3' })).toEqual(['text', 'image']);
+        expect(__modelManager.managedModelInput({ id: 'tokensapi/kimi-k3-preview' })).toEqual([
+            'text',
+            'image',
+        ]);
         expect(__modelManager.managedModelInput({ id: 'deepseek-v4-flash' })).toEqual(['text']);
+    });
+
+    it('keeps provider modality metadata authoritative over the builtin fallback', () => {
+        expect(
+            __modelManager.managedModelInput({ id: 'kimi-k3', input: ['text', 'image'] }),
+        ).toEqual(['text', 'image']);
+        expect(__modelManager.managedModelInput({ id: 'kimi-k3', input: ['text'] })).toEqual([
+            'text',
+        ]);
+        expect(
+            __modelManager.managedModelInput({
+                id: 'unlisted-future-model',
+                input: ['text', 'image'],
+            }),
+        ).toEqual(['text', 'image']);
+        expect(
+            __modelManager.managedModelCapability({ id: 'kimi-k3', input: ['text'] }, 'native'),
+        ).toEqual({ input: ['text'], visionMode: 'bridge', source: 'provider' });
+    });
+
+    it('classifies the exact current TokensAPI kimi-k3 catalog shape as native vision', async () => {
+        const [model] = await __modelManager.parseManagedModels({
+            json: async () => ({
+                data: [
+                    {
+                        id: 'kimi-k3',
+                        object: 'model',
+                        created: 1626777600,
+                        owned_by: 'custom',
+                        supported_endpoint_types: [
+                            'openai',
+                            'openai-response',
+                            'openai-response-compact',
+                            'anthropic',
+                            'gemini',
+                        ],
+                    },
+                ],
+            }),
+        });
+
+        expect(model).not.toHaveProperty('input');
+        expect(__modelManager.managedModelInput(model)).toEqual(['text', 'image']);
+        expect(__modelManager.managedVisionMode(model)).toBe('native');
     });
 
     it('uses the production capacity for DeepSeek V4 Flash', () => {
@@ -1335,6 +1622,29 @@ describe('TokensAPI model discovery and selection', () => {
         ).toBe(32768);
     });
 
+    it('keeps DeepSeek V4 Flash on Chat Completions after Responses failures', () => {
+        const model = {
+            id: 'deepseek-v4-flash',
+            endpointTypes: ['openai', 'openai-response', 'openai-response-compact'],
+        };
+        expect(__modelManager.managedModelApis(model)).toEqual(['openai-completions']);
+        expect(__modelManager.managedModelApi(model, 'openai-completions')).toBe(
+            'openai-completions',
+        );
+        expect(() => __modelManager.managedModelApi(model, 'openai-responses')).toThrow(
+            '不支持所选请求协议',
+        );
+        expect(
+            __modelManager.normalizeProtocolByModel({
+                'deepseek-v4-flash': 'openai-responses',
+                'qwen3.6-35b-a3b': 'openai-responses',
+            }),
+        ).toEqual({
+            'deepseek-v4-flash': 'openai-completions',
+            'qwen3.6-35b-a3b': 'openai-responses',
+        });
+    });
+
     it('parses, trims and deduplicates the OpenAI-compatible model list', async () => {
         const models = await __modelManager.parseManagedModels({
             json: async () => ({
@@ -1357,6 +1667,14 @@ describe('TokensAPI model discovery and selection', () => {
                     { id: 'deepseek-v4-flash', name: 'duplicate' },
                     { id: '' },
                     null,
+                    {
+                        id: 'qwen_image',
+                        supported_endpoint_types: ['image-generation'],
+                    },
+                    {
+                        id: 'ltx_2_3',
+                        supported_endpoint_types: ['openai-video'],
+                    },
                     { id: 'qwen3.6-35b-a3b' },
                 ],
             }),
@@ -1373,6 +1691,49 @@ describe('TokensAPI model discovery and selection', () => {
             },
             { id: 'qwen3.6-35b-a3b', name: 'qwen3.6-35b-a3b' },
         ]);
+    });
+
+    it('filters pure image and video models from managed and fallback catalogs', async () => {
+        const data = [
+            { id: 'qwen_image', supported_endpoint_types: ['image-generation'] },
+            { id: 'ltx_2_3', supported_endpoint_types: ['openai-video'] },
+            {
+                id: 'hybrid-chat-model',
+                supported_endpoint_types: ['image-generation', 'openai-response'],
+            },
+            { id: 'metadata-free-chat-model' },
+        ];
+
+        await expect(
+            __modelManager.parseManagedModels({ json: async () => ({ data }) }),
+        ).resolves.toEqual([
+            {
+                id: 'hybrid-chat-model',
+                name: 'hybrid-chat-model',
+                endpointTypes: ['openai-response'],
+            },
+            { id: 'metadata-free-chat-model', name: 'metadata-free-chat-model' },
+        ]);
+        await expect(
+            __modelManager.parseFallbackModels({ json: async () => ({ data }) }),
+        ).resolves.toEqual([
+            { id: 'hybrid-chat-model', name: 'hybrid-chat-model' },
+            { id: 'metadata-free-chat-model', name: 'metadata-free-chat-model' },
+        ]);
+    });
+
+    it('rejects catalogs containing only non-chat models', async () => {
+        const data = [
+            { id: 'qwen_image', supported_endpoint_types: ['image-generation'] },
+            { id: 'ltx_2_3', supported_endpoint_types: ['openai-video'] },
+        ];
+
+        await expect(
+            __modelManager.parseManagedModels({ json: async () => ({ data }) }),
+        ).rejects.toMatchObject({ code: 'upstream' });
+        await expect(
+            __modelManager.parseFallbackModels({ json: async () => ({ data }) }),
+        ).rejects.toMatchObject({ code: 'upstream' });
     });
 
     it('rejects a malformed successful response', async () => {
@@ -1462,7 +1823,7 @@ describe('TokensAPI model discovery and selection', () => {
         const responses = await __modelManager.setManagedModels(
             harness.ctx,
             {
-                mainModel: 'deepseek-v4-flash',
+                mainModel: 'deepseek-v3.2',
                 api: 'openai-responses',
                 visionModel: TOKENSAPI.visionModel,
             },
@@ -1470,7 +1831,7 @@ describe('TokensAPI model discovery and selection', () => {
         );
         expect(responses.api).toBe('openai-responses');
         expect(
-            responses.models.find((model: { id: string }) => model.id === 'deepseek-v4-flash'),
+            responses.models.find((model: { id: string }) => model.id === 'deepseek-v3.2'),
         ).toMatchObject({
             api: 'openai-responses',
         });
@@ -1478,7 +1839,7 @@ describe('TokensAPI model discovery and selection', () => {
         await __modelManager.setManagedModels(
             harness.ctx,
             {
-                mainModel: 'deepseek-v3.2',
+                mainModel: 'qwen3.6-35b-a3b',
                 api: 'openai-completions',
                 visionModel: TOKENSAPI.visionModel,
             },
@@ -1486,7 +1847,7 @@ describe('TokensAPI model discovery and selection', () => {
         );
         const restored = await __modelManager.setManagedModels(
             harness.ctx,
-            { mainModel: 'deepseek-v4-flash', visionModel: TOKENSAPI.visionModel },
+            { mainModel: 'deepseek-v3.2', visionModel: TOKENSAPI.visionModel },
             VALID_RESPONSE,
         );
         expect(restored.api).toBe('openai-responses');
@@ -1612,7 +1973,16 @@ describe('TokensAPI model discovery and selection', () => {
                 tokensapi: {
                     baseURL: 'https://gateway.example/v1',
                     api: 'openai-completions',
-                    models: [{ id: 'deepseek-v3.2', name: 'DeepSeek V3.2', input: ['text'] }],
+                    models: expect.arrayContaining([
+                        expect.objectContaining({
+                            id: 'deepseek-v3.2',
+                            name: 'DeepSeek V3.2',
+                            input: ['text'],
+                        }),
+                        expect.objectContaining({ id: 'deepseek-v4-flash' }),
+                        expect.objectContaining({ id: 'qwen3.6-35b-a3b' }),
+                        expect.objectContaining({ id: 'gpt-5.5' }),
+                    ]),
                 },
             },
         });
