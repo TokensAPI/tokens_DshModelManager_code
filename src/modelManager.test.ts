@@ -2041,6 +2041,15 @@ describe('TokensAPI model discovery and selection', () => {
             VALID_RESPONSE,
         );
 
+        const managedPatch = [...updates]
+            .reverse()
+            .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch as
+            | {
+                  providers?: { tokensapi?: { models?: Array<{ id: string }> } };
+              }
+            | undefined;
+        const managedModels = managedPatch?.providers?.tokensapi?.models;
+
         expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
             baseURL: 'https://gateway.example/v1',
             mainModel: 'deepseek-v3.2',
@@ -2068,6 +2077,12 @@ describe('TokensAPI model discovery and selection', () => {
                 },
             },
         });
+        expect(managedModels?.map((model) => model.id)).toEqual([
+            'deepseek-v3.2',
+            'deepseek-v4-flash',
+            'qwen3.6-35b-a3b',
+            'gpt-5.5',
+        ]);
         // The settings page still receives every API model for its own
         // selector; only the conversation catalog is narrowed.
         expect(status.models).toEqual(DIRECT_PUBLIC_API_MODELS);

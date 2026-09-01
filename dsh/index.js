@@ -2553,10 +2553,13 @@ async function synchronizeMainModel(ctx, mainModel, models) {
     // The settings page owns the default model, while the conversation picker
     // may temporarily select any model compatible with the active protocol.
     // The client projection below removes wrapper duplicates and unrelated
-    // providers before the catalog reaches the public composer.
+    // providers before the catalog reaches the public composer. Put the main
+    // model first so sessions without a durable choice receive that default.
     const selected = models.find((model) => model.id === mainModel)
     const contextWindow = managedModelContextWindow(selected ?? { id: mainModel })
     const conversationModels = managedConversationModels(runtime, models, route.api)
+    const mainIndex = conversationModels.findIndex((model) => model.id === mainModel)
+    if (mainIndex > 0) conversationModels.unshift(...conversationModels.splice(mainIndex, 1))
     await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
       providers: {
         [TOKENSAPI.providerId]: {

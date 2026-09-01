@@ -618,9 +618,9 @@ describe('Desktop model-manager settings section', () => {
                 id: 'modlens-tokensapi',
                 name: 'TokensAPI',
                 models: [
+                    { id: 'gpt-5.5', name: 'GPT-5.5' },
                     { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash' },
                     { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
-                    { id: 'gpt-5.5', name: 'GPT-5.5' },
                 ],
             },
         ]);

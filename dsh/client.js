@@ -2532,18 +2532,22 @@ window.__ModuleLoader__.load({
      * behind one provider preserves the upstream selector's native one-group
      * layout and prevents a duplicate TokensAPI foldout.
      */
-    function managedCatalogProjection(snapshot, _mainModel, mainProvider) {
+    function managedCatalogProjection(snapshot, mainModel, mainProvider) {
       var provider = typeof mainProvider === 'string' ? mainProvider.trim() : ''
+      var model = typeof mainModel === 'string' ? mainModel.trim() : ''
       var groups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
       var failures = Array.isArray(snapshot?.failures) ? snapshot.failures : []
       if (!provider) return { groups: groups, failures: failures }
 
-      var cleanModels = (group) =>
-        (Array.isArray(group?.models) ? group.models : []).map((model) => {
-          var id = typeof model?.id === 'string' ? model.id : ''
-          var rawName = typeof model?.name === 'string' && model.name.trim() ? model.name.trim() : id
-          return { ...model, name: rawName.replace(/\s*\(modlens vision\)\s*$/i, '') }
+      var cleanModels = (group) => {
+        var cleaned = (Array.isArray(group?.models) ? group.models : []).map((entry) => {
+          var id = typeof entry?.id === 'string' ? entry.id : ''
+          var rawName = typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : id
+          return { ...entry, name: rawName.replace(/\s*\(modlens vision\)\s*$/i, '') }
         })
+        if (!model) return cleaned
+        return cleaned.filter((entry) => entry?.id === model).concat(cleaned.filter((entry) => entry?.id !== model))
+      }
       var projectGroup = (group, name) => {
         if (!group) return null
         var models = cleanModels(group)
