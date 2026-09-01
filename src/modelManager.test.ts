@@ -1112,6 +1112,88 @@ describe('TokensAPI model discovery and selection', () => {
         });
     });
 
+    it('migrates a stale kimi-k3 bridge choice to native vision on startup', async () => {
+        const credential = credentialHarness('tk-kimi-native-migration', true);
+        const values = new Map<string, Record<string, unknown>>([
+            [
+                TOKENSAPI.settingsNamespace,
+                {
+                    mainModel: 'kimi-k3',
+                    visionModeByModel: { 'kimi-k3': 'bridge' },
+                    visionModel: TOKENSAPI.visionModel,
+                },
+            ],
+        ]);
+        const updates: Array<{ namespace: string; patch: Record<string, unknown> }> = [];
+        const settings = {
+            register: (
+                namespace: string,
+                _schema: unknown,
+                options?: { base?: Record<string, unknown> },
+            ) => {
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Record<string, unknown>) => {
+                updates.push({ namespace, patch });
+                values.set(namespace, { ...(values.get(namespace) ?? {}), ...patch });
+            },
+        };
+        const response = async () => ({
+            status: 200,
+            json: async () => ({
+                data: [
+                    {
+                        id: 'kimi-k3',
+                        object: 'model',
+                        created: 1626777600,
+                        owned_by: 'custom',
+                        supported_endpoint_types: [
+                            'openai',
+                            'openai-response',
+                            'openai-response-compact',
+                            'anthropic',
+                            'gemini',
+                        ],
+                    },
+                ],
+            }),
+        });
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) callback({ settings });
+            },
+        };
+        apply(ctx, { settingsCard: false, pasteToPath: false });
+
+        const status = await __modelManager.modelManagerStatus(ctx, response);
+
+        expect(status).toMatchObject({
+            mainModel: 'kimi-k3',
+            visionMode: 'native',
+            models: expect.arrayContaining([
+                expect.objectContaining({
+                    id: 'kimi-k3',
+                    visionMode: 'native',
+                    visionCapabilitySource: 'builtin',
+                }),
+            ]),
+        });
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            visionModeByModel: {},
+        });
+        expect(updates).toContainEqual({
+            namespace: TOKENSAPI.settingsNamespace,
+            patch: { visionModeByModel: {} },
+        });
+        await expect(__modelManager.resolveManagedMainRoute(ctx, 'kimi-k3')).resolves.toMatchObject(
+            { visionMode: 'native', input: ['text', 'image'] },
+        );
+    });
+
     it('migrates a persisted Flash Responses choice before the first conversation request', async () => {
         const credential = credentialHarness('tk-startup-protocol', true);
         const values = new Map<string, Record<string, unknown>>([
