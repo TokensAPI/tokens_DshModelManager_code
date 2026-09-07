@@ -756,6 +756,48 @@ describe('independent fallback route', () => {
         });
     });
 
+    it('persists a TokensAPI model chosen from the conversation selector', async () => {
+        const harness = credentialHarness('tk-primary', true);
+        await expect(
+            __modelManager.selectMainModel(
+                harness.ctx,
+                { provider: TOKENSAPI.agentProviderId, model: 'deepseek-v3.2' },
+                VALID_RESPONSE,
+            ),
+        ).resolves.toMatchObject({
+            channel: 'tokensapi',
+            mainModel: 'deepseek-v3.2',
+            activeMainModel: 'deepseek-v3.2',
+            mainProvider: TOKENSAPI.agentProviderId,
+        });
+    });
+
+    it('updates only the active fallback model when its conversation group is selected', async () => {
+        const harness = credentialHarness('tk-primary', true);
+        const request = async (url: unknown) =>
+            String(url) === `${TOKENSAPI.baseURL}/models` ? VALID_RESPONSE() : FALLBACK_RESPONSE();
+        harness.official = 'sk-fallback';
+        await __modelManager.configureFallback(
+            harness.ctx,
+            { baseURL: 'https://backup.example/v1', mainModel: 'deepseek-chat' },
+            request,
+        );
+
+        await expect(
+            __modelManager.selectMainModel(
+                harness.ctx,
+                { provider: DEEPSEEK_OFFICIAL.providerId, model: 'deepseek-reasoner' },
+                request,
+            ),
+        ).resolves.toMatchObject({
+            channel: 'official',
+            mainModel: 'deepseek-v4-flash',
+            activeMainModel: 'deepseek-reasoner',
+            mainProvider: DEEPSEEK_OFFICIAL.providerId,
+            official: { mainModel: 'deepseek-reasoner' },
+        });
+    });
+
     it('restores the saved fallback channel before the initial model is displayed', async () => {
         const credential = credentialHarness('tk-primary', true);
         credential.official = 'sk-fallback';

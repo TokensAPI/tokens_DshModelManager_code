@@ -2970,6 +2970,99 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
   return modelManagerStatus(ctx, request)
 }
 
+/**
+ * Persist a model chosen from the host's conversation selector.
+ *
+ * The settings page and the conversation picker are two views over the same
+ * active route.  Keeping this write separate from setManagedModels means a
+ * picker change does not need to provide (or accidentally overwrite) the
+ * endpoint, API key, or vision-model fields owned by the settings page.
+ */
+async function selectMainModel(ctx, value, request = globalThis.fetch) {
+  const status = await modelManagerStatus(ctx, request)
+  if (!status.authenticated) {
+    throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
+  }
+  const runtime = managerRuntime(ctx)
+  const provider = normalizeModelId(value?.provider, '')
+  const model = normalizeModelId(value?.model, '')
+  if (!provider || !model) throw new TypeError('provider 和 model 必须是有效的字符串')
+
+  const tokensProvider = provider === TOKENSAPI.providerId || provider === TOKENSAPI.agentProviderId
+  const fallbackProvider =
+    provider === DEEPSEEK_OFFICIAL.providerId || provider === DEEPSEEK_OFFICIAL.upstreamProviderId
+
+  if (runtime.activeChannel === 'official') {
+    if (!fallbackProvider) {
+      throw new ManagedCredentialError('invalid_provider', '当前备用线路未开放 TokensAPI 模型选择')
+    }
+    if (!runtime.fallbackModels.some((entry) => entry.id === model)) {
+      throw new ManagedCredentialError('invalid_model', '所选模型不在备用线路可用列表中')
+    }
+    const previousModel = runtime.fallbackModel
+    runtime.fallbackModel = model
+    try {
+      await synchronizeFallbackModel(ctx)
+      if (runtime.settings?.update) {
+        await runtime.settings.update(TOKENSAPI.settingsNamespace, { fallbackModel: model })
+      }
+      if (typeof runtime.agentDefaultModel?.saveSelection === 'function') {
+        await runtime.agentDefaultModel.saveSelection({ provider: DEEPSEEK_OFFICIAL.providerId, model })
+      }
+    } catch (error) {
+      runtime.fallbackModel = previousModel
+      if (previousModel) await synchronizeFallbackModel(ctx).catch(() => {})
+      throw error
+    }
+    return modelManagerStatus(ctx, request)
+  }
+
+  if (!tokensProvider) {
+    throw new ManagedCredentialError('invalid_provider', '当前 TokensAPI 路由未开放备用线路模型选择')
+  }
+  if (!runtime.models.some((entry) => entry.id === model)) {
+    throw new ManagedCredentialError('invalid_model', '所选模型不在 TokensAPI 可用列表中')
+  }
+  const selected = runtime.models.find((entry) => entry.id === model)
+  const api = configuredManagedModelApi(selected, runtime.protocolByModel[model])
+  const automaticCapability = managedModelCapability(selected)
+  const nextVisionModeByModel = reconcileVisionModeByModel(runtime.models, runtime.visionModeByModel)
+  if (automaticCapability.source === 'unknown') {
+    const requestedMode = normalizeVisionMode(runtime.visionModeByModel[model])
+    if (!requestedMode) {
+      throw new ManagedCredentialError(
+        'unknown_capability',
+        `模型 "${model}" 没有声明图片能力，请先在设置页选择图片处理方式`,
+      )
+    }
+    nextVisionModeByModel[model] = requestedMode
+  } else {
+    delete nextVisionModeByModel[model]
+  }
+  const previousModel = runtime.mainModel
+  const previousProtocolByModel = runtime.protocolByModel
+  const previousVisionModeByModel = runtime.visionModeByModel
+  runtime.protocolByModel = { ...runtime.protocolByModel, [model]: api }
+  runtime.visionModeByModel = nextVisionModeByModel
+  try {
+    await synchronizeMainModel(ctx, model, runtime.models)
+    if (runtime.settings?.update) {
+      await runtime.settings.update(TOKENSAPI.settingsNamespace, {
+        mainModel: model,
+        protocolByModel: runtime.protocolByModel,
+        visionModeByModel: runtime.visionModeByModel,
+      })
+    }
+  } catch (error) {
+    runtime.protocolByModel = previousProtocolByModel
+    runtime.visionModeByModel = previousVisionModeByModel
+    await synchronizeMainModel(ctx, previousModel, runtime.models).catch(() => {})
+    throw error
+  }
+  runtime.mainModel = model
+  return modelManagerStatus(ctx, request)
+}
+
 /** Return the key only for an explicit same-origin POST from the settings UI. */
 async function revealManagedCredential(ctx) {
   const [credential, verification] = await Promise.all([
@@ -3218,6 +3311,8 @@ function registerModelManagerRoute(ctx, host) {
           send(200, await discoverFallback(host, body))
         } else if (body?.action === 'configureFallback') {
           send(200, await configureFallback(host, body))
+        } else if (body?.action === 'selectMainModel') {
+          send(200, await selectMainModel(host, body))
         } else if (Object.hasOwn(body ?? {}, 'officialApiKey')) {
           send(200, await setOfficialCredential(host, body?.officialApiKey))
         } else if (Object.hasOwn(body ?? {}, 'apiKey')) {
@@ -3317,6 +3412,7 @@ export const __modelManager = {
   managedCredentialFingerprint,
   setManagedCredential,
   setManagedModels,
+  selectMainModel,
   revealManagedCredential,
   setOfficialCredential,
   revealOfficialCredential,

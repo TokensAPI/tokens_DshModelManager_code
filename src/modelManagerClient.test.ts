@@ -1016,6 +1016,212 @@ describe('Desktop model-manager settings section', () => {
         expect(state.failures).toEqual([]);
     });
 
+    it('persists a user conversation-model choice back to the managed settings route', async () => {
+        let loaded:
+            | {
+                  factory: (require: (id: string) => unknown) => {
+                      __manager: { registerManagerSection: (ctx: Record<string, unknown>) => void };
+                  };
+              }
+            | undefined;
+        const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = [];
+        const fetchStub = async (url: string, init?: { method?: string; body?: string }) => {
+            calls.push({ url, init });
+            if (init?.method !== 'POST') {
+                return {
+                    ok: true,
+                    json: async () => ({
+                        provider: 'TokensAPI',
+                        authenticated: true,
+                        mainModel: 'deepseek-v4-flash',
+                        activeMainModel: 'deepseek-v4-flash',
+                        mainProvider: 'modlens-tokensapi',
+                    }),
+                };
+            }
+            return {
+                ok: true,
+                json: async () => ({
+                    provider: 'TokensAPI',
+                    authenticated: true,
+                    mainModel: 'deepseek-v3.2',
+                    activeMainModel: 'deepseek-v3.2',
+                    mainProvider: 'modlens-tokensapi',
+                }),
+            };
+        };
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            fetchStub,
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+
+        const state = {
+            current: null as null | { provider: string; model: string },
+            groups: [
+                {
+                    id: 'modlens-tokensapi',
+                    models: [{ id: 'deepseek-v4-flash' }, { id: 'deepseek-v3.2' }],
+                },
+            ],
+            failures: [],
+        };
+        const listeners = new Set<() => void>();
+        const store = {
+            getSnapshot: () => state,
+            subscribe: (listener: () => void) => {
+                listeners.add(listener);
+                return () => listeners.delete(listener);
+            },
+            update: (mutator: (draft: typeof state) => void) => {
+                mutator(state);
+                for (const listener of [...listeners]) listener();
+            },
+        };
+        let directory: {
+            store: typeof store;
+            load: () => Promise<typeof state>;
+            select: (selection: {
+                provider: string;
+                model: string;
+                reasoningEffort?: string;
+            }) => Promise<void>;
+        };
+        directory = {
+            store,
+            load: async () => state,
+            select: async (selection) => {
+                state.current = selection;
+            },
+        };
+
+        loaded
+            .factory(() => ({}))
+            .__manager.registerManagerSection({
+                inject: (_services: string[], callback: (scope: Record<string, unknown>) => void) =>
+                    callback({
+                        sessions: {
+                            list: {
+                                getSnapshot: () => ({ current: 'session-user-choice' }),
+                                subscribe: () => () => undefined,
+                            },
+                            subagentAddress: () => undefined,
+                        },
+                        modelDirectories: { directoryFor: () => directory },
+                        slots: { inject: () => undefined },
+                    }),
+            });
+        for (let index = 0; index < 30; index++) await Promise.resolve();
+
+        await directory.select({
+            provider: 'modlens-tokensapi',
+            model: 'deepseek-v3.2',
+            reasoningEffort: 'high',
+        });
+        expect(JSON.parse(calls.at(-1)?.init?.body || '{}')).toEqual({
+            action: 'selectMainModel',
+            provider: 'modlens-tokensapi',
+            model: 'deepseek-v3.2',
+        });
+        expect(state.current).toEqual({
+            provider: 'modlens-tokensapi',
+            model: 'deepseek-v3.2',
+            reasoningEffort: 'high',
+        });
+    });
+
+    it('rolls the conversation selector back when persisting the choice fails', async () => {
+        let loaded:
+            | {
+                  factory: (require: (id: string) => unknown) => {
+                      __manager: { registerManagerSection: (ctx: Record<string, unknown>) => void };
+                  };
+              }
+            | undefined;
+        let postCalls = 0;
+        const fetchStub = async (_url: string, init?: { method?: string; body?: string }) => {
+            if (init?.method !== 'POST') {
+                return {
+                    ok: true,
+                    json: async () => ({
+                        provider: 'TokensAPI',
+                        authenticated: true,
+                        mainModel: 'deepseek-v4-flash',
+                        activeMainModel: 'deepseek-v4-flash',
+                        mainProvider: 'modlens-tokensapi',
+                    }),
+                };
+            }
+            postCalls += 1;
+            return { ok: false, json: async () => ({ error: 'save failed' }) };
+        };
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            fetchStub,
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const state = {
+            current: { provider: 'modlens-tokensapi', model: 'deepseek-v4-flash' },
+            groups: [
+                {
+                    id: 'modlens-tokensapi',
+                    models: [{ id: 'deepseek-v4-flash' }, { id: 'deepseek-v3.2' }],
+                },
+            ],
+            failures: [],
+        };
+        const store = {
+            getSnapshot: () => state,
+            subscribe: () => () => undefined,
+            update: (mutator: (draft: typeof state) => void) => mutator(state),
+        };
+        const selected: Array<{ provider: string; model: string }> = [];
+        const directory = {
+            store,
+            load: async () => state,
+            select: async (selection: { provider: string; model: string }) => {
+                selected.push(selection);
+                state.current = selection;
+            },
+        };
+        loaded
+            .factory(() => ({}))
+            .__manager.registerManagerSection({
+                inject: (_services: string[], callback: (scope: Record<string, unknown>) => void) =>
+                    callback({
+                        sessions: {
+                            list: {
+                                getSnapshot: () => ({ current: 'session-rollback' }),
+                                subscribe: () => () => undefined,
+                            },
+                            subagentAddress: () => undefined,
+                        },
+                        modelDirectories: { directoryFor: () => directory },
+                        slots: { inject: () => undefined },
+                    }),
+            });
+        for (let index = 0; index < 30; index++) await Promise.resolve();
+
+        await expect(
+            directory.select({ provider: 'modlens-tokensapi', model: 'deepseek-v3.2' }),
+        ).rejects.toThrow('save failed');
+        expect(postCalls).toBe(1);
+        expect(selected).toEqual([
+            { provider: 'modlens-tokensapi', model: 'deepseek-v3.2' },
+            { provider: 'modlens-tokensapi', model: 'deepseek-v4-flash' },
+        ]);
+        expect(state.current).toEqual({
+            provider: 'modlens-tokensapi',
+            model: 'deepseek-v4-flash',
+        });
+    });
+
     it('switches the currently open session after the managed main model is saved', async () => {
         let loaded:
             | {

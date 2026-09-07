@@ -1394,6 +1394,16 @@ window.__ModuleLoader__.load({
           load()
         }, [load])
 
+        // The conversation picker can change the shared main model while this
+        // page remains mounted. Reload the status so the settings controls
+        // always reflect the same durable selection.
+        react.useEffect(() => {
+          if (typeof document?.addEventListener !== 'function') return undefined
+          var onSelectionChanged = () => load()
+          document.addEventListener('tokens-model-manager-selection-changed', onSelectionChanged)
+          return () => document.removeEventListener('tokens-model-manager-selection-changed', onSelectionChanged)
+        }, [load])
+
         var save = (event) => {
           event.preventDefault()
           if (!apiKey.trim() || busy) return
@@ -2604,6 +2614,24 @@ window.__ModuleLoader__.load({
      * composer must submit session.selectModel through its shared directory as
      * well or it keeps displaying and using the previous model.
      */
+    // directory.select is wrapped below so a user choice can be persisted to
+    // the model-manager route.  Internal activation must bypass that write or
+    // startup/session navigation would POST the same selection repeatedly.
+    var managedSelectionGuards = new WeakMap()
+    async function selectDirectory(directory, selection, internal) {
+      if (internal === true) {
+        var depth = managedSelectionGuards.get(directory) || 0
+        managedSelectionGuards.set(directory, depth + 1)
+        try {
+          return await directory.select(selection)
+        } finally {
+          if (depth > 0) managedSelectionGuards.set(directory, depth)
+          else managedSelectionGuards.delete(directory)
+        }
+      }
+      return directory.select(selection)
+    }
+
     async function synchronizeCurrentSessionModel(
       sessions,
       modelDirectories,
@@ -2704,7 +2732,7 @@ window.__ModuleLoader__.load({
           throw new Error(`模型目录尚未刷新到 ${provider}/${model}，请稍后重试`)
         }
       }
-      await directory.select({ provider: provider, model: model })
+      await selectDirectory(directory, { provider: provider, model: model }, true)
       // A concurrent catalog refresh can suppress select()'s local store echo
       // even though the Host accepted it. One Host reload is enough to make
       // the default selection visible in the composer's shared directory.
@@ -2732,6 +2760,7 @@ window.__ModuleLoader__.load({
             var desiredSelectionEnabled = body.authenticated === true
             var lastActivationKey = ''
             var projectedDirectories = new WeakMap()
+            var projectedDirectoryEntries = new Set()
             var projectionStops = []
             var ensureManagedCatalogProjection = (directory) => {
               var store = directory?.store
@@ -2748,6 +2777,70 @@ window.__ModuleLoader__.load({
                 installed.apply()
                 return
               }
+              var originalSelect = directory.select
+              var providerFamily = (provider) => {
+                if (provider === 'tokensapi' || provider === 'modlens-tokensapi') return 'tokensapi'
+                if (provider === 'tokens-fallback' || provider === 'modlens-tokens-fallback') return 'fallback'
+                return ''
+              }
+              var notifySettingsSelectionChanged = () => {
+                if (typeof document?.dispatchEvent !== 'function') return
+                try {
+                  var event = typeof Event === 'function' ? new Event('tokens-model-manager-selection-changed') : null
+                  if (event) document.dispatchEvent(event)
+                } catch {
+                  // A test host or older browser may not expose Event. The
+                  // durable server state is still correct in that case.
+                }
+              }
+              var selectFromConversation = async (selection) => {
+                if ((managedSelectionGuards.get(directory) || 0) > 0) {
+                  return originalSelect.call(directory, selection)
+                }
+                var selectedProvider = typeof selection?.provider === 'string' ? selection.provider : ''
+                var selectedModel = typeof selection?.model === 'string' ? selection.model.trim() : ''
+                var expectedFamily = providerFamily(desiredMainProvider)
+                if (!selectedModel || providerFamily(selectedProvider) !== expectedFamily) {
+                  return originalSelect.call(directory, selection)
+                }
+                var previousSelection = directory.store?.getSnapshot?.()?.current
+                var result = await originalSelect.call(directory, selection)
+                if (selectedModel === desiredMainModel) return result
+                try {
+                  var response = await fetch('/tokens/model-manager', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                      action: 'selectMainModel',
+                      provider: selectedProvider,
+                      model: selectedModel,
+                    }),
+                  })
+                  var body = await response.json().catch(() => ({}))
+                  if (!response.ok) throw new Error(body?.error || '模型选择保存失败')
+                  var active = activeSelectionFromStatus(body)
+                  if (!active.model || !active.provider) throw new Error('模型选择保存返回无效状态')
+                  desiredMainModel = active.model
+                  desiredMainProvider = active.provider
+                  for (var entry of projectedDirectoryEntries) entry.apply()
+                  notifySettingsSelectionChanged()
+                  return result
+                } catch (error) {
+                  if (
+                    previousSelection &&
+                    typeof previousSelection.model === 'string' &&
+                    previousSelection.model &&
+                    typeof previousSelection.provider === 'string' &&
+                    previousSelection.provider
+                  ) {
+                    await selectDirectory(directory, previousSelection, true).catch(() => {})
+                  } else if (typeof directory.load === 'function') {
+                    await directory.load().catch(() => {})
+                  }
+                  throw error
+                }
+              }
+              directory.select = selectFromConversation
               var applying = false
               var applyProjection = () => {
                 if (applying) return
@@ -2773,6 +2866,7 @@ window.__ModuleLoader__.load({
               }
               var stop = store.subscribe(applyProjection)
               projectedDirectories.set(directory, { apply: applyProjection })
+              projectedDirectoryEntries.add({ apply: applyProjection })
               if (typeof stop === 'function') projectionStops.push(stop)
               applyProjection()
             }
@@ -2859,6 +2953,7 @@ window.__ModuleLoader__.load({
                   () => () => {
                     stopSessionSelectionSync()
                     for (var stopProjection of projectionStops.splice(0)) stopProjection()
+                    projectedDirectoryEntries.clear()
                   },
                   'tokens-model-manager: synchronize selected session model',
                 )
