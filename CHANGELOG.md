@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.15 - 2026-09-07
+
+- Keep the Desktop conversation model picker and TokensAPI settings page on one durable selection. Choosing a managed model in either surface now updates the other; a failed persistence request restores the previously active conversation model instead of leaving the two surfaces inconsistent.
+- Keep TokensAPI and fallback selections isolated. A fallback conversation choice updates only the fallback model and never overwrites the TokensAPI endpoint, login credential, main model, or visual-routing configuration.
+
 ## 0.2.14 - 2026-08-31
 
 - Make model image capability fail closed: structured provider metadata wins, verified built-in classifications cover known routes, and every unclassified future model requires an explicit per-model choice between native image handling and the TokensAPI vision bridge.
