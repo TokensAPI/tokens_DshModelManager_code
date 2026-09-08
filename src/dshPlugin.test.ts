@@ -445,6 +445,26 @@ describe('dsh plugin vision provider (phase 3)', () => {
             maxTokens: 4096,
             reasoningEffort: 'high',
         });
+        // dsh d29855f97c drives every turn through adapter.prepareCall with a
+        // base-class default this plain object cannot inherit; the wrapper
+        // restates it. Same resolved model, stream bound to the wrapper.
+        streamed.length = 0;
+        const prepared = (await adapter.prepareCall(
+            'deepseek-modlens',
+            'deepseek-v4-flash',
+            signal,
+        )) as { model: { provider: string; id: string }; stream: CallableFunction };
+        expect(prepared.model.provider).toBe('deepseek-modlens');
+        expect(prepared.model.id).toBe('deepseek-v4-flash');
+        for await (const _chunk of prepared.stream({
+            provider: 'deepseek-modlens',
+            model: 'deepseek-v4-flash',
+            messages: [],
+            signal,
+        }) as AsyncIterable<unknown>) {
+            // drain
+        }
+        expect(streamed[0].provider).toBe('deepseek-official');
     });
 
     it('degrades silently without the registration surface or when disabled', async () => {

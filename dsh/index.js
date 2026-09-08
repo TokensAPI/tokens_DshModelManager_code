@@ -912,6 +912,16 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
           visionModes.set(model, managedTokensApiRoute ? managedMode(info) : 'bridge')
           return { ...withVision(info), id: model }
         },
+        async prepareCall(provider, model, signal) {
+          // dsh d29855f97c added prepareCall to the LlmAdapter contract with a
+          // base-class default. This plain object never extends that base, so
+          // it must restate the default itself: resolve once, then bind the
+          // one-shot stream to this same registration.
+          return {
+            model: await this.resolveModel(provider, model, signal),
+            stream: (options) => this.stream(options),
+          }
+        },
         stream(options) {
           // Convert at request time, not at log time: the durable session
           // log keeps the real image blocks (so the UI shows the paste
