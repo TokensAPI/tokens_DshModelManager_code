@@ -1,8 +1,225 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const SOURCE = fs.readFileSync(path.join(__dirname, '..', 'dsh', 'client.js'), 'utf-8');
+
+describe('bounded model settings operations', () => {
+    afterEach(() => vi.useRealTimers());
+    function scope(fetchMock: unknown) {
+        let definition: { factory: CallableFunction } | undefined;
+        new Function('window', 'fetch', SOURCE)(
+            {
+                __ModuleLoader__: {
+                    load: (value: { factory: CallableFunction }) => {
+                        definition = value;
+                    },
+                },
+            },
+            fetchMock,
+        );
+        return definition?.factory(() => ({})).__manager.createManagerRequests();
+    }
+    it('ends waiting for a stalled body and can retry without changing saved configuration', async () => {
+        vi.useFakeTimers();
+        const saved = { key: 'saved-key', model: 'saved-model' };
+        let pending = true;
+        let signal: AbortSignal | undefined;
+        const requests = scope(async (_url: string, options: RequestInit) => {
+            signal = options.signal as AbortSignal;
+            return {
+                ok: true,
+                json: () =>
+                    pending ? new Promise(() => {}) : Promise.resolve({ models: ['new'] }),
+            };
+        });
+        const start = vi.fn(),
+            success = vi.fn(),
+            error = vi.fn(),
+            finish = vi.fn();
+        const job = requests.run('/tokens/model-manager', {}, { start, success, error, finish });
+        expect(start).toHaveBeenCalledOnce();
+        await vi.advanceTimersByTimeAsync(25_001);
+        await job;
+        expect(error.mock.calls[0][0].message).toContain('超时');
+        expect(finish).toHaveBeenCalledOnce();
+        expect(success).not.toHaveBeenCalled();
+        expect(signal?.aborted).toBe(true);
+        expect(saved).toEqual({ key: 'saved-key', model: 'saved-model' });
+        pending = false;
+        await requests.run('/tokens/model-manager', {}, { success });
+        expect(success).toHaveBeenCalledWith({ models: ['new'] }, expect.any(Function));
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it('ignores a superseded response and a response after disposal', async () => {
+        let resolveFirst: (value: unknown) => void = () => {};
+        const requests = scope(
+            vi
+                .fn()
+                .mockImplementationOnce(
+                    () =>
+                        new Promise((resolve) => {
+                            resolveFirst = resolve;
+                        }),
+                )
+                .mockResolvedValue({ ok: true, json: async () => ({ model: 'new' }) }),
+        );
+        const old = vi.fn(),
+            current = vi.fn();
+        const first = requests.run('/tokens/model-manager', {}, { success: old });
+        await Promise.resolve();
+        await requests.run('/tokens/model-manager', {}, { success: current });
+        resolveFirst({ ok: true, json: async () => ({ model: 'old' }) });
+        await first;
+        expect(old).not.toHaveBeenCalled();
+        expect(current).toHaveBeenCalledOnce();
+        const last = requests.run('/tokens/model-manager', {}, { success: old });
+        requests.dispose();
+        await last;
+        expect(old).not.toHaveBeenCalled();
+    });
+    for (const kind of ['http', 'json', 'headers']) {
+        it(`restores controls after ${kind} failure`, async () => {
+            vi.useFakeTimers();
+            const requests = scope(async () => {
+                if (kind === 'headers') return new Promise(() => {});
+                return {
+                    ok: kind !== 'http',
+                    json: async () => {
+                        if (kind === 'json') throw new SyntaxError('invalid response');
+                        return { error: '备用线路服务暂时不可用，请重试' };
+                    },
+                };
+            });
+            const success = vi.fn(),
+                error = vi.fn(),
+                finish = vi.fn();
+            const job = requests.run('/tokens/model-manager', {}, { success, error, finish });
+            await vi.advanceTimersByTimeAsync(25_001);
+            await job;
+            expect(success).not.toHaveBeenCalled();
+            expect(error).toHaveBeenCalledOnce();
+            expect(finish).toHaveBeenCalledOnce();
+            expect(requests.active).toBe(false);
+            expect(vi.getTimerCount()).toBe(0);
+        });
+    }
+});
+
+describe('fallback settings component clicks', () => {
+    afterEach(() => vi.useRealTimers());
+    it('shows immediate progress, ignores double clicks, preserves saved values on failure, and retries', async () => {
+        vi.useFakeTimers();
+        type Element = {
+            type: string;
+            props: Record<string, CallableFunction | string | boolean>;
+            children: unknown[];
+        };
+        let loaded: { factory: CallableFunction } | undefined;
+        let fail = true;
+        const fetchMock = vi.fn(async () => ({
+            ok: true,
+            json: () =>
+                fail ? new Promise(() => {}) : Promise.resolve({ models: [{ id: 'new-chat' }] }),
+        }));
+        new Function('window', 'document', 'fetch', SOURCE)(
+            {
+                __ModuleLoader__: {
+                    load: (value: { factory: CallableFunction }) => {
+                        loaded = value;
+                    },
+                },
+            },
+            { documentElement: { lang: 'zh' } },
+            fetchMock,
+        );
+        const saved = {
+            authenticated: true,
+            channel: 'tokensapi',
+            mainModel: 'deepseek-v4-flash',
+            official: {
+                configured: true,
+                baseURL: 'https://backup.example/v1',
+                mainModel: 'saved-chat',
+            },
+        };
+        const states: unknown[] = [
+            saved,
+            '',
+            '',
+            'https://backup.example/v1',
+            'saved-chat',
+            [{ id: 'saved-chat' }],
+            '',
+            'deepseek-v4-flash',
+            'openai-completions',
+            '',
+            '',
+            false,
+            false,
+            true,
+        ];
+        let cursor = 0;
+        const react = {
+            useState(initial: unknown) {
+                const index = cursor++;
+                if (!(index in states))
+                    states[index] = typeof initial === 'function' ? initial() : initial;
+                return [
+                    states[index],
+                    (value: unknown) => {
+                        states[index] = value;
+                    },
+                ];
+            },
+            useCallback: (fn: unknown) => fn,
+            useEffect: () => {},
+            createElement: (
+                type: string,
+                props: Element['props'],
+                ...children: unknown[]
+            ): Element => ({ type, props, children }),
+        };
+        const section = loaded
+            ?.factory(() => ({}))
+            .__manager.ModelManagerSection(react, async () => {});
+        const render = () => {
+            cursor = 0;
+            return section();
+        };
+        const find = (node: unknown, text: string): Element | undefined => {
+            if (!node || typeof node !== 'object') return undefined;
+            if (Array.isArray(node)) {
+                for (const child of node) {
+                    const match = find(child, text);
+                    if (match) return match;
+                }
+                return undefined;
+            }
+            const element = node as Element;
+            if (element.type === 'button' && element.children.includes(text)) return element;
+            return find(element.children, text);
+        };
+        const click = find(render(), '获取模型')?.props.onClick as CallableFunction;
+        expect(click).toBeTypeOf('function');
+        const job = click();
+        click();
+        expect(find(render(), '正在获取模型…')?.props.disabled).toBe(true);
+        await vi.advanceTimersByTimeAsync(25_001);
+        await job;
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(states[16]).toContain('超时');
+        expect(states[0]).toBe(saved);
+        expect(states[4]).toBe('saved-chat');
+        expect(find(render(), '获取模型')?.props.disabled).toBe(false);
+        fail = false;
+        const retry = find(render(), '获取模型');
+        if (!retry) throw new Error('missing retry button');
+        await (retry.props.onClick as CallableFunction)();
+        expect(states[4]).toBe('new-chat');
+        expect(states[0]).toBe(saved);
+    });
+});
 
 class FakeElement {
     id = '';
@@ -266,7 +483,7 @@ describe('Desktop model-manager settings section', () => {
         expect(SOURCE).toContain('body: JSON.stringify(payload)');
         expect(SOURCE).toContain("action: 'discoverFallback'");
         expect(SOURCE).toContain("action: 'configureFallback'");
-        expect(SOURCE).toContain("postManager({ action: 'switchTokensAPI' })");
+        expect(SOURCE).toContain("performFallback({ action: 'switchTokensAPI' }");
         expect(SOURCE).toContain('baseURL: fallbackBaseURL');
         expect(SOURCE).toContain('mainModel: fallbackModel');
         expect(SOURCE).toContain('var fallbackModelsPair = react.useState([])');

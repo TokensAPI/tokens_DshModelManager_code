@@ -2662,30 +2662,8 @@ async function parseFallbackModels(response) {
   return models
 }
 
-async function validateFallbackCredential(apiKey, baseURL, request = globalThis.fetch) {
-  if (typeof request !== 'function') {
-    throw new ManagedCredentialError('unreachable', '无法连接备用线路，请检查地址和网络')
-  }
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 20_000)
-  let response
-  try {
-    response = await request(`${baseURL}/models`, {
-      method: 'GET',
-      headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json' },
-      redirect: 'error',
-      signal: controller.signal,
-    })
-  } catch {
-    throw new ManagedCredentialError('unreachable', '无法连接备用线路，请检查地址和网络')
-  } finally {
-    clearTimeout(timeout)
-  }
-  if (response?.status === 200) return parseFallbackModels(response)
-  if (response?.status === 401 || response?.status === 403) {
-    throw new ManagedCredentialError('invalid_key', '备用线路 API Key 无效，请检查后重试')
-  }
-  throw new ManagedCredentialError('upstream', '备用线路暂时不可用，请稍后重试')
+async function validateFallbackCredential(apiKey, baseURL, request = globalThis.fetch, signal) {
+  return requestModelCatalog(`${baseURL}/models`, apiKey, '备用线路', parseFallbackModels, request, signal)
 }
 
 async function synchronizeFallbackModel(ctx) {
@@ -2748,8 +2726,111 @@ async function hideFallbackModel(ctx) {
   throw new Error('当前 settings 服务无法隐藏备用线路模型')
 }
 
+// Only this bounded catalog operation owns network diagnostics. Never log raw
+// exception messages: fetch causes and gateway bodies may contain credentials.
+async function requestModelCatalog(url, apiKey, label, parse, request, signal) {
+  signal ??= request?.signal
+  const controller = new AbortController()
+  const started = Date.now()
+  let stage = 'headers'
+  let status
+  let timedOut = false
+  const cancel = () => controller.abort()
+  signal?.addEventListener('abort', cancel, { once: true })
+  if (signal?.aborted) cancel()
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, 20_000)
+  try {
+    if (controller.signal.aborted) throw new Error('cancelled')
+    const response = await abortableWait(
+      Promise.resolve().then(() =>
+        request(url, {
+          method: 'GET',
+          headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json' },
+          redirect: 'error',
+          signal: controller.signal,
+        }),
+      ),
+      controller.signal,
+    )
+    status = response?.status
+    if (status === 401 || status === 403) {
+      throw new ManagedCredentialError('invalid_key', `${label} API Key 无效，请检查后重试`)
+    }
+    if (status !== 200) throw new ManagedCredentialError('upstream', `${label} 服务暂时不可用，请稍后重试`)
+    stage = 'body'
+    // Read outside the format parser so transport failures remain distinguishable
+    // from invalid JSON. The deadline remains active through model validation.
+    const payload = await abortableWait(
+      Promise.resolve().then(() => response.json()),
+      controller.signal,
+    )
+    stage = 'models'
+    return await abortableWait(parse({ json: async () => payload }), controller.signal)
+  } catch (error) {
+    const rawCode = error?.cause?.code ?? error?.code
+    const codes = {
+      ENOTFOUND: 'dns',
+      EAI_AGAIN: 'dns',
+      ECONNREFUSED: 'connection',
+      ECONNRESET: 'connection',
+      UND_ERR_SOCKET: 'connection',
+      ETIMEDOUT: 'timeout',
+      UND_ERR_CONNECT_TIMEOUT: 'timeout',
+      UND_ERR_HEADERS_TIMEOUT: 'timeout',
+      UND_ERR_BODY_TIMEOUT: 'timeout',
+      CERT_HAS_EXPIRED: 'tls',
+      DEPTH_ZERO_SELF_SIGNED_CERT: 'tls',
+      UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'tls',
+      SELF_SIGNED_CERT_IN_CHAIN: 'tls',
+      ERR_TLS_CERT_ALTNAME_INVALID: 'tls',
+      UNABLE_TO_GET_ISSUER_CERT_LOCALLY: 'tls',
+    }
+    const category = timedOut
+      ? 'timeout'
+      : signal?.aborted
+        ? 'cancelled'
+        : status === 401 || status === 403
+          ? 'authentication'
+          : status !== undefined && status !== 200
+            ? 'http'
+            : error instanceof SyntaxError || stage === 'models'
+              ? 'models'
+              : (codes[rawCode] ?? 'network')
+    console.warn(
+      '[tokens-model-manager] catalog',
+      JSON.stringify({
+        operation: label === 'TokensAPI' ? 'primary-models' : 'fallback-models',
+        stage,
+        elapsedMs: Date.now() - started,
+        category,
+        target: label === 'TokensAPI' ? 'tokensapi' : 'custom-endpoint',
+        ...(Object.hasOwn(codes, rawCode) ? { code: rawCode } : {}),
+        ...(Number.isInteger(status) ? { status } : {}),
+      }),
+    )
+    if (error instanceof ManagedCredentialError) throw error
+    if (category === 'models') throw new ManagedCredentialError('upstream', `${label} 返回了无法识别的模型列表`)
+    const reason = {
+      dns: 'DNS 解析失败',
+      connection: '连接失败或中断',
+      tls: 'TLS／证书校验失败',
+      timeout: stage === 'headers' ? '连接或响应头等待超时' : '响应读取超时',
+      cancelled: '请求已取消',
+      network: '网络请求失败',
+    }[category]
+    throw new ManagedCredentialError('unreachable', `无法连接 ${label}：${reason}，请重试`)
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', cancel)
+    controller.abort()
+  }
+}
+
 /** Public gate status. It intentionally contains neither the key nor its fingerprint. */
-async function modelManagerStatus(ctx, request = globalThis.fetch) {
+async function modelManagerStatus(ctx, request = globalThis.fetch, { refreshModels = true } = {}) {
   // The browser plugin starts immediately and can reach this route before the
   // settings service has replayed persisted namespaces. Returning the in-memory
   // defaults during that window makes the client faithfully write DeepSeek
@@ -2763,6 +2844,7 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
     ctx.credentials.describe(DEEPSEEK_OFFICIAL.credentialRef),
   ])
   let authenticated = false
+  let checkedFingerprint = ''
   if (credential.configured === true && verification.configured === true) {
     const [storedKey, storedVerification] = await Promise.all([
       ctx.credentials.resolve(TOKENSAPI.credentialRef),
@@ -2770,11 +2852,15 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
     ])
     const apiKey = resolvedCredentialValue(storedKey)
     const fingerprint = resolvedCredentialValue(storedVerification)
-    authenticated = apiKey.length > 0 && fingerprint === managedCredentialFingerprint(apiKey)
+    checkedFingerprint = fingerprint
+    authenticated =
+      apiKey.length > 0 &&
+      fingerprint === managedCredentialFingerprint(apiKey) &&
+      managerRuntime(ctx).rejectedFingerprint !== fingerprint
   }
   const runtime = managerRuntime(ctx)
   let modelListError = ''
-  if (authenticated && runtime.models.length === 0) {
+  if (authenticated && refreshModels && runtime.models.length === 0) {
     try {
       runtime.models = await validateManagedCredential(
         resolvedCredentialValue(await ctx.credentials.resolve(TOKENSAPI.credentialRef)),
@@ -2793,6 +2879,10 @@ async function modelManagerStatus(ctx, request = globalThis.fetch) {
       }
     } catch (error) {
       modelListError = String(error?.message ?? error)
+      if (error?.code === 'invalid_key') {
+        runtime.rejectedFingerprint = checkedFingerprint
+        authenticated = false
+      }
     }
   }
   const officialActive = runtime.activeChannel === 'official'
@@ -2886,30 +2976,8 @@ class ManagedCredentialError extends Error {
  * Error bodies are never surfaced because gateways sometimes echo request
  * metadata. A successful body is reduced to bounded public model metadata.
  */
-async function validateManagedCredential(apiKey, request = globalThis.fetch) {
-  if (typeof request !== 'function') {
-    throw new ManagedCredentialError('unreachable', '无法连接 TokensAPI，请检查网络后重试')
-  }
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 20_000)
-  let response
-  try {
-    response = await request(`${TOKENSAPI.baseURL}/models`, {
-      method: 'GET',
-      headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json' },
-      redirect: 'error',
-      signal: controller.signal,
-    })
-  } catch {
-    throw new ManagedCredentialError('unreachable', '无法连接 TokensAPI，请检查网络后重试')
-  } finally {
-    clearTimeout(timeout)
-  }
-  if (response?.status === 200) return parseManagedModels(response)
-  if (response?.status === 401 || response?.status === 403) {
-    throw new ManagedCredentialError('invalid_key', 'API Key 无效，请检查后重试')
-  }
-  throw new ManagedCredentialError('upstream', 'TokensAPI 服务暂时不可用，请稍后重试')
+async function validateManagedCredential(apiKey, request = globalThis.fetch, signal) {
+  return requestModelCatalog(`${TOKENSAPI.baseURL}/models`, apiKey, 'TokensAPI', parseManagedModels, request, signal)
 }
 
 /** Validate first, then persist the key and its non-reversible verification marker. */
@@ -2938,6 +3006,7 @@ async function setManagedCredential(ctx, value, request = globalThis.fetch) {
   }
   await ctx.credentials.set(TOKENSAPI.credentialRef, apiKey)
   await ctx.credentials.set(TOKENSAPI.verificationRef, managedCredentialFingerprint(apiKey))
+  runtime.rejectedFingerprint = undefined
   return modelManagerStatus(ctx, request)
 }
 
@@ -3016,7 +3085,10 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
  * endpoint, API key, or vision-model fields owned by the settings page.
  */
 async function selectMainModel(ctx, value, request = globalThis.fetch) {
-  const status = await modelManagerStatus(ctx, request)
+  await managerRuntime(ctx).settingsReady
+  const status = await modelManagerStatus(ctx, request, {
+    refreshModels: managerRuntime(ctx).activeChannel !== 'official',
+  })
   if (!status.authenticated) {
     throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
   }
@@ -3051,7 +3123,7 @@ async function selectMainModel(ctx, value, request = globalThis.fetch) {
       if (previousModel) await synchronizeFallbackModel(ctx).catch(() => {})
       throw error
     }
-    return modelManagerStatus(ctx, request)
+    return modelManagerStatus(ctx, request, { refreshModels: false })
   }
 
   if (!tokensProvider) {
@@ -3117,7 +3189,7 @@ async function revealManagedCredential(ctx) {
 async function setOfficialCredential(ctx, value, request = globalThis.fetch) {
   const apiKey = normalizeManagedCredential(value)
   await ctx.credentials.set(DEEPSEEK_OFFICIAL.credentialRef, apiKey)
-  return modelManagerStatus(ctx, request)
+  return modelManagerStatus(ctx, request, { refreshModels: false })
 }
 
 async function revealOfficialCredential(ctx) {
@@ -3131,7 +3203,7 @@ async function revealOfficialCredential(ctx) {
 
 /** Discover the current endpoint's real model catalog without persisting or switching anything. */
 async function discoverFallback(ctx, value, request = globalThis.fetch) {
-  const status = await modelManagerStatus(ctx, request)
+  const status = await modelManagerStatus(ctx, request, { refreshModels: false })
   if (!status.authenticated) {
     throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
   }
@@ -3155,7 +3227,7 @@ async function discoverFallback(ctx, value, request = globalThis.fetch) {
 }
 
 async function configureFallback(ctx, value, request = globalThis.fetch) {
-  const status = await modelManagerStatus(ctx, request)
+  const status = await modelManagerStatus(ctx, request, { refreshModels: false })
   if (!status.authenticated) {
     throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
   }
@@ -3222,11 +3294,11 @@ async function configureFallback(ctx, value, request = globalThis.fetch) {
     }
     throw error
   }
-  return modelManagerStatus(ctx, request)
+  return modelManagerStatus(ctx, request, { refreshModels: false })
 }
 
 async function switchToOfficial(ctx, request = globalThis.fetch) {
-  const status = await modelManagerStatus(ctx, request)
+  const status = await modelManagerStatus(ctx, request, { refreshModels: false })
   if (!status.authenticated) {
     throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
   }
@@ -3259,11 +3331,11 @@ async function switchToOfficial(ctx, request = globalThis.fetch) {
     if (previousChannel !== 'official') await hideFallbackModel(ctx).catch(() => {})
     throw error
   }
-  return modelManagerStatus(ctx, request)
+  return modelManagerStatus(ctx, request, { refreshModels: false })
 }
 
 async function switchToTokensAPI(ctx, request = globalThis.fetch) {
-  const status = await modelManagerStatus(ctx, request)
+  const status = await modelManagerStatus(ctx, request, { refreshModels: false })
   if (!status.authenticated) {
     throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
   }
@@ -3291,7 +3363,7 @@ async function switchToTokensAPI(ctx, request = globalThis.fetch) {
     }
     throw error
   }
-  return modelManagerStatus(ctx, request)
+  return modelManagerStatus(ctx, request, { refreshModels: false })
 }
 
 function registerModelManagerRoute(ctx, host) {
@@ -3300,7 +3372,19 @@ function registerModelManagerRoute(ctx, host) {
     kind: 'exact',
     path: '/tokens/model-manager',
     handler: async (req, res) => {
+      const controller = new AbortController()
+      const cancel = () => {
+        controller.abort()
+        req.removeListener?.('aborted', cancel)
+        res.removeListener?.('close', cancel)
+      }
+      req.on?.('aborted', cancel)
+      res.on?.('close', cancel)
+      const request = Object.assign((url, options) => globalThis.fetch(url, options), {
+        signal: controller.signal,
+      })
       const send = (status, body) => {
+        cancel()
         res.writeHead(status, {
           'content-type': 'application/json',
           'cache-control': 'no-store',
@@ -3313,7 +3397,12 @@ function registerModelManagerRoute(ctx, host) {
       }
       if (req.method === 'GET') {
         try {
-          send(200, await modelManagerStatus(host))
+          send(
+            200,
+            await modelManagerStatus(host, request, {
+              refreshModels: new URL(req.url, 'http://localhost').searchParams.get('refresh') === '1',
+            }),
+          )
         } catch (error) {
           send(409, { error: String(error?.message ?? error) })
         }
@@ -3341,21 +3430,21 @@ function registerModelManagerRoute(ctx, host) {
         } else if (body?.action === 'revealOfficialApiKey') {
           send(200, await revealOfficialCredential(host))
         } else if (body?.action === 'switchOfficial') {
-          send(200, await switchToOfficial(host))
+          send(200, await switchToOfficial(host, request))
         } else if (body?.action === 'switchTokensAPI') {
-          send(200, await switchToTokensAPI(host))
+          send(200, await switchToTokensAPI(host, request))
         } else if (body?.action === 'discoverFallback') {
-          send(200, await discoverFallback(host, body))
+          send(200, await discoverFallback(host, body, request))
         } else if (body?.action === 'configureFallback') {
-          send(200, await configureFallback(host, body))
+          send(200, await configureFallback(host, body, request))
         } else if (body?.action === 'selectMainModel') {
-          send(200, await selectMainModel(host, body))
+          send(200, await selectMainModel(host, body, request))
         } else if (Object.hasOwn(body ?? {}, 'officialApiKey')) {
-          send(200, await setOfficialCredential(host, body?.officialApiKey))
+          send(200, await setOfficialCredential(host, body?.officialApiKey, request))
         } else if (Object.hasOwn(body ?? {}, 'apiKey')) {
-          send(200, await setManagedCredential(host, body?.apiKey))
+          send(200, await setManagedCredential(host, body?.apiKey, request))
         } else {
-          send(200, await setManagedModels(host, body))
+          send(200, await setManagedModels(host, body, request))
         }
       } catch (error) {
         const code = typeof error?.code === 'string' ? error.code : 'invalid_input'
@@ -3442,6 +3531,7 @@ function registerConfigRoute(ctx) {
 // both rather than through the HTTP route.
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
 export const __modelManager = {
+  registerModelManagerRoute,
   modelManagerStatus,
   normalizeManagedCredential,
   normalizeManagedBaseURL,

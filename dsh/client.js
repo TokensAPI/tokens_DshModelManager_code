@@ -1233,7 +1233,7 @@ window.__ModuleLoader__.load({
           submit.disabled = true
           submit.textContent = t.verifying
           message.textContent = ''
-          fetch('/tokens/model-manager', {
+          managerFetch('/tokens/model-manager', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ apiKey: apiKey }),
@@ -1264,7 +1264,7 @@ window.__ModuleLoader__.load({
       }
 
       renderChecking()
-      fetch('/tokens/model-manager', { cache: 'no-store' })
+      managerFetch('/tokens/model-manager', { cache: 'no-store' })
         .then((response) =>
           response
             .json()
@@ -1278,6 +1278,87 @@ window.__ModuleLoader__.load({
         })
         .catch((error) => renderForm(null, String(error.message || error)))
       return close
+    }
+
+    // Bound the complete local request, including the response body. A proxy or
+    // host that ignores abort must not leave the UI waiting forever.
+    async function managerFetch(url, options = {}) {
+      var controller = new AbortController()
+      var signal = options.signal
+      var cancel = () => controller.abort()
+      signal?.addEventListener('abort', cancel, { once: true })
+      if (signal?.aborted) cancel()
+      var timer
+      var rejectAbort
+      var abort = () => rejectAbort(new Error('请求已取消'))
+      try {
+        var stopped = new Promise((_, reject) => {
+          rejectAbort = reject
+          controller.signal.addEventListener('abort', abort, { once: true })
+          if (controller.signal.aborted) abort()
+          timer = setTimeout(() => {
+            reject(new Error('请求超时，请重试'))
+            controller.abort()
+          }, 25_000)
+        })
+        return await Promise.race([
+          stopped,
+          (async () => {
+            var response = await fetch(url, { ...options, signal: controller.signal })
+            var body = await response.json()
+            return { ok: response.ok, status: response.status, json: async () => body }
+          })(),
+        ])
+      } finally {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', cancel)
+        controller.signal.removeEventListener('abort', abort)
+        controller.abort()
+      }
+    }
+
+    function createManagerRequests() {
+      var generation = 0
+      var controller
+      var disposed = false
+      var scope = {
+        active: false,
+        cancel() {
+          generation += 1
+          controller?.abort()
+          scope.active = false
+        },
+        dispose() {
+          disposed = true
+          scope.cancel()
+        },
+        mount() {
+          disposed = false
+        },
+        async run(url, options, handlers = {}) {
+          scope.cancel()
+          if (disposed) return
+          var current = generation
+          var alive = () => !disposed && current === generation
+          controller = new AbortController()
+          scope.active = true
+          handlers.start?.()
+          try {
+            var response = await managerFetch(url, { ...options, signal: controller.signal })
+            var body = await response.json()
+            if (!response.ok) throw new Error(body.error || '请求失败，请重试')
+            if (alive()) await handlers.success?.(body, alive)
+          } catch (error) {
+            if (alive()) handlers.error?.(error)
+          } finally {
+            if (alive()) {
+              scope.active = false
+              handlers.finish?.()
+            }
+          }
+        },
+      }
+      return scope
     }
 
     function ModelManagerSection(react, synchronizeMainSelection) {
@@ -1301,6 +1382,7 @@ window.__ModuleLoader__.load({
         var queryPair = react.useState('')
         var notePair = react.useState('')
         var busyPair = react.useState(false)
+        var requests = react.useState(() => createManagerRequests())[0]
         var state = statePair[0]
         var apiKey = keyPair[0]
         var officialApiKey = officialKeyPair[0]
@@ -1353,53 +1435,72 @@ window.__ModuleLoader__.load({
 
         var load = react.useCallback(
           () =>
-            fetch('/tokens/model-manager', { cache: 'no-store' })
-              .then((response) =>
-                response.json().then((body) => {
-                  if (!response.ok) throw new Error(body.error || 'load failed')
-                  return body
-                }),
-              )
-              .then((body) => {
-                statePair[1](body)
-                basePair[1](body.baseURL || '')
-                mainPair[1](body.mainModel || '')
-                protocolPair[1](body.api || '')
-                visionPair[1](body.visionModel || '')
-                visionHandlingPair[1](
-                  selectedModelVisionSource(body, body.mainModel) === 'override'
-                    ? selectedModelVisionMode(body, body.mainModel)
-                    : '',
-                )
-                fallbackBasePair[1](body.official?.baseURL || 'https://api.deepseek.com')
-                fallbackModelsPair[1](Array.isArray(body.official?.models) ? body.official.models : [])
-                fallbackModelPair[1](body.official?.configured ? body.official?.mainModel || '' : '')
-                notePair[1]('')
-                if (body.authenticated === true) {
-                  var selection = activeSelectionFromStatus(body)
-                  return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider)).catch(
-                    (error) => {
-                      notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`)
-                    },
+            requests.run(
+              '/tokens/model-manager',
+              { cache: 'no-store' },
+              {
+                success: (body, alive) => {
+                  statePair[1](body)
+                  basePair[1](body.baseURL || '')
+                  mainPair[1](body.mainModel || '')
+                  protocolPair[1](body.api || '')
+                  visionPair[1](body.visionModel || '')
+                  visionHandlingPair[1](
+                    selectedModelVisionSource(body, body.mainModel) === 'override'
+                      ? selectedModelVisionMode(body, body.mainModel)
+                      : '',
                   )
-                }
-              })
-              .catch((error) => {
-                notePair[1](String(error.message || error))
-              }),
+                  fallbackBasePair[1](body.official?.baseURL || 'https://api.deepseek.com')
+                  fallbackModelsPair[1](Array.isArray(body.official?.models) ? body.official.models : [])
+                  fallbackModelPair[1](body.official?.configured ? body.official?.mainModel || '' : '')
+                  notePair[1]('')
+                  if (body.authenticated === true) {
+                    var selection = activeSelectionFromStatus(body)
+                    return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider)).catch(
+                      (error) => {
+                        if (alive()) notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`)
+                      },
+                    )
+                  }
+                },
+                error: (error) => notePair[1](String(error.message || error)),
+              },
+            ),
           [],
         )
 
         react.useEffect(() => {
+          requests.mount()
           load()
+          return () => requests.dispose()
         }, [load])
+
+        // Local status makes the fallback panel reachable immediately. Refresh
+        // the primary catalog separately, and cancel it when opening fallback.
+        react.useEffect(() => {
+          if (officialPanelOpen || !state?.authenticated || state.modelsAvailable) return undefined
+          requests.run(
+            '/tokens/model-manager?refresh=1',
+            { cache: 'no-store' },
+            {
+              success: (body) => {
+                statePair[1](body)
+                if (body.modelListError) notePair[1](body.modelListError)
+              },
+              error: (error) => notePair[1](String(error.message || error)),
+            },
+          )
+          return () => requests.cancel()
+        }, [officialPanelOpen, state?.authenticated])
 
         // The conversation picker can change the shared main model while this
         // page remains mounted. Reload the status so the settings controls
         // always reflect the same durable selection.
         react.useEffect(() => {
           if (typeof document?.addEventListener !== 'function') return undefined
-          var onSelectionChanged = () => load()
+          var onSelectionChanged = () => {
+            if (!requests.active) load()
+          }
           document.addEventListener('tokens-model-manager-selection-changed', onSelectionChanged)
           return () => document.removeEventListener('tokens-model-manager-selection-changed', onSelectionChanged)
         }, [load])
@@ -1409,7 +1510,7 @@ window.__ModuleLoader__.load({
           if (!apiKey.trim() || busy) return
           busyPair[1](true)
           notePair[1]('')
-          fetch('/tokens/model-manager', {
+          managerFetch('/tokens/model-manager', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ apiKey: apiKey }),
@@ -1460,7 +1561,7 @@ window.__ModuleLoader__.load({
             return
           busyPair[1](true)
           notePair[1]('')
-          fetch('/tokens/model-manager', {
+          managerFetch('/tokens/model-manager', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
@@ -1498,7 +1599,7 @@ window.__ModuleLoader__.load({
         }
 
         var fetchStoredKey = () =>
-          fetch('/tokens/model-manager', {
+          managerFetch('/tokens/model-manager', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ action: 'revealApiKey' }),
@@ -1539,24 +1640,34 @@ window.__ModuleLoader__.load({
         }
 
         var postManager = (payload) =>
-          fetch('/tokens/model-manager', {
+          managerFetch('/tokens/model-manager', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(payload),
-          }).then((response) =>
-            response.json().then((body) => {
-              if (!response.ok) throw new Error(body.error || 'request failed')
-              return body
-            }),
-          )
+          }).then(async (response) => {
+            var body = await response.json()
+            if (!response.ok) throw new Error(body.error || 'request failed')
+            return body
+          })
 
-        var activateStatus = (body, message) => {
-          statePair[1](body)
-          var selection = activeSelectionFromStatus(body)
-          return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider))
-            .then(() => notePair[1](message))
-            .catch((error) => notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`))
-        }
+        var performFallback = (payload, success, loading = '') =>
+          requests.run(
+            '/tokens/model-manager',
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(payload),
+            },
+            {
+              start: () => {
+                busyPair[1](true)
+                notePair[1](loading)
+              },
+              success,
+              error: (error) => notePair[1](String(error.message || error)),
+              finish: () => busyPair[1](false),
+            },
+          )
 
         var fetchOfficialKey = () =>
           postManager({ action: 'revealOfficialApiKey' }).then((body) => {
@@ -1594,6 +1705,8 @@ window.__ModuleLoader__.load({
         }
 
         var clearFallbackModels = () => {
+          requests.cancel()
+          busyPair[1](false)
           fallbackModelsPair[1]([])
           fallbackModelPair[1]('')
           pickerPair[1]('')
@@ -1602,69 +1715,80 @@ window.__ModuleLoader__.load({
         }
 
         var discoverFallbackModels = () => {
-          if (busy || !fallbackBaseURL.trim() || (!officialApiKey.trim() && !state?.official?.configured)) return
-          busyPair[1](true)
-          notePair[1]('')
-          postManager({
-            action: 'discoverFallback',
-            baseURL: fallbackBaseURL,
-            ...(officialApiKey.trim() ? { apiKey: officialApiKey } : {}),
-          })
-            .then((body) => {
+          if (
+            busy ||
+            requests.active ||
+            !fallbackBaseURL.trim() ||
+            (!officialApiKey.trim() && !state?.official?.configured)
+          )
+            return
+          return performFallback(
+            {
+              action: 'discoverFallback',
+              baseURL: fallbackBaseURL,
+              ...(officialApiKey.trim() ? { apiKey: officialApiKey } : {}),
+            },
+            (body) => {
               var models = Array.isArray(body.models) ? body.models : []
               if (models.length === 0) throw new Error(t.modelsUnavailable)
               fallbackModelsPair[1](models)
               fallbackModelPair[1](models[0].id)
               notePair[1](t.officialModelsLoaded.replace('{count}', String(models.length)))
-            })
-            .catch((error) => notePair[1](String(error.message || error)))
-            .finally(() => busyPair[1](false))
+            },
+            '正在获取模型…',
+          )
         }
 
         var switchOfficial = (event) => {
           event?.preventDefault?.()
           if (
             busy ||
+            requests.active ||
             !fallbackBaseURL.trim() ||
             !fallbackModel ||
             !fallbackModels.some((model) => model.id === fallbackModel) ||
             (!officialApiKey.trim() && !state?.official?.configured)
           )
             return
-          busyPair[1](true)
-          notePair[1]('')
-          postManager({
-            action: 'configureFallback',
-            baseURL: fallbackBaseURL,
-            mainModel: fallbackModel,
-            ...(officialApiKey.trim() ? { apiKey: officialApiKey } : {}),
-          })
-            .then((body) => {
+          var changed = fallbackDirty || Boolean(officialApiKey.trim())
+          return performFallback(
+            changed
+              ? {
+                  action: 'configureFallback',
+                  baseURL: fallbackBaseURL,
+                  mainModel: fallbackModel,
+                  ...(officialApiKey.trim() ? { apiKey: officialApiKey } : {}),
+                }
+              : { action: 'switchOfficial' },
+            async (body, alive) => {
               officialKeyPair[1]('')
               officialRevealPair[1](false)
               fallbackBasePair[1](body.official?.baseURL || fallbackBaseURL)
               fallbackModelPair[1](body.official?.mainModel || fallbackModel)
               fallbackModelsPair[1](Array.isArray(body.official?.models) ? body.official.models : [])
-              officialPanelPair[1](true)
-              return activateStatus(body, t.officialActive)
-            })
-            .catch((error) => notePair[1](String(error.message || error)))
-            .finally(() => busyPair[1](false))
+              statePair[1](body)
+              var selection = activeSelectionFromStatus(body)
+              await synchronizeMainSelection(selection.model, selection.provider)
+              if (alive()) notePair[1](t.officialActive)
+            },
+          )
         }
 
         var switchTokens = () => {
-          if (busy) return
+          if (busy || requests.active) return
           if (state?.channel !== 'official') {
             notePair[1]('')
             return
           }
-          busyPair[1](true)
-          notePair[1]('')
-          postManager({ action: 'switchTokensAPI' })
-            .then((body) => activateStatus(body, t.ready))
-            .then(() => officialPanelPair[1](false))
-            .catch((error) => notePair[1](String(error.message || error)))
-            .finally(() => busyPair[1](false))
+          return performFallback({ action: 'switchTokensAPI' }, async (body, alive) => {
+            statePair[1](body)
+            var selection = activeSelectionFromStatus(body)
+            await synchronizeMainSelection(selection.model, selection.provider)
+            if (alive()) {
+              notePair[1](t.ready)
+              officialPanelPair[1](false)
+            }
+          })
         }
 
         var fallbackRouteAction = () => {
@@ -2123,6 +2247,8 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 disabled: busy,
                 onClick: () => {
+                  requests.cancel()
+                  busyPair[1](false)
                   officialPanelPair[1](!officialPanel)
                   notePair[1]('')
                 },
@@ -2749,7 +2875,7 @@ window.__ModuleLoader__.load({
     function registerManagerSection(ctx) {
       if (typeof ctx.inject !== 'function') return
       ctx.inject(['slots', 'sessions', 'modelDirectories'], (scope) => {
-        fetch('/tokens/model-manager', { cache: 'no-store' })
+        managerFetch('/tokens/model-manager', { cache: 'no-store' })
           .then((response) => response.json().then((body) => ({ response, body })))
           .then(({ response, body }) => {
             if (!response.ok || body?.provider !== 'TokensAPI') return
@@ -2807,7 +2933,7 @@ window.__ModuleLoader__.load({
                 var result = await originalSelect.call(directory, selection)
                 if (selectedModel === desiredMainModel) return result
                 try {
-                  var response = await fetch('/tokens/model-manager', {
+                  var response = await managerFetch('/tokens/model-manager', {
                     method: 'POST',
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({
@@ -2959,6 +3085,11 @@ window.__ModuleLoader__.load({
                 )
               }
             }
+            // Mount the settings entry before refreshing the primary catalog,
+            // so a stalled primary cannot keep fallback settings inaccessible.
+            if (body.authenticated === true && body.channel !== 'official' && body.modelsAvailable === false) {
+              managerFetch('/tokens/model-manager?refresh=1', { cache: 'no-store' }).catch(() => {})
+            }
             scope.slots.inject('settings.section', function* () {
               yield scope.slots.register(
                 {
@@ -3014,6 +3145,8 @@ window.__ModuleLoader__.load({
       ConfigCard: ConfigCard,
     }
     exports.__manager = {
+      ModelManagerSection,
+      createManagerRequests,
       registerAccessGate: registerAccessGate,
       registerManagerSection: registerManagerSection,
       selectedModelVisionMode: selectedModelVisionMode,

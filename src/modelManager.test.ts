@@ -1,7 +1,8 @@
+import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error The DSH entry is deliberately dependency-free plain JS.
 import { __modelManager, apply, DEEPSEEK_OFFICIAL, TOKENSAPI } from '../dsh/index.js';
 import { resolveProviderSettings } from './config.ts';
@@ -67,6 +68,276 @@ function credentialHarness(initial?: string, verified = false): CredentialHarnes
     }
     return harness;
 }
+
+describe('offline fallback and complete catalog deadlines', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    it('serves entry GET from local state and only refreshes the primary catalog explicitly', async () => {
+        const harness = credentialHarness('local-key', true);
+        let handler: CallableFunction = () => {};
+        __modelManager.registerModelManagerRoute(
+            {
+                webServer: {
+                    register: (route: { handler: CallableFunction }) => {
+                        handler = route.handler;
+                    },
+                },
+            },
+            harness.ctx,
+        );
+        const request = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+        const read = async (url: string) => {
+            let result: { authenticated?: boolean; modelListError?: string } = {};
+            const req = Object.assign(new EventEmitter(), {
+                method: 'GET',
+                url,
+                headers: { host: '127.0.0.1:43120' },
+            });
+            const res = Object.assign(new EventEmitter(), {
+                writeHead: vi.fn(),
+                end: (text: string) => {
+                    result = JSON.parse(text);
+                },
+            });
+            await handler(req, res);
+            expect(req.listenerCount('aborted')).toBe(0);
+            expect(res.listenerCount('close')).toBe(0);
+            return result;
+        };
+        expect((await read('/tokens/model-manager')).authenticated).toBe(true);
+        expect(request).not.toHaveBeenCalled();
+        expect((await read('/tokens/model-manager?refresh=1')).modelListError).toBeTruthy();
+        expect(request).toHaveBeenCalledTimes(1);
+    });
+
+    it('saves, switches both ways and restores saved fallback without contacting primary', async () => {
+        const harness = credentialHarness('local-key', true);
+        const request = vi.fn(async (url: string) => {
+            expect(url).toBe('https://backup.example/v1/models');
+            return { status: 200, json: async () => ({ data: [{ id: 'backup-chat' }] }) };
+        });
+        await __modelManager.configureFallback(
+            harness.ctx,
+            {
+                baseURL: 'https://backup.example/v1',
+                apiKey: 'backup-key',
+                mainModel: 'backup-chat',
+            },
+            request,
+        );
+        const offline = vi.fn(() => {
+            throw new Error('no network permitted');
+        });
+        expect((await __modelManager.switchToTokensAPI(harness.ctx, offline)).channel).toBe(
+            'tokensapi',
+        );
+        expect((await __modelManager.switchToOfficial(harness.ctx, offline)).activeMainModel).toBe(
+            'backup-chat',
+        );
+        expect(
+            (
+                await __modelManager.selectMainModel(
+                    harness.ctx,
+                    {
+                        provider: 'modlens-tokens-fallback',
+                        model: 'backup-chat',
+                    },
+                    offline,
+                )
+            ).activeMainModel,
+        ).toBe('backup-chat');
+        expect(offline).not.toHaveBeenCalled();
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(harness.stored).toBe('local-key');
+        expect(harness.official).toBe('backup-key');
+    });
+
+    for (const verified of [false, true]) {
+        it(`rejects missing or mismatched local login (${verified}) before any fallback request`, async () => {
+            const harness = credentialHarness('local-key', verified);
+            if (verified) harness.verification = 'wrong-fingerprint';
+            const request = vi.fn();
+            for (const operation of [
+                () =>
+                    __modelManager.discoverFallback(harness.ctx, { apiKey: 'backup-key' }, request),
+                () =>
+                    __modelManager.configureFallback(
+                        harness.ctx,
+                        { apiKey: 'backup-key' },
+                        request,
+                    ),
+                () => __modelManager.switchToOfficial(harness.ctx, request),
+            ])
+                await expect(operation()).rejects.toMatchObject({ code: 'unauthenticated' });
+            expect(request).not.toHaveBeenCalled();
+        });
+    }
+
+    it('keeps offline authentication but honors an explicit server rejection', async () => {
+        const harness = credentialHarness('local-key', true);
+        const offline = await __modelManager.modelManagerStatus(harness.ctx, async () => {
+            throw new Error('offline');
+        });
+        expect(offline.authenticated).toBe(true);
+        expect(offline.modelListError).toBeTruthy();
+        const rejected = await __modelManager.modelManagerStatus(harness.ctx, async () => ({
+            status: 403,
+        }));
+        expect(rejected.authenticated).toBe(false);
+        await expect(
+            __modelManager.discoverFallback(harness.ctx, { apiKey: 'backup-key' }, vi.fn()),
+        ).rejects.toMatchObject({ code: 'unauthenticated' });
+        expect(harness.stored).toBe('local-key');
+    });
+
+    it('discovers fallback with a verified local login and no primary catalog request', async () => {
+        const harness = credentialHarness('local-key', true);
+        const request = vi.fn(async (url: string) => {
+            expect(url).toBe('https://backup.example/v1/models');
+            return { status: 200, json: async () => ({ data: [{ id: 'backup-chat' }] }) };
+        });
+        const result = await __modelManager.discoverFallback(
+            harness.ctx,
+            {
+                baseURL: 'https://backup.example/v1',
+                apiKey: 'backup-key',
+            },
+            request,
+        );
+        expect(result.models).toEqual([{ id: 'backup-chat', name: 'backup-chat' }]);
+        expect(request).toHaveBeenCalledTimes(1);
+    });
+
+    for (const primary of [true, false]) {
+        const label = primary ? 'primary' : 'fallback';
+        const validate = (request: unknown) =>
+            primary
+                ? __modelManager.validateManagedCredential('test-key', request)
+                : __modelManager.validateFallbackCredential(
+                      'test-key',
+                      'https://backup.example/v1',
+                      request,
+                  );
+        for (const status of [401, 403, 500, 503]) {
+            it(`${label} preserves HTTP ${status} without reading its body`, async () => {
+                const json = vi.fn();
+                await expect(validate(async () => ({ status, json }))).rejects.toMatchObject({
+                    code: status < 500 ? 'invalid_key' : 'upstream',
+                });
+                expect(json).not.toHaveBeenCalled();
+            });
+        }
+        for (const payload of [
+            { data: [] },
+            {},
+            { data: [{ id: 'video', supported_endpoint_types: ['video'] }] },
+        ]) {
+            it(`${label} rejects unsupported catalog ${JSON.stringify(payload)}`, async () => {
+                await expect(
+                    validate(async () => ({ status: 200, json: async () => payload })),
+                ).rejects.toMatchObject({ code: 'upstream' });
+            });
+        }
+        it(`${label} rejects invalid JSON and accepts normal catalogs`, async () => {
+            await expect(
+                validate(async () => ({
+                    status: 200,
+                    json: async () => {
+                        throw new SyntaxError('secret');
+                    },
+                })),
+            ).rejects.toMatchObject({ code: 'upstream' });
+            expect(
+                await validate(async () => ({
+                    status: 200,
+                    json: async () => ({ data: [{ id: 'chat' }] }),
+                })),
+            ).toEqual([expect.objectContaining({ id: 'chat' })]);
+        });
+        for (const [code, category] of [
+            ['ENOTFOUND', 'dns'],
+            ['ECONNRESET', 'connection'],
+            ['CERT_HAS_EXPIRED', 'tls'],
+            ['UND_ERR_CONNECT_TIMEOUT', 'timeout'],
+        ]) {
+            it(`${label} safely diagnoses ${code}`, async () => {
+                const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+                await expect(
+                    validate(async () => {
+                        throw Object.assign(
+                            new Error('Authorization Bearer SECRET https://bad/?api_key=SECRET'),
+                            { cause: { code } },
+                        );
+                    }),
+                ).rejects.toMatchObject({ code: 'unreachable' });
+                const text = JSON.stringify(log.mock.calls);
+                expect(text).toContain(category);
+                expect(text).not.toMatch(/SECRET|Authorization|test-key|api_key/);
+            });
+        }
+        it(`${label} cancels a stalled body and removes caller listeners`, async () => {
+            vi.useFakeTimers();
+            const controller = new AbortController();
+            const remove = vi.spyOn(controller.signal, 'removeEventListener');
+            const request = async () => ({ status: 200, json: () => new Promise(() => {}) });
+            const result = (
+                primary
+                    ? __modelManager.validateManagedCredential(
+                          'test-key',
+                          request,
+                          controller.signal,
+                      )
+                    : __modelManager.validateFallbackCredential(
+                          'test-key',
+                          'https://backup.example/v1',
+                          request,
+                          controller.signal,
+                      )
+            ).catch((error: unknown) => error);
+            await vi.advanceTimersByTimeAsync(0);
+            controller.abort();
+            expect(await result).toMatchObject({ code: 'unreachable' });
+            expect(remove).toHaveBeenCalled();
+            expect(vi.getTimerCount()).toBe(0);
+        });
+        for (const stage of ['headers', 'body']) {
+            it(`${label} bounds stalled ${stage} even if fetch ignores abort`, async () => {
+                vi.useFakeTimers();
+                let signal: AbortSignal | undefined;
+                const never = new Promise(() => {});
+                const request = vi.fn((_url, options) => {
+                    signal = options.signal;
+                    return stage === 'headers'
+                        ? never
+                        : Promise.resolve({ status: 200, json: () => never });
+                });
+                const result = validate(request).catch((error: unknown) => error);
+                await vi.advanceTimersByTimeAsync(20_001);
+                expect(signal?.aborted).toBe(true);
+                expect(
+                    await Promise.race([result, Promise.resolve('still pending')]),
+                ).toMatchObject({ code: 'unreachable' });
+                expect(vi.getTimerCount()).toBe(0);
+            });
+        }
+        it(`${label} distinguishes body transport failure from invalid JSON`, async () => {
+            const broken = Object.assign(new TypeError('secret response'), {
+                cause: { code: 'ECONNRESET' },
+            });
+            await expect(
+                validate(async () => ({
+                    status: 200,
+                    json: async () => {
+                        throw broken;
+                    },
+                })),
+            ).rejects.toMatchObject({ code: 'unreachable' });
+        });
+    }
+});
 
 const API_MODELS = [
     {
@@ -491,7 +762,7 @@ describe('independent fallback route', () => {
             response: async () => ({
                 status: 200,
                 json: async () => {
-                    throw new Error('invalid JSON');
+                    throw new SyntaxError('invalid JSON');
                 },
             }),
         },
