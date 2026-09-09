@@ -22,7 +22,7 @@ set -eu
 # package.json version, and the release script rewrites it on every bump.
 PKG="@tokens/dsh-model-manager"
 BIN="modlens"
-PINNED="0.2.17"
+PINNED="0.2.18"
 # -------------------------------------------------------------------------------
 
 NATIVE_NOTE="no native artifact is published for this tool yet; phase A ships npm launch paths only"

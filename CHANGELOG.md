@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.18 - 2026-09-09
+
+- Select native multimodal models on the direct TokensAPI provider. Only text-only models that need image-to-text conversion use the visual bridge; legacy sessions on `modlens-tokensapi` remain compatible.
+- Synchronize the conversation's provider as well as its model when switching native/bridged routes, while retaining one visible TokensAPI model group and the complete underlying catalog.
+- Verify the missing-image-pricing failure and manual/overflow compaction against the real DSH runtime using offline summaries, synthetic long histories and optional private session replay from stdin. No session content is committed or sent to a provider.
+- Repair stale compaction-policy assertions and use Windows junction fixtures for directory-link safety checks. File-symlink checks skip only when the Windows account lacks the required privilege.
+- Includes the image-pricing contract and independent fallback request fixes from 0.2.17. No production dependency changes.
+
 ## 0.2.17 - 2026-09-09
 
 - Allow locally verified users to discover, configure, switch and synchronize fallback models without waiting for the primary catalog. Serve local entry status immediately and refresh the primary catalog separately.
