@@ -8,6 +8,9 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { VISION_RESULT_SCHEMA } from './schema.ts';
 
 const execFileAsync = promisify(execFile);
+// Junctions exercise the same lstat/realpath boundary without requiring the
+// Windows CreateSymbolicLink privilege for directory fixtures.
+const directoryLink = process.platform === 'win32' ? 'junction' : 'dir';
 
 /**
  * The same path, spelled the one way both sides can agree on. Windows hands
@@ -57,10 +60,10 @@ describe('dsh plugin bundle', () => {
         expect(patch).toContain('api: openai-completions');
         expect(patch).toContain('upstream: tokensapi');
         expect(patch).toContain('providerId: modlens-tokensapi');
-        expect(patch).toContain('- id: compaction-basic');
-        expect(patch).toContain('thresholdRatio: 0.7');
+        // Compaction policy belongs to DSH, not this provider plugin.
+        expect(patch).not.toContain('- id: compaction-basic');
+        expect(patch).not.toContain('thresholdRatio:');
         expect(patch).toContain('provider: modlens-tokensapi');
-        expect(patch).toContain('provider: tokensapi');
     });
 });
 
@@ -2103,7 +2106,7 @@ describe('dsh paste-to-path host route', () => {
             const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
             fs.utimesSync(expiredInWritten, expired, expired);
             fs.utimesSync(expiredElsewhere, expired, expired);
-            fs.symlinkSync(writtenParent, linkedParent, 'dir');
+            fs.symlinkSync(writtenParent, linkedParent, directoryLink);
 
             // @ts-expect-error untyped on purpose
             const mod = (await import('../dsh/index.js')) as {
@@ -2121,7 +2124,7 @@ describe('dsh paste-to-path host route', () => {
                     if (moved) return;
                     moved = true;
                     fs.unlinkSync(linkedParent);
-                    fs.symlinkSync(otherParent, linkedParent, 'dir');
+                    fs.symlinkSync(otherParent, linkedParent, directoryLink);
                 },
             };
             const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 5]);
@@ -3506,13 +3509,22 @@ describe('settings card route (#39)', () => {
         }
     });
 
-    it('refuses to write through a symlinked config file', async () => {
+    it('refuses to write through a symlinked config file', async (test) => {
         const home = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-home-'));
         const real = path.join(home, 'real.json');
         const file = path.join(home, '.modlens', 'config.json');
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(real, JSON.stringify({ provider: 'openai' }));
-        fs.symlinkSync(real, file);
+        try {
+            fs.symlinkSync(real, file);
+        } catch (error) {
+            fs.rmSync(home, { recursive: true, force: true });
+            if (process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM') {
+                test.skip('Windows account cannot create file symlinks');
+                return;
+            }
+            throw error;
+        }
         const realHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
         process.env.HOME = home;
         process.env.USERPROFILE = home;
@@ -4180,7 +4192,7 @@ describe('pasted files do not accumulate forever (#51)', () => {
         try {
             fs.writeFileSync(path.join(elsewhere, 'precious.txt'), 'keep me');
             const link = path.join(root, 'p-dddddd');
-            fs.symlinkSync(elsewhere, link, 'dir');
+            fs.symlinkSync(elsewhere, link, directoryLink);
             const when = new Date(Date.now() - ttlMs * 2);
             fs.lutimesSync(link, when, when);
             await sweepExpiredPastes(Date.now(), root);
@@ -4369,7 +4381,7 @@ describe('the paste store refuses a directory that is not ours (#51)', () => {
         const link = path.join(scratch, 'store');
         try {
             fs.writeFileSync(path.join(target, 'precious.txt'), 'keep me');
-            fs.symlinkSync(target, link, 'dir');
+            fs.symlinkSync(target, link, directoryLink);
             await expect(open(link)).rejects.toThrow(/not a directory/);
             expect(fs.existsSync(path.join(target, 'precious.txt'))).toBe(true);
         } finally {
@@ -4472,7 +4484,7 @@ describe('the paste store is created before it is trusted (#51)', () => {
         try {
             fs.writeFileSync(path.join(target, 'precious.txt'), 'keep me');
             const link = path.join(scratch, 'store');
-            fs.symlinkSync(target, link, 'dir');
+            fs.symlinkSync(target, link, directoryLink);
             await expect(open(link)).rejects.toThrow(/not a directory/);
             // Nothing was written through the link either.
             expect(fs.readdirSync(target)).toEqual(['precious.txt']);
@@ -4542,7 +4554,7 @@ describe('the paste store checks the whole path, not just the leaf (#51)', () =>
         const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-parenttarget-'));
         try {
             const linkedParent = path.join(scratch, 'parent');
-            fs.symlinkSync(elsewhere, linkedParent, 'dir');
+            fs.symlinkSync(elsewhere, linkedParent, directoryLink);
             // A legitimate link in an ancestor is resolved rather than
             // refused, since a system temp directory is often behind one.
             // What matters is that the store ends up at the resolved path
