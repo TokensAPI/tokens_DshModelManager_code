@@ -54,7 +54,7 @@ export const TOKENSAPI = Object.freeze({
   agentProviderId: 'modlens-tokensapi',
   baseURL: 'https://tokensapi.ai/v1',
   mainModel: 'deepseek-v4-flash',
-  visionModel: 'qwen3.6-35b-a3b',
+  visionModel: 'qwen3.8-flash-next',
 })
 
 const DEFAULT_FALLBACK_MODELS = Object.freeze([])
@@ -359,7 +359,7 @@ export function apply(ctx, config = {}) {
   const readImageTool = (toolName) => ({
     name: toolName,
     description:
-      'Read an image through the modlens vision bridge. Use whenever a message references an image the current model cannot see: a local file path or an http(s) URL to a screenshot, photo, chart, diagram, or document scan. Returns structured evidence with every word transcribed (ocr.full_text), layout regions in reading order, semantics, and an uncertainty list; quote the evidence instead of guessing. Requires a configured modlens engine (run `npx @liustack/modlens doctor` in a terminal to check).',
+      'Read an image through the TokensAPI vision bridge. Use whenever a message references an image the current model cannot see: a local file path or an http(s) URL to a screenshot, photo, chart, diagram, or document scan. Returns structured evidence with every word transcribed (ocr.full_text), layout regions in reading order, semantics, and an uncertainty list; quote the evidence instead of guessing. Vision configuration is managed in TokensAPI model settings.',
     parameters: {
       type: 'object',
       properties: {
@@ -1270,7 +1270,7 @@ function cachedEvidence(ctx, adapter, block, walk) {
       // Refresh recency: Map iteration order is insertion order.
       adapter.evidenceCache.delete(key)
       adapter.evidenceCache.set(key, hit)
-      return cooling ? Promise.resolve(hit.block) : hit
+      return cooling ? Promise.resolve(hit.evidence) : hit
     }
     // Cooldown over: fall through into one fresh probe.
   }
@@ -1284,32 +1284,52 @@ function cachedEvidence(ctx, adapter, block, walk) {
       if (!evidence.ok && adapter.evidenceCache.get(key) === pending) {
         adapter.evidenceCache.set(key, {
           retryAfter: monotonicNow() + EVIDENCE_FAILURE_COOLDOWN_MS,
-          block: evidence.block,
+          evidence,
         })
       }
-      return evidence.block
+      return evidence
     },
     () => {
       // readImageBlock never rejects by contract; this is the belt for a
       // future refactor breaking that, so a rejected promise cannot lodge in
       // the cache forever. Same stable text as the engine stage: the detail
       // belongs in the harness log, never in the wire history.
-      const block = Object.freeze({
-        type: 'text',
-        text: FAILURE_TEXTS.engine,
-      })
+      const evidence = {
+        ok: false,
+        block: Object.freeze({
+          type: 'text',
+          text: FAILURE_TEXTS.engine,
+        }),
+      }
       if (adapter.evidenceCache.get(key) === pending) {
         adapter.evidenceCache.set(key, {
           retryAfter: monotonicNow() + EVIDENCE_FAILURE_COOLDOWN_MS,
-          block,
+          evidence,
         })
       }
-      return block
+      return evidence
     },
   )
   adapter.evidenceCache.set(key, pending)
   trimEvidenceCache(adapter.evidenceCache)
   return pending
+}
+
+const VISION_READ_FAILURE_MESSAGE = '图片识别失败，请重试或在 TokensAPI 模型设置中切换视觉模型。'
+
+/**
+ * Failed visual evidence is never safe input for a text-only model. Sending a
+ * placeholder downstream lets the model improvise recovery commands and scan
+ * the workspace for the pasted file. Stop before the upstream request while
+ * keeping the cached failure result available for the cooldown.
+ */
+function evidenceBlockOrThrow(evidence) {
+  if (!evidence.ok) {
+    const error = new Error(VISION_READ_FAILURE_MESSAGE)
+    error.code = 'MODLENS_VISION_READ_FAILED'
+    throw error
+  }
+  return evidence.block
 }
 
 /**
@@ -1472,7 +1492,7 @@ async function convertImagesToEvidence(ctx, messages, signal, adapter) {
         continue
       }
       const content = await convertBlocks(message.content, (block) =>
-        abortableWait(cachedEvidence(ctx, adapter, block, walk), signal),
+        abortableWait(cachedEvidence(ctx, adapter, block, walk), signal).then(evidenceBlockOrThrow),
       )
       out.push({ ...message, content })
     }
@@ -1487,8 +1507,8 @@ async function convertImagesToEvidence(ctx, messages, signal, adapter) {
  * Web UI's paste/drop intake) and the model behind dsh is text-only, rewrite
  * each image block into a modlens evidence text block before the step starts.
  * Runs after `next()` so downstream pre-step listeners (compaction, context
- * injectors) see and shape the same final message set; a failed read degrades
- * to an explanatory text block instead of rejecting the step.
+ * injectors) see and shape the same final message set. A failed read rejects
+ * before the text model starts, so it cannot improvise a filesystem search.
  */
 function registerAutoRead(ctx, evidenceCache) {
   ctx.on('agent/pre-step', async (payload, next) => {
@@ -1512,7 +1532,7 @@ function registerAutoRead(ctx, evidenceCache) {
         const content = await convertBlocks(message.content, (block) =>
           // The same cache the wrapper routes use: auto-read used to re-read
           // every image on every step, healthy engine or not (issue #68).
-          abortableWait(cachedEvidence(ctx, { evidenceCache }, block, walk), payload.signal),
+          abortableWait(cachedEvidence(ctx, { evidenceCache }, block, walk), payload.signal).then(evidenceBlockOrThrow),
         )
         messages.push({ ...message, content })
       }
@@ -1532,12 +1552,9 @@ function registerAutoRead(ctx, evidenceCache) {
  * goes to the harness log, which never rides a request.
  */
 const FAILURE_TEXTS = {
-  store:
-    '[A pasted image could not be read: the attachment store did not return it. Tell the user, and suggest running `npx @liustack/modlens doctor`.]',
-  media:
-    '[A pasted image could not be read: its media type is not supported. Tell the user, and suggest running `npx @liustack/modlens doctor`.]',
-  engine:
-    '[A pasted image could not be read: the vision engine failed. Tell the user, and suggest running `npx @liustack/modlens doctor`.]',
+  store: '[A pasted image could not be read: the attachment store did not return it.]',
+  media: '[A pasted image could not be read: its media type is not supported.]',
+  engine: '[A pasted image could not be read: the vision engine failed.]',
 }
 
 /**

@@ -15,6 +15,7 @@ export const BUILTIN_VISION_MODEL_PATTERNS = Object.freeze([
   'qwen3.5-plus*',
   'qwen3.6-plus*',
   'qwen3.6-35b-a3b*',
+  'qwen3.8-flash-next*',
   'kimi-k2.5*',
   'kimi-k2.6*',
   'kimi-k2.7*',

@@ -84,6 +84,12 @@ const API_MODELS = [
         endpointTypes: ['openai', 'openai-response'],
     },
     {
+        id: 'qwen3.8-flash-next',
+        name: 'Qwen 3.8 Flash Next',
+        ownedBy: 'qwen',
+        endpointTypes: ['openai', 'openai-response'],
+    },
+    {
         id: 'deepseek-v3.2',
         name: 'DeepSeek V3.2',
         ownedBy: 'deepseek',
@@ -117,7 +123,12 @@ const PUBLIC_API_MODELS = API_MODELS.map((model) => {
         ...model,
         api: protocols[0].id,
         protocols,
-        visionMode: ['qwen3.6-35b-a3b', 'claude-opus-4-7', 'gpt-5.5'].includes(model.id)
+        visionMode: [
+            'qwen3.6-35b-a3b',
+            'qwen3.8-flash-next',
+            'claude-opus-4-7',
+            'gpt-5.5',
+        ].includes(model.id)
             ? 'native'
             : 'bridge',
         visionCapabilitySource: 'builtin',
@@ -246,7 +257,7 @@ describe('TokensAPI credential gate: 50 positive cases', () => {
                 mainProvider: 'modlens-tokensapi',
                 activeMainModel: 'deepseek-v4-flash',
                 visionMode: 'bridge',
-                visionModel: 'qwen3.6-35b-a3b',
+                visionModel: 'qwen3.8-flash-next',
                 models: PUBLIC_API_MODELS,
                 modelsAvailable: true,
                 baseURL: 'https://tokensapi.ai/v1',
@@ -280,6 +291,23 @@ describe('TokensAPI credential gate: 50 negative cases', () => {
 });
 
 describe('TokensAPI managed vision configuration', () => {
+    it('uses the product default vision model when no model override is supplied', () => {
+        expect(
+            resolveProviderSettings(
+                'openai',
+                {},
+                {
+                    TOKENS_MODEL_MANAGER: '1',
+                    TOKENSAPI_API_KEY: 'managed-key',
+                },
+            ),
+        ).toEqual({
+            apiKey: 'managed-key',
+            baseUrl: 'https://tokensapi.ai/v1',
+            model: 'qwen3.8-flash-next',
+        });
+    });
+
     it('uses the DSH-managed child-process facts instead of an existing ModLens file profile', () => {
         expect(
             resolveProviderSettings(
@@ -2123,6 +2151,7 @@ describe('TokensAPI model discovery and selection', () => {
             'deepseek-v3.2',
             'deepseek-v4-flash',
             'qwen3.6-35b-a3b',
+            'qwen3.8-flash-next',
             'gpt-5.5',
         ]);
         // The settings page still receives every API model for its own

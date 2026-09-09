@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.16 - 2026-09-09
+
+- Stop image-bearing text-model requests before the upstream model when visual recognition fails, preserving the failure cooldown without allowing the model to improvise filesystem searches or recovery tool calls.
+- Use the verified `qwen3.8-flash-next` model as the default visual route and classify it as native multimodal when provider metadata does not expose input modalities.
+
 ## 0.2.15 - 2026-09-07
 
 - Keep the Desktop conversation model picker and TokensAPI settings page on one durable selection. Choosing a managed model in either surface now updates the other; a failed persistence request restores the previously active conversation model instead of leaving the two surfaces inconsistent.

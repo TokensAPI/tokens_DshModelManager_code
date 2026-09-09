@@ -28,7 +28,7 @@
 
 本插件是面向 DSH Desktop 的 TokensAPI 产品层：隐藏 DSH 官方模型入口和通用提供方编辑器，固定接口
 `https://tokensapi.ai/v1`。主模型默认 `deepseek-v4-flash`，视觉模型默认
-`qwen3.6-35b-a3b`；验证 API Key 后，两者都可以在“设置 → 模型”从 TokensAPI
+`qwen3.8-flash-next`；验证 API Key 后，两者都可以在“设置 → 模型”从 TokensAPI
 `GET /v1/models` 返回的实时列表中独立选择。Key 由 DSH 凭据服务保存，不会写入仓库、模型配置、
 常规状态响应或日志；只有用户明确点击“显示”或“复制”时，设置页才会读取它。
 
@@ -79,7 +79,7 @@ agy                                                           # 浏览器完成�
 
 **DeepSeek Harness Desktop 用户不走 skill 流程**，本包就是原生 dsh 插件。在 PowerShell 中运行：
 
-当前包标识：`@tokens/dsh-model-manager@0.2.15`。
+当前包标识：`@tokens/dsh-model-manager@0.2.16`。
 
 ```powershell
 npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"

@@ -29,7 +29,7 @@
 This package is the TokensAPI product layer for DSH Desktop. It hides the stock
 DSH model-provider editor and fixes `https://tokensapi.ai/v1` as the endpoint.
 Chat defaults to `deepseek-v4-flash` and vision defaults to
-`qwen3.6-35b-a3b`; after authentication, both can be selected from the live
+`qwen3.8-flash-next`; after authentication, both can be selected from the live
 TokensAPI `GET /v1/models` catalog under Settings → Models.
 The user enters only one API key in Settings → Models. DSH's credential service
 stores it; normal status responses and logs never contain the key. The settings
@@ -68,7 +68,7 @@ Pasting an image works two ways. **① Just paste.** On a text-only model the pa
 the built vision CLI, so GitHub installation does not run dependency lifecycle
 scripts or need a build allowlist:
 
-Current package identity: `@tokens/dsh-model-manager@0.2.15`.
+Current package identity: `@tokens/dsh-model-manager@0.2.16`.
 
 ```powershell
 npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"

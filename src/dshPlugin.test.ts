@@ -155,20 +155,21 @@ describe('dsh plugin auto-read (phase 2)', () => {
         const original = console.error;
         console.error = (value?: unknown) => errors.push(String(value));
         const messages = [imageMessage()];
-        let decision: Awaited<ReturnType<Handler>>;
         try {
-            decision = await handlers['agent/pre-step'](
-                { messages, signal: undefined },
-                async () => ({ kind: 'enter', messages }),
-            );
+            await expect(
+                handlers['agent/pre-step']({ messages, signal: undefined }, async () => ({
+                    kind: 'enter',
+                    messages,
+                })),
+            ).rejects.toMatchObject({
+                code: 'MODLENS_VISION_READ_FAILED',
+                message: '图片识别失败，请重试或在 TokensAPI 模型设置中切换视觉模型。',
+            });
         } finally {
             console.error = original;
         }
-        const block = decision.messages?.[0].content[1];
-        expect(block?.text).toContain('could not be read');
-        // The detail lives in the harness log now; the wire text is a stage
-        // constant so a repeated failure cannot rewrite history (#68).
-        expect(block?.text).toContain('attachment store did not return it');
+        // The operational detail stays in the log; no failure placeholder is
+        // sent to the text model where it could trigger a filesystem search.
         expect(errors.join('\n')).toContain("no 'data' bytes");
     });
 
@@ -209,15 +210,12 @@ describe('dsh plugin auto-read (phase 2)', () => {
                 async () => ({ kind: 'enter', messages }),
             );
             expect(heic.messages?.[0].content[1].text).toContain('HEIC-OK');
-            const pdf = await load('application/pdf')['agent/pre-step'](
-                { messages, signal: undefined },
-                async () => ({ kind: 'enter', messages }),
-            );
-            const pdfText = pdf.messages?.[0].content[1].text;
-            // The type is attacker-shaped paste metadata, so the wire text is
-            // a pure constant and the concrete type lives in the log only.
-            expect(pdfText).toContain('its media type is not supported');
-            expect(pdfText).not.toContain('application/pdf');
+            await expect(
+                load('application/pdf')['agent/pre-step'](
+                    { messages, signal: undefined },
+                    async () => ({ kind: 'enter', messages }),
+                ),
+            ).rejects.toMatchObject({ code: 'MODLENS_VISION_READ_FAILED' });
         } finally {
             delete process.env.MODLENS_DSH_CLI;
         }
@@ -263,24 +261,21 @@ describe('dsh plugin auto-read (phase 2)', () => {
         }
     });
 
-    it('degrades a failed read to an explanatory block instead of rejecting the step', async () => {
+    it('rejects a failed read before the text model can search for the image', async () => {
         const handlers = await load();
         const cli = fakeCli(`console.error('engine down'); process.exit(1)`);
         process.env.MODLENS_DSH_CLI = cli;
         try {
             const messages = [imageMessage()];
-            const decision = await handlers['agent/pre-step'](
-                { messages, signal: undefined },
-                async () => ({ kind: 'enter', messages }),
-            );
-            expect(decision.kind).toBe('enter');
-            const block = decision.messages?.[0].content[1];
-            expect(block?.text).toContain('could not be read');
-            // Stage constant, not the attempt's own words: the same broken
-            // engine phrasing itself differently every try used to rewrite
-            // history and bust the provider's prefix cache (#68).
-            expect(block?.text).toContain('the vision engine failed');
-            expect(block?.text).not.toContain('engine down');
+            await expect(
+                handlers['agent/pre-step']({ messages, signal: undefined }, async () => ({
+                    kind: 'enter',
+                    messages,
+                })),
+            ).rejects.toMatchObject({
+                code: 'MODLENS_VISION_READ_FAILED',
+                message: '图片识别失败，请重试或在 TokensAPI 模型设置中切换视觉模型。',
+            });
         } finally {
             delete process.env.MODLENS_DSH_CLI;
         }
@@ -1501,39 +1496,48 @@ describe('dsh plugin request-time image conversion (v2)', () => {
         }
     };
 
-    it('a failing read keeps its bytes and its cooldown: one probe, stable text (#68)', async () => {
-        // The provider caches by prefix, so the property under test is the
-        // BYTES of the rewritten history: same outcome, same text, and a
-        // broken engine probed once per cooldown, not once per step.
+    const rejectedDrain = async (adapter: Record<string, CallableFunction>, id: string) =>
+        drain(adapter, id).then(
+            () => undefined,
+            (error: unknown) => error as { code?: string; message?: string },
+        );
+
+    it('a failing read stops before upstream and keeps its cooldown (#68)', async () => {
+        // A broken engine is probed once per cooldown, but its placeholder
+        // never reaches the text model where it could trigger tool calls.
         vi.useFakeTimers({ toFake: ['performance'] });
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-cool-'));
         const { cli, marker } = flakyCli(dir, 2);
         try {
             const { adapter, seen } = await adapterCapturing(cli);
-            await drain(adapter, 'att-cool');
-            await drain(adapter, 'att-cool');
+            const first = await rejectedDrain(adapter, 'att-cool');
+            const second = await rejectedDrain(adapter, 'att-cool');
 
-            // Within the cooldown: no second engine run, byte-identical text.
+            // Within the cooldown: no second engine run and no upstream call.
             expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
-            expect(wireText(seen, 0)).toContain('the vision engine failed');
-            expect(wireText(seen, 1)).toBe(wireText(seen, 0));
+            expect(first).toMatchObject({ code: 'MODLENS_VISION_READ_FAILED' });
+            expect(second).toMatchObject({
+                code: 'MODLENS_VISION_READ_FAILED',
+                message: first?.message,
+            });
+            expect(seen).toHaveLength(0);
 
-            // Cooldown over: exactly one re-probe, which fails with different
-            // stderr, and the wire text still does not move.
+            // Cooldown over: exactly one re-probe; a second failure still does
+            // not enter the text model.
             vi.advanceTimersByTime(61_000);
-            await drain(adapter, 'att-cool');
+            await rejectedDrain(adapter, 'att-cool');
             expect(fs.readFileSync(marker, 'utf-8')).toBe('xx');
-            expect(wireText(seen, 2)).toBe(wireText(seen, 0));
+            expect(seen).toHaveLength(0);
 
-            // Second cooldown over: the engine has recovered, the text moves
-            // ONCE (placeholder to evidence), and then stays cached.
+            // Second cooldown over: the engine has recovered, so evidence is
+            // sent upstream and then stays cached.
             vi.advanceTimersByTime(61_000);
             await drain(adapter, 'att-cool');
             expect(fs.readFileSync(marker, 'utf-8')).toBe('xxx');
-            expect(wireText(seen, 3)).toContain('RECOVERED');
+            expect(wireText(seen, 0)).toContain('RECOVERED');
             await drain(adapter, 'att-cool');
             expect(fs.readFileSync(marker, 'utf-8')).toBe('xxx');
-            expect(wireText(seen, 4)).toBe(wireText(seen, 3));
+            expect(wireText(seen, 1)).toBe(wireText(seen, 0));
         } finally {
             vi.useRealTimers();
             delete process.env.MODLENS_DSH_CLI;
@@ -1770,9 +1774,16 @@ describe('dsh plugin request-time image conversion (v2)', () => {
         const { cli, marker } = flakyCli(dir, 99);
         try {
             const { adapter, seen } = await adapterCapturing(cli);
-            await Promise.all([drain(adapter, 'att-j'), drain(adapter, 'att-j')]);
+            const failures = await Promise.all([
+                rejectedDrain(adapter, 'att-j'),
+                rejectedDrain(adapter, 'att-j'),
+            ]);
             expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
-            expect(wireText(seen, 1)).toBe(wireText(seen, 0));
+            expect(failures).toEqual([
+                expect.objectContaining({ code: 'MODLENS_VISION_READ_FAILED' }),
+                expect.objectContaining({ code: 'MODLENS_VISION_READ_FAILED' }),
+            ]);
+            expect(seen).toHaveLength(0);
         } finally {
             delete process.env.MODLENS_DSH_CLI;
         }

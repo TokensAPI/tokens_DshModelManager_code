@@ -236,7 +236,7 @@ export function resolveProviderSettings(
         return {
             apiKey,
             baseUrl: env.TOKENSAPI_BASE_URL?.trim() || 'https://tokensapi.ai/v1',
-            model: env.TOKENSAPI_VISION_MODEL?.trim() || 'qwen3.6-35b-a3b',
+            model: env.TOKENSAPI_VISION_MODEL?.trim() || 'qwen3.8-flash-next',
         };
     }
     // Settings saved under an alias (config set gemini.apiKey) count as the

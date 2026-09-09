@@ -33,6 +33,7 @@ describe('builtin vision table', () => {
         expect(isVisionModel('glm-5v-turbo')).toBe(true);
         expect(isVisionModel('qwen3-vl-32b')).toBe(true);
         expect(isVisionModel('qwen3.6-35b-a3b')).toBe(true);
+        expect(isVisionModel('qwen3.8-flash-next')).toBe(true);
         expect(isVisionModel('kimi-k3')).toBe(true);
     });
 
