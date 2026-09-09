@@ -2663,10 +2663,9 @@ window.__ModuleLoader__.load({
     /**
      * Expose the active managed route as one ordinary DSH model group.
      *
-     * The managed provider decides internally whether the selected model uses
-     * the visual bridge or accepts the original pixels. Keeping that routing
-     * behind one provider preserves the upstream selector's native one-group
-     * layout and prevents a duplicate TokensAPI foldout.
+     * Show the active route as one TokensAPI group. The Host resolves each
+     * selection to the native provider or visual bridge; saved legacy routes
+     * remain available without exposing duplicate implementation groups.
      */
     function managedCatalogProjection(snapshot, mainModel, mainProvider) {
       var provider = typeof mainProvider === 'string' ? mainProvider.trim() : ''
@@ -2693,7 +2692,7 @@ window.__ModuleLoader__.load({
       if (provider === 'tokensapi' || provider === 'modlens-tokensapi') {
         var bridgeGroup = groups.find((entry) => entry?.id === 'modlens-tokensapi')
         var directGroup = groups.find((entry) => entry?.id === 'tokensapi')
-        var tokens = projectGroup(bridgeGroup || directGroup, 'TokensAPI')
+        var tokens = projectGroup(provider === 'tokensapi' ? directGroup : bridgeGroup, 'TokensAPI')
         if (tokens) visibleGroups = [tokens]
       } else if (provider === 'modlens-tokens-fallback') {
         var fallback = projectGroup(
@@ -2931,7 +2930,7 @@ window.__ModuleLoader__.load({
                 }
                 var previousSelection = directory.store?.getSnapshot?.()?.current
                 var result = await originalSelect.call(directory, selection)
-                if (selectedModel === desiredMainModel) return result
+                if (selectedModel === desiredMainModel && selectedProvider === desiredMainProvider) return result
                 try {
                   var response = await managerFetch('/tokens/model-manager', {
                     method: 'POST',
@@ -2946,6 +2945,15 @@ window.__ModuleLoader__.load({
                   if (!response.ok) throw new Error(body?.error || '模型选择保存失败')
                   var active = activeSelectionFromStatus(body)
                   if (!active.model || !active.provider) throw new Error('模型选择保存返回无效状态')
+                  // A native/bridge switch changes provider as well as model.
+                  // Apply the Host's resolved route to this durable session.
+                  if (active.provider !== selectedProvider || active.model !== selectedModel) {
+                    await selectDirectory(
+                      directory,
+                      { ...selection, provider: active.provider, model: active.model },
+                      true,
+                    )
+                  }
                   desiredMainModel = active.model
                   desiredMainProvider = active.provider
                   for (var entry of projectedDirectoryEntries) entry.apply()
@@ -2968,10 +2976,19 @@ window.__ModuleLoader__.load({
               }
               directory.select = selectFromConversation
               var applying = false
+              var sourceSnapshot = null
+              var projectedGroups = null
               var applyProjection = () => {
                 if (applying) return
                 var snapshot = store.getSnapshot()
-                var projection = managedCatalogProjection(snapshot, desiredMainModel, desiredMainProvider)
+                // Projection is presentation-only: retain the full last Host
+                // catalog so changing native/bridge does not lose the hidden
+                // group before the next catalog reload. A Host replacement
+                // supplies a new groups array and replaces this cache.
+                if (!sourceSnapshot || snapshot.groups !== projectedGroups) {
+                  sourceSnapshot = { groups: snapshot.groups, failures: snapshot.failures }
+                }
+                var projection = managedCatalogProjection(sourceSnapshot, desiredMainModel, desiredMainProvider)
                 var currentGroups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
                 var currentFailures = Array.isArray(snapshot?.failures) ? snapshot.failures : []
                 if (
@@ -2986,6 +3003,7 @@ window.__ModuleLoader__.load({
                     state.groups = projection.groups
                     state.failures = projection.failures
                   })
+                  projectedGroups = store.getSnapshot().groups
                 } finally {
                   applying = false
                 }

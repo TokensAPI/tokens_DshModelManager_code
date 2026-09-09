@@ -1447,7 +1447,7 @@ describe('TokensAPI model discovery and selection', () => {
         await expect(statusPromise).resolves.toMatchObject({
             mainModel: 'gpt-5.5',
             api: 'openai-completions',
-            mainProvider: TOKENSAPI.agentProviderId,
+            mainProvider: TOKENSAPI.providerId,
             visionMode: 'native',
             visionModel: 'qwen3.6-35b-a3b',
         });
@@ -1654,7 +1654,33 @@ describe('TokensAPI model discovery and selection', () => {
         ).toBe('unknown');
     });
 
-    it('routes native and bridged models through one managed provider', async () => {
+    it.each(['native', 'bridge'])(
+        'uses declared capabilities for the reported vision model (%s)',
+        async (mode) => {
+            const harness = credentialHarness();
+            const model = 'deepseek-v4-flash-vision-exp';
+            const input = mode === 'native' ? ['text', 'image'] : ['text'];
+            await __modelManager.setManagedCredential(
+                harness.ctx,
+                'synthetic-vision-key',
+                async () => ({
+                    status: 200,
+                    json: async () => ({
+                        data: [{ id: model, input, supported_endpoint_types: ['openai'] }],
+                    }),
+                }),
+            );
+            await expect(
+                __modelManager.resolveManagedMainRoute(harness.ctx, model),
+            ).resolves.toMatchObject({
+                provider: mode === 'native' ? TOKENSAPI.providerId : TOKENSAPI.agentProviderId,
+                visionMode: mode,
+                input,
+            });
+        },
+    );
+
+    it('routes native models directly and only bridges text-only models', async () => {
         await expect(
             __modelManager.resolveManagedMainRoute({}, 'deepseek-v4-flash'),
         ).resolves.toEqual({
@@ -1666,7 +1692,7 @@ describe('TokensAPI model discovery and selection', () => {
         await expect(
             __modelManager.resolveManagedMainRoute({}, 'claude-opus-4-7'),
         ).resolves.toEqual({
-            provider: TOKENSAPI.agentProviderId,
+            provider: TOKENSAPI.providerId,
             visionMode: 'native',
             api: 'anthropic-messages',
             input: ['text', 'image'],
@@ -1680,7 +1706,7 @@ describe('TokensAPI model discovery and selection', () => {
         await expect(
             __modelManager.resolveManagedMainRoute(harness.ctx, 'gpt-5.5'),
         ).resolves.toEqual({
-            provider: TOKENSAPI.agentProviderId,
+            provider: TOKENSAPI.providerId,
             visionMode: 'native',
             api: 'openai-completions',
             input: ['text', 'image'],
@@ -1751,7 +1777,11 @@ describe('TokensAPI model discovery and selection', () => {
         });
         await expect(
             __modelManager.resolveManagedMainRoute(harness.ctx, FUTURE_MODEL_ID),
-        ).resolves.toMatchObject({ visionMode: 'native', input: ['text', 'image'] });
+        ).resolves.toMatchObject({
+            provider: TOKENSAPI.providerId,
+            visionMode: 'native',
+            input: ['text', 'image'],
+        });
 
         const bridged = await __modelManager.setManagedModels(
             harness.ctx,
@@ -1770,7 +1800,11 @@ describe('TokensAPI model discovery and selection', () => {
         });
         await expect(
             __modelManager.resolveManagedMainRoute(harness.ctx, FUTURE_MODEL_ID),
-        ).resolves.toMatchObject({ visionMode: 'bridge', input: ['text'] });
+        ).resolves.toMatchObject({
+            provider: TOKENSAPI.agentProviderId,
+            visionMode: 'bridge',
+            input: ['text'],
+        });
     });
 
     it('persists a future-model decision, restores it, and hides unconfirmed models from chat', async () => {

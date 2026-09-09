@@ -811,9 +811,8 @@ function managedVisionMode(info, preferredMode = '') {
 
 function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
   // Generic routes expose only models that actually need the bridge. The
-  // managed TokensAPI route is different: it is the single product-facing
-  // provider, so it exposes every configured chat model and decides per call
-  // whether to bridge images or pass the original pixels upstream.
+  // managed TokensAPI wrapper also keeps native models resolvable for saved
+  // sessions from older releases. New native selections use tokensapi directly.
   const families = config.families || DEFAULT_VISION_FAMILIES
   const managedTokensApiRoute = config.upstream === TOKENSAPI.providerId
   const managedFallbackRoute = config.upstream === DEEPSEEK_OFFICIAL.upstreamProviderId
@@ -2553,7 +2552,7 @@ async function resolveManagedMainRoute(ctx, mainModel) {
   let visionMode = capability.visionMode
   if (!runtime.visionProviderEnabled && visionMode === 'bridge') visionMode = 'direct'
   return {
-    provider: runtime.visionProviderEnabled ? TOKENSAPI.agentProviderId : TOKENSAPI.providerId,
+    provider: visionMode === 'bridge' ? TOKENSAPI.agentProviderId : TOKENSAPI.providerId,
     visionMode,
     api,
     input,
