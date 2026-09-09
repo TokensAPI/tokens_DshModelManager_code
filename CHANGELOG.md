@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.17 - 2026-09-09
+
+- Allow locally verified users to discover, configure, switch and synchronize fallback models without waiting for the primary catalog. Serve local entry status immediately and refresh the primary catalog separately.
+- Bound catalog requests through response-body parsing, abort disconnected requests, and report safe DNS, connection, timeout, TLS, HTTP and catalog error categories without exposing credentials or response bodies.
+- Bound frontend model-manager waits and protect fallback operations against duplicate clicks, stale responses and component disposal.
+- Implement the DSH image pricing adapter contract: native routes delegate provider pricing; bridged routes retain the token meter's neutral estimate.
+
 ## 0.2.16 - 2026-09-09
 
 - Stop image-bearing text-model requests before the upstream model when visual recognition fails, preserving the failure cooldown without allowing the model to improvise filesystem searches or recovery tool calls.
