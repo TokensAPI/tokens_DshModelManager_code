@@ -912,6 +912,16 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
           visionModes.set(model, managedTokensApiRoute ? managedMode(info) : 'bridge')
           return { ...withVision(info), id: model }
         },
+        imageRequestPricing(_provider, model) {
+          // DSH defaults to undefined: token-meter then uses its neutral estimate.
+          // Bridged images become variable OCR text, not upstream visual tokens.
+          // Native routes retain upstream pricing without network I/O.
+          const info = modelInfos.get(model) ?? managerRuntime(ctx).models.find((entry) => entry.id === model)
+          if (managedTokensApiRoute && managedMode(info ?? { id: model }) === 'native') {
+            return ctx.llm.imageRequestPricing?.(upstream, model)
+          }
+          return undefined
+        },
         async prepareCall(provider, model, signal) {
           // dsh d29855f97c added prepareCall to the LlmAdapter contract with a
           // base-class default. This plain object never extends that base, so

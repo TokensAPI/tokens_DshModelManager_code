@@ -632,6 +632,11 @@ describe('dsh plugin vision provider (phase 3)', () => {
         process.env.MODLENS_DSH_CLI = cli;
         try {
             const registered: Array<Record<string, CallableFunction>> = [];
+            const pricing = {
+                priceImages: (images: unknown[]) =>
+                    images.map(() => ({ visualTokens: 384, text: '' })),
+            };
+            const priceRoute = vi.fn(() => pricing);
             const streamed: Array<{
                 provider: string;
                 messages: Array<{ content: Array<{ type: string; text?: string }> }>;
@@ -654,6 +659,7 @@ describe('dsh plugin vision provider (phase 3)', () => {
                     on: () => {},
                     llm: {
                         listProviders: () => [{ id: 'tokensapi', name: 'TokensAPI' }],
+                        imageRequestPricing: priceRoute,
                         providerRetryPolicy: () => undefined,
                         registerAdapter: (
                             _ids: string[],
@@ -682,6 +688,23 @@ describe('dsh plugin vision provider (phase 3)', () => {
             );
 
             const adapter = registered[0];
+            // The token meter calls this synchronously even for text-only
+            // histories during compaction. Bridged images use its neutral
+            // estimate; native images must preserve the provider's exact price.
+            expect(
+                adapter.imageRequestPricing('modlens-tokensapi', 'deepseek-v4-flash'),
+            ).toBeUndefined();
+            expect(priceRoute).not.toHaveBeenCalled();
+            const nativePricing = adapter.imageRequestPricing(
+                'modlens-tokensapi',
+                'gpt-5.5',
+            ) as typeof pricing;
+            expect(nativePricing).toBe(pricing);
+            expect(priceRoute).toHaveBeenCalledWith('tokensapi', 'gpt-5.5');
+            expect(nativePricing.priceImages([])).toEqual([]);
+            expect(nativePricing.priceImages([{ id: 'image' }])).toEqual([
+                { visualTokens: 384, text: '' },
+            ]);
             const listed = (await adapter.listModels('modlens-tokensapi')) as Array<{
                 id: string;
                 name: string;
