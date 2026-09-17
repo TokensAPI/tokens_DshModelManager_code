@@ -2,7 +2,6 @@ import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { Readable, Writable } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error The DSH entry is deliberately dependency-free plain JS.
 import { __modelManager, apply, DEEPSEEK_OFFICIAL, TOKENSAPI } from '../dsh/index.js';
@@ -1415,97 +1414,6 @@ describe('TokensAPI remote API-key verification', () => {
 });
 
 describe('TokensAPI model discovery and selection', () => {
-    it('proxies Claude Messages through the root endpoint with Claude CLI compatibility identity', async () => {
-        let route: { handler: CallableFunction } | undefined;
-        const request = vi.fn(async (_url: URL, options: Record<string, unknown>) => {
-            let body = '';
-            for await (const chunk of options.body as Readable) body += chunk.toString();
-            expect(body).toContain('claude-opus-5');
-            return new Response('event: message_stop\ndata: {}\n\n', {
-                status: 200,
-                headers: { 'content-type': 'text/event-stream' },
-            });
-        });
-        const host = {};
-        __modelManager.registerClaudeProxyRoute(
-            {
-                webServer: {
-                    port: 43120,
-                    register: (value: { handler: CallableFunction }) => {
-                        route = value;
-                        return () => {};
-                    },
-                },
-            },
-            host,
-            request,
-        );
-        const req = Object.assign(Readable.from(['{"model":"claude-opus-5"}']), {
-            method: 'POST',
-            url: '/tokens/model-manager/claude-proxy/v1/messages',
-            headers: {
-                host: '127.0.0.1:43120',
-                accept: 'text/event-stream',
-                'content-type': 'application/json',
-                'x-api-key': 'secret-test-key',
-                'anthropic-version': '2023-06-01',
-                'user-agent': 'dsh/0.1',
-            },
-            socket: { remoteAddress: '127.0.0.1' },
-        });
-        let status = 0;
-        let output = '';
-        const res = Object.assign(
-            new Writable({
-                write(chunk, _encoding, callback) {
-                    output += chunk.toString();
-                    callback();
-                },
-            }),
-            {
-                writeHead: (value: number) => {
-                    status = value;
-                    return res;
-                },
-            },
-        );
-        await route?.handler(req, res);
-        expect(status).toBe(200);
-        expect(output).toContain('message_stop');
-        expect(request).toHaveBeenCalledTimes(1);
-        const [target, options] = request.mock.calls[0] as unknown as [
-            URL,
-            { headers: Record<string, string> },
-        ];
-        expect(target.href).toBe('https://tokensapi.ai/v1/messages');
-        expect(options.headers['user-agent']).toMatch(/^claude-cli\//);
-        expect(options.headers['x-api-key']).toBe('secret-test-key');
-
-        const remoteReq = Object.assign(Readable.from(['{}']), {
-            method: 'POST',
-            url: '/tokens/model-manager/claude-proxy/v1/messages',
-            headers: { host: '127.0.0.1:43120' },
-            socket: { remoteAddress: '192.0.2.10' },
-        });
-        let remoteStatus = 0;
-        const remoteRes = Object.assign(
-            new Writable({
-                write(_chunk, _encoding, done) {
-                    done();
-                },
-            }),
-            {
-                writeHead: (value: number) => {
-                    remoteStatus = value;
-                    return remoteRes;
-                },
-            },
-        );
-        await route?.handler(remoteReq, remoteRes);
-        expect(remoteStatus).toBe(403);
-        expect(request).toHaveBeenCalledTimes(1);
-    });
-
     it('waits for persisted model settings before exposing startup status', async () => {
         const credential = credentialHarness('tk-startup-settings', true);
         const values = new Map<string, Record<string, unknown>>([
@@ -2706,6 +2614,7 @@ describe('TokensAPI model discovery and selection', () => {
         const values = new Map<string, Record<string, unknown>>();
         const updates: Array<{ namespace: string; patch: Record<string, unknown> }> = [];
         const selections: Array<{ provider: string; model: string }> = [];
+        const registeredRoutes: Array<{ name?: string; kind?: string; path?: string }> = [];
         const settings = {
             register: (
                 namespace: string,
@@ -2727,7 +2636,15 @@ describe('TokensAPI model discovery and selection', () => {
             inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
                 if (services.includes('settings')) callback({ settings });
                 if (services.includes('webServer')) {
-                    callback({ webServer: { port: 43120, register: () => () => {} } });
+                    callback({
+                        webServer: {
+                            port: 43120,
+                            register: (route: { name?: string; kind?: string; path?: string }) => {
+                                registeredRoutes.push(route);
+                                return () => {};
+                            },
+                        },
+                    });
                 }
                 if (services.includes('agentDefaultModel')) {
                     callback({
@@ -2745,6 +2662,9 @@ describe('TokensAPI model discovery and selection', () => {
         };
         apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
         await Promise.resolve();
+        expect(registeredRoutes).not.toContainEqual(
+            expect.objectContaining({ name: 'tokens-model-manager-claude-proxy' }),
+        );
         await __modelManager.setManagedCredential(ctx, 'tk-live-settings', VALID_RESPONSE);
         const status = await __modelManager.setManagedModels(
             ctx,
@@ -2843,7 +2763,8 @@ describe('TokensAPI model discovery and selection', () => {
             providers: {
                 tokensapi: {
                     api: 'anthropic-messages',
-                    baseURL: 'http://127.0.0.1:43120/tokens/model-manager/claude-proxy',
+                    baseURL: 'https://gateway.example/',
+                    headers: { 'user-agent': expect.stringMatching(/^claude-cli\//) },
                     models: expect.arrayContaining([
                         expect.objectContaining({
                             id: 'claude-opus-4-7',

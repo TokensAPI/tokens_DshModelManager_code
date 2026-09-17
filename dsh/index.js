@@ -15,7 +15,6 @@ import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { builtinModelVisionMode } from './modelCapabilities.js'
 import { spawnHidden } from './spawnHidden.js'
@@ -33,7 +32,6 @@ const DEFAULT_VISION_FAMILIES = ['deepseek', 'glm']
 // promise: every selectable chat model must remain usable in image-bearing
 // sessions, so models without confirmed native vision use the selected visual
 // model as a bridge instead of falling back to an image-rejecting direct route.
-const CLAUDE_MODEL_ID = /(?:^|\/)claude(?:-|$)/i
 const MANAGED_ENDPOINT_TYPES = new Set(['anthropic', 'gemini', 'openai', 'openai-response', 'openai-response-compact'])
 const MANAGED_MODEL_APIS = new Set(['anthropic-messages', 'openai-completions', 'openai-responses'])
 const MANAGED_MODEL_API_LABELS = Object.freeze({
@@ -44,7 +42,6 @@ const MANAGED_MODEL_API_LABELS = Object.freeze({
 const RESPONSES_ONLY_MODEL_ID = /(?:^|\/)(?:gpt-|codex-)/i
 const ANTHROPIC_ONLY_MODEL_ID = /(?:^|\/)claude(?:-|$)/i
 const NON_CONVERSATION_MODEL_ID = /(?:^|[-_.])asr(?:$|[-_.])/i
-const CLAUDE_PROXY_PATH = '/tokens/model-manager/claude-proxy'
 const CLAUDE_COMPAT_USER_AGENT = 'claude-cli/2.1.0'
 const PROTOCOL_PROBE_TIMEOUT_MS = 20_000
 
@@ -89,7 +86,6 @@ function managerRuntime(ctx) {
   if (!runtime) {
     runtime = {
       baseURL: TOKENSAPI.baseURL,
-      claudeProxyBaseURL: '',
       mainModel: TOKENSAPI.mainModel,
       protocolByModel: {},
       visionModeByModel: {},
@@ -219,11 +215,6 @@ export function apply(ctx, config = {}) {
         registerModelManagerRoute(scope, ctx)
       } catch (error) {
         console.error(`[tokens-model-manager] settings route skipped: ${error}`)
-      }
-      try {
-        registerClaudeProxyRoute(scope, ctx)
-      } catch (error) {
-        console.error(`[tokens-model-manager] Claude compatibility route skipped: ${error}`)
       }
     })
   }
@@ -2070,99 +2061,12 @@ function isTrustedRequest(req) {
   }
 }
 
-function isLoopbackPeer(req) {
-  const address = String(req.socket?.remoteAddress ?? '').toLowerCase()
-  return address === '::1' || address.startsWith('127.') || address.startsWith('::ffff:127.')
-}
-
 function anthropicUpstreamRoot(baseURL) {
   const parsed = new URL(baseURL)
   parsed.pathname = parsed.pathname.replace(/\/v1\/?$/i, '') || '/'
   parsed.search = ''
   parsed.hash = ''
   return parsed
-}
-
-function registerClaudeProxyRoute(scope, host, request = globalThis.fetch) {
-  const runtime = managerRuntime(host)
-  runtime.claudeProxyBaseURL = `http://127.0.0.1:${String(scope.webServer.port)}${CLAUDE_PROXY_PATH}`
-  const unregister = scope.webServer.register({
-    name: 'tokens-model-manager-claude-proxy',
-    kind: 'prefix',
-    path: CLAUDE_PROXY_PATH,
-    handler: async (req, res) => {
-      const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
-      const suffix = pathname.slice(CLAUDE_PROXY_PATH.length)
-      if (!isLoopbackPeer(req) || req.method !== 'POST' || !/^\/v1\/messages(?:\/count_tokens)?$/.test(suffix)) {
-        res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-        res.end(JSON.stringify({ error: { type: 'permission_error', message: 'Claude compatibility route refused' } }))
-        return
-      }
-      const controller = new AbortController()
-      const cancel = () => controller.abort('local Claude compatibility request closed')
-      req.once?.('aborted', cancel)
-      res.once?.('close', () => {
-        if (!res.writableEnded) cancel()
-      })
-      try {
-        const root = anthropicUpstreamRoot(runtime.baseURL)
-        const target = new URL(suffix.replace(/^\//, ''), root.href.endsWith('/') ? root.href : `${root.href}/`)
-        const headers = {
-          accept: String(req.headers?.accept ?? 'application/json'),
-          'content-type': String(req.headers?.['content-type'] ?? 'application/json'),
-          'user-agent': CLAUDE_COMPAT_USER_AGENT,
-        }
-        for (const name of ['x-api-key', 'authorization', 'anthropic-version', 'anthropic-beta']) {
-          const value = req.headers?.[name]
-          if (typeof value === 'string' && value) headers[name] = value
-        }
-        const upstream = await request(target, {
-          method: 'POST',
-          headers,
-          body: req,
-          duplex: 'half',
-          signal: controller.signal,
-          redirect: 'error',
-        })
-        const responseHeaders = {}
-        for (const name of ['content-type', 'cache-control', 'request-id', 'retry-after']) {
-          const value = upstream.headers.get(name)
-          if (value) responseHeaders[name] = value
-        }
-        res.writeHead(upstream.status, responseHeaders)
-        if (!upstream.body) {
-          res.end()
-          return
-        }
-        await new Promise((resolve, reject) => {
-          const body = Readable.fromWeb(upstream.body)
-          body.once('error', reject)
-          res.once?.('error', reject)
-          res.once?.('finish', resolve)
-          body.pipe(res)
-        })
-      } catch (error) {
-        if (res.headersSent || res.writableEnded) {
-          res.destroy?.(error)
-          return
-        }
-        res.writeHead(502, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-        res.end(JSON.stringify({ error: { type: 'api_error', message: 'Claude compatibility request failed' } }))
-      } finally {
-        req.removeListener?.('aborted', cancel)
-      }
-    },
-  })
-  void Promise.resolve(runtime.settingsReady)
-    .then(() => {
-      if (CLAUDE_MODEL_ID.test(runtime.mainModel)) {
-        return synchronizeMainModel(host, runtime.mainModel, runtime.models)
-      }
-    })
-    .catch((error) => {
-      console.error(`[tokens-model-manager] Claude compatibility route activation skipped: ${error}`)
-    })
-  return unregister
 }
 
 /**
@@ -2830,8 +2734,14 @@ async function synchronizeMainModel(ctx, mainModel, models) {
     const conversationModels = managedConversationModels(runtime, models, route.api)
     const mainIndex = conversationModels.findIndex((model) => model.id === mainModel)
     if (mainIndex > 0) conversationModels.unshift(...conversationModels.splice(mainIndex, 1))
-    const providerBaseURL =
-      route.api === 'anthropic-messages' && runtime.claudeProxyBaseURL ? runtime.claudeProxyBaseURL : runtime.baseURL
+    // Desktop protects every WebServer route with a renderer-only capability.
+    // LLM adapter requests are Host traffic and cannot possess that browser
+    // token, so routing Claude through a loopback WebServer proxy makes Desktop
+    // reject the request before it reaches TokensAPI. pi-ai already supports
+    // route headers: use the Anthropic root directly and apply the compatibility
+    // identity on the provider instead of crossing the renderer security gate.
+    const isClaudeRoute = route.api === 'anthropic-messages'
+    const providerBaseURL = isClaudeRoute ? anthropicUpstreamRoot(runtime.baseURL).href : runtime.baseURL
     await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
       providers: {
         [TOKENSAPI.providerId]: {
@@ -2839,6 +2749,7 @@ async function synchronizeMainModel(ctx, mainModel, models) {
           apiKeyEnv: TOKENSAPI.credentialRef,
           api: route.api,
           baseURL: providerBaseURL,
+          ...(isClaudeRoute ? { headers: { 'user-agent': CLAUDE_COMPAT_USER_AGENT } } : {}),
           ...(contextWindow === undefined ? {} : { defaultContextWindow: contextWindow }),
           models: conversationModels,
         },
@@ -3770,7 +3681,6 @@ function registerConfigRoute(ctx) {
 // both rather than through the HTTP route.
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
 export const __modelManager = {
-  registerClaudeProxyRoute,
   anthropicUpstreamRoot,
   registerModelManagerRoute,
   modelManagerStatus,
