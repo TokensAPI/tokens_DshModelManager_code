@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.21 - 2026-09-17
+
+- Restore Claude Anthropic Messages compatibility at the final wire boundary. A private loopback-only plugin transport rewrites DSH's reserved attribution header to the required Claude CLI identity, streams requests and responses without retaining credentials, and rejects unrelated paths.
+- Show the complete selectable TokensAPI conversation catalog in Desktop regardless of the currently active protocol. Selecting a model now resolves its saved or family-default protocol, reconfigures the Host first, and only then updates the current session so a cross-protocol switch cannot transiently use the previous adapter.
+- Add wire-level Claude proxy, route isolation, complete catalog, cross-protocol ordering, retry and rollback regression coverage. No production dependency changes.
+
 ## 0.2.20 - 2026-09-17
 
 - Send Claude Anthropic Messages directly through the DSH `pi-ai` adapter instead of a loopback WebServer proxy. TokensCowork's renderer capability correctly rejects Host-originated LLM traffic at that boundary, which previously surfaced as `403 AUTH` before a Claude request reached TokensAPI.
