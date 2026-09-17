@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { builtinModelVisionMode } from './modelCapabilities.js'
 import { spawnHidden } from './spawnHidden.js'
@@ -32,7 +33,7 @@ const DEFAULT_VISION_FAMILIES = ['deepseek', 'glm']
 // promise: every selectable chat model must remain usable in image-bearing
 // sessions, so models without confirmed native vision use the selected visual
 // model as a bridge instead of falling back to an image-rejecting direct route.
-const CLAUDE_MODEL_ID = /^claude-/i
+const CLAUDE_MODEL_ID = /(?:^|\/)claude(?:-|$)/i
 const MANAGED_ENDPOINT_TYPES = new Set(['anthropic', 'gemini', 'openai', 'openai-response', 'openai-response-compact'])
 const MANAGED_MODEL_APIS = new Set(['anthropic-messages', 'openai-completions', 'openai-responses'])
 const MANAGED_MODEL_API_LABELS = Object.freeze({
@@ -40,7 +41,12 @@ const MANAGED_MODEL_API_LABELS = Object.freeze({
   'openai-completions': 'Chat Completions',
   'openai-responses': 'Responses API',
 })
-const COMPLETIONS_ONLY_MODEL_IDS = new Set(['deepseek-v4-flash'])
+const RESPONSES_ONLY_MODEL_ID = /(?:^|\/)(?:gpt-|codex-)/i
+const ANTHROPIC_ONLY_MODEL_ID = /(?:^|\/)claude(?:-|$)/i
+const NON_CONVERSATION_MODEL_ID = /(?:^|[-_.])asr(?:$|[-_.])/i
+const CLAUDE_PROXY_PATH = '/tokens/model-manager/claude-proxy'
+const CLAUDE_COMPAT_USER_AGENT = 'claude-cli/2.1.0'
+const PROTOCOL_PROBE_TIMEOUT_MS = 20_000
 
 // Product defaults and stable service ids. The settings page may override the
 // runtime endpoint after sign-in; the gate itself deliberately keeps using the
@@ -83,6 +89,7 @@ function managerRuntime(ctx) {
   if (!runtime) {
     runtime = {
       baseURL: TOKENSAPI.baseURL,
+      claudeProxyBaseURL: '',
       mainModel: TOKENSAPI.mainModel,
       protocolByModel: {},
       visionModeByModel: {},
@@ -212,6 +219,11 @@ export function apply(ctx, config = {}) {
         registerModelManagerRoute(scope, ctx)
       } catch (error) {
         console.error(`[tokens-model-manager] settings route skipped: ${error}`)
+      }
+      try {
+        registerClaudeProxyRoute(scope, ctx)
+      } catch (error) {
+        console.error(`[tokens-model-manager] Claude compatibility route skipped: ${error}`)
       }
     })
   }
@@ -2058,6 +2070,101 @@ function isTrustedRequest(req) {
   }
 }
 
+function isLoopbackPeer(req) {
+  const address = String(req.socket?.remoteAddress ?? '').toLowerCase()
+  return address === '::1' || address.startsWith('127.') || address.startsWith('::ffff:127.')
+}
+
+function anthropicUpstreamRoot(baseURL) {
+  const parsed = new URL(baseURL)
+  parsed.pathname = parsed.pathname.replace(/\/v1\/?$/i, '') || '/'
+  parsed.search = ''
+  parsed.hash = ''
+  return parsed
+}
+
+function registerClaudeProxyRoute(scope, host, request = globalThis.fetch) {
+  const runtime = managerRuntime(host)
+  runtime.claudeProxyBaseURL = `http://127.0.0.1:${String(scope.webServer.port)}${CLAUDE_PROXY_PATH}`
+  const unregister = scope.webServer.register({
+    name: 'tokens-model-manager-claude-proxy',
+    kind: 'prefix',
+    path: CLAUDE_PROXY_PATH,
+    handler: async (req, res) => {
+      const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
+      const suffix = pathname.slice(CLAUDE_PROXY_PATH.length)
+      if (!isLoopbackPeer(req) || req.method !== 'POST' || !/^\/v1\/messages(?:\/count_tokens)?$/.test(suffix)) {
+        res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ error: { type: 'permission_error', message: 'Claude compatibility route refused' } }))
+        return
+      }
+      const controller = new AbortController()
+      const cancel = () => controller.abort('local Claude compatibility request closed')
+      req.once?.('aborted', cancel)
+      res.once?.('close', () => {
+        if (!res.writableEnded) cancel()
+      })
+      try {
+        const root = anthropicUpstreamRoot(runtime.baseURL)
+        const target = new URL(suffix.replace(/^\//, ''), root.href.endsWith('/') ? root.href : `${root.href}/`)
+        const headers = {
+          accept: String(req.headers?.accept ?? 'application/json'),
+          'content-type': String(req.headers?.['content-type'] ?? 'application/json'),
+          'user-agent': CLAUDE_COMPAT_USER_AGENT,
+        }
+        for (const name of ['x-api-key', 'authorization', 'anthropic-version', 'anthropic-beta']) {
+          const value = req.headers?.[name]
+          if (typeof value === 'string' && value) headers[name] = value
+        }
+        const upstream = await request(target, {
+          method: 'POST',
+          headers,
+          body: req,
+          duplex: 'half',
+          signal: controller.signal,
+          redirect: 'error',
+        })
+        const responseHeaders = {}
+        for (const name of ['content-type', 'cache-control', 'request-id', 'retry-after']) {
+          const value = upstream.headers.get(name)
+          if (value) responseHeaders[name] = value
+        }
+        res.writeHead(upstream.status, responseHeaders)
+        if (!upstream.body) {
+          res.end()
+          return
+        }
+        await new Promise((resolve, reject) => {
+          const body = Readable.fromWeb(upstream.body)
+          body.once('error', reject)
+          res.once?.('error', reject)
+          res.once?.('finish', resolve)
+          body.pipe(res)
+        })
+      } catch (error) {
+        if (res.headersSent || res.writableEnded) {
+          res.destroy?.(error)
+          return
+        }
+        res.writeHead(502, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ error: { type: 'api_error', message: 'Claude compatibility request failed' } }))
+      } finally {
+        req.removeListener?.('aborted', cancel)
+      }
+    },
+  })
+  void Promise.resolve(runtime.settingsReady)
+    .then(() => {
+      if (CLAUDE_MODEL_ID.test(runtime.mainModel)) {
+        return synchronizeMainModel(host, runtime.mainModel, runtime.models)
+      }
+    })
+    .catch((error) => {
+      console.error(`[tokens-model-manager] Claude compatibility route activation skipped: ${error}`)
+    })
+  return unregister
+}
+
 /**
  * How long a pasted file stays reachable.
  *
@@ -2325,7 +2432,11 @@ function normalizeProtocolByModel(value) {
     const model = normalizeModelId(rawModel, '')
     const api = normalizeManagedModelApi(rawApi)
     if (!model || !api || model === '__proto__' || model === 'constructor' || model === 'prototype') continue
-    protocols[model] = COMPLETIONS_ONLY_MODEL_IDS.has(model) ? 'openai-completions' : api
+    protocols[model] = RESPONSES_ONLY_MODEL_ID.test(model)
+      ? 'openai-responses'
+      : ANTHROPIC_ONLY_MODEL_ID.test(model)
+        ? 'anthropic-messages'
+        : api
   }
   return protocols
 }
@@ -2390,35 +2501,155 @@ function managedModelApis(model) {
   const hasEndpointMetadata = Array.isArray(model?.endpointTypes)
   const endpointTypes = normalizeEndpointTypes(model?.endpointTypes)
   const modelId = normalizeModelId(model?.id, '')
-  const isClaude = CLAUDE_MODEL_ID.test(modelId)
 
-  // TokensAPI advertises Responses compatibility for DeepSeek V4 Flash, but
-  // captured production sessions show repeated tool calls and long-context
-  // stream corruption on that transport. Chat Completions is the supported
-  // stable route until the upstream Responses behavior is fixed.
-  if (COMPLETIONS_ONLY_MODEL_IDS.has(modelId) && (!hasEndpointMetadata || endpointTypes.includes('openai'))) {
-    return ['openai-completions']
-  }
+  // Family rules describe native wire contracts, not individual versions.
+  // New GPT/Codex and Claude releases therefore inherit the correct stable
+  // protocol without adding their complete model ids to a growing allowlist.
+  if (RESPONSES_ONLY_MODEL_ID.test(modelId)) return ['openai-responses']
+  if (ANTHROPIC_ONLY_MODEL_ID.test(modelId)) return ['anthropic-messages']
 
-  // Older compatible catalogs may omit endpoint metadata. Keep both OpenAI
-  // transports selectable there, but default to Chat Completions below. This
-  // also lets a persisted Responses choice survive startup before /models has
-  // been refreshed.
+  // Unknown and non-native families default to Chat Completions, but other
+  // transports remain selectable. A missing declaration must not permanently
+  // strand a newly introduced family on Chat; explicit alternative choices
+  // are verified by probeManagedProtocol before they are persisted.
   if (!hasEndpointMetadata) {
-    return isClaude ? ['anthropic-messages'] : ['openai-completions', 'openai-responses']
+    return ['openai-completions', 'openai-responses', 'anthropic-messages']
   }
-  if (isClaude && endpointTypes.includes('anthropic')) return ['anthropic-messages']
   const apis = []
   if (endpointTypes.includes('openai')) apis.push('openai-completions')
   if (endpointTypes.includes('openai-response') || endpointTypes.includes('openai-response-compact')) {
     apis.push('openai-responses')
   }
-  if (apis.length === 0 && endpointTypes.includes('anthropic')) apis.push('anthropic-messages')
+  if (endpointTypes.includes('anthropic')) apis.push('anthropic-messages')
   if (apis.length > 0) return apis
   throw new ManagedCredentialError(
     'unsupported_model',
     `模型 "${normalizeModelId(model?.id, 'unknown')}" 暂不支持 DSH 可用的调用协议`,
   )
+}
+
+function managedProtocolProbeRequest(model, api) {
+  const message = 'Reply only OK.'
+  if (api === 'openai-completions') {
+    return {
+      path: 'chat/completions',
+      headers: {},
+      body: {
+        model,
+        messages: [{ role: 'user', content: message }],
+        stream: true,
+        stream_options: { include_usage: true },
+      },
+      terminal: /(?:\[DONE\]|"finish_reason"\s*:\s*"[^"]+")/u,
+    }
+  }
+  if (api === 'openai-responses') {
+    return {
+      path: 'responses',
+      headers: {},
+      body: { model, input: message, stream: true },
+      terminal: /(?:event:\s*response\.completed|"type"\s*:\s*"response\.completed")/u,
+    }
+  }
+  return {
+    path: 'v1/messages',
+    headers: {
+      'anthropic-version': '2023-06-01',
+      'user-agent': CLAUDE_COMPAT_USER_AGENT,
+    },
+    body: {
+      model,
+      max_tokens: 8,
+      messages: [{ role: 'user', content: message }],
+      stream: true,
+    },
+    terminal: /(?:event:\s*message_stop|"type"\s*:\s*"message_stop")/u,
+  }
+}
+
+function managedProtocolProbeTarget(baseURL, api, path) {
+  const root =
+    api === 'anthropic-messages' ? anthropicUpstreamRoot(baseURL) : new URL(`${baseURL.replace(/\/+$/u, '')}/`)
+  return new URL(path, root.href.endsWith('/') ? root.href : `${root.href}/`)
+}
+
+/**
+ * Verify an explicitly selected non-default transport before saving it.
+ *
+ * Schema/route failures are stable incompatibilities. Rate limits, 5xx and
+ * network failures are transient and must never rewrite the user's existing
+ * model/protocol selection.
+ */
+async function probeManagedProtocol(ctx, model, api, request = globalThis.fetch, signal, baseURL) {
+  const runtime = managerRuntime(ctx)
+  signal ??= request?.signal
+  const credential = await ctx.credentials.resolve(TOKENSAPI.credentialRef)
+  const apiKey = resolvedCredentialValue(credential).trim()
+  if (!apiKey) throw new ManagedCredentialError('unauthenticated', '请先验证 TokensAPI API Key')
+  const probe = managedProtocolProbeRequest(model, api)
+  const target = managedProtocolProbeTarget(baseURL ?? runtime.baseURL, api, probe.path)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort('protocol probe timeout'), PROTOCOL_PROBE_TIMEOUT_MS)
+  const cancel = () => controller.abort(signal?.reason)
+  signal?.addEventListener('abort', cancel, { once: true })
+  if (signal?.aborted) cancel()
+  try {
+    const headers = {
+      accept: 'text/event-stream',
+      'content-type': 'application/json',
+      ...(api === 'anthropic-messages'
+        ? { 'x-api-key': apiKey, ...probe.headers }
+        : { authorization: `Bearer ${apiKey}`, ...probe.headers }),
+    }
+    const response = await abortableWait(
+      Promise.resolve().then(() =>
+        request(target, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(probe.body),
+          signal: controller.signal,
+          redirect: 'error',
+        }),
+      ),
+      controller.signal,
+    )
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        throw new ManagedCredentialError('invalid_key', 'TokensAPI 拒绝了当前 API Key')
+      }
+      if (response.status === 408 || response.status === 429 || response.status >= 500) {
+        throw new ManagedCredentialError(
+          'protocol_temporary',
+          `协议验证暂时失败（HTTP ${response.status}），请稍后重试`,
+        )
+      }
+      throw new ManagedCredentialError(
+        'unsupported_protocol',
+        `模型 "${model}" 暂不兼容 ${MANAGED_MODEL_API_LABELS[api]}（HTTP ${response.status}）`,
+      )
+    }
+    const payload = await abortableWait(
+      Promise.resolve().then(() => response.text()),
+      controller.signal,
+    )
+    if (!probe.terminal.test(payload)) {
+      throw new ManagedCredentialError(
+        'unsupported_protocol',
+        `模型 "${model}" 的 ${MANAGED_MODEL_API_LABELS[api]} 响应缺少正常结束事件`,
+      )
+    }
+    return true
+  } catch (error) {
+    if (error instanceof ManagedCredentialError) throw error
+    if (controller.signal.aborted) {
+      throw new ManagedCredentialError('protocol_temporary', '协议验证超时或已取消，请重试')
+    }
+    throw new ManagedCredentialError('protocol_temporary', '协议验证网络失败，请重试')
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', cancel)
+    controller.abort()
+  }
 }
 
 function managedModelApi(model, preferredApi) {
@@ -2500,7 +2731,7 @@ async function parseManagedModels(response) {
   const seen = new Set()
   for (const entry of payload.data) {
     const id = normalizeModelId(entry?.id, '')
-    if (!id || seen.has(id)) continue
+    if (!id || seen.has(id) || NON_CONVERSATION_MODEL_ID.test(id)) continue
     const endpointTypes = normalizeEndpointTypes(entry?.supported_endpoint_types)
     const hasEndpointTypes = Array.isArray(entry?.supported_endpoint_types)
     // A catalog that declares endpoint metadata is authoritative. Keep only
@@ -2575,6 +2806,9 @@ function managedConversationModels(runtime, models, api) {
       id: model.id,
       name: model.name ?? model.id,
       input: capability.input,
+      ...(api === 'openai-responses' && RESPONSES_ONLY_MODEL_ID.test(model.id)
+        ? { compat: { supportsMaxOutputTokens: false } }
+        : {}),
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
     })
@@ -2596,13 +2830,15 @@ async function synchronizeMainModel(ctx, mainModel, models) {
     const conversationModels = managedConversationModels(runtime, models, route.api)
     const mainIndex = conversationModels.findIndex((model) => model.id === mainModel)
     if (mainIndex > 0) conversationModels.unshift(...conversationModels.splice(mainIndex, 1))
+    const providerBaseURL =
+      route.api === 'anthropic-messages' && runtime.claudeProxyBaseURL ? runtime.claudeProxyBaseURL : runtime.baseURL
     await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
       providers: {
         [TOKENSAPI.providerId]: {
           displayName: 'TokensAPI',
           apiKeyEnv: TOKENSAPI.credentialRef,
           api: route.api,
-          baseURL: runtime.baseURL,
+          baseURL: providerBaseURL,
           ...(contextWindow === undefined ? {} : { defaultContextWindow: contextWindow }),
           models: conversationModels,
         },
@@ -3027,9 +3263,11 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
     throw new ManagedCredentialError('invalid_model', '所选模型不在 TokensAPI 可用列表中')
   }
   const selected = runtime.models.find((model) => model.id === mainModel)
-  const api = Object.hasOwn(value ?? {}, 'api')
-    ? managedModelApi(selected, value.api)
-    : configuredManagedModelApi(selected, runtime.protocolByModel[mainModel])
+  const previousApi = configuredManagedModelApi(selected, runtime.protocolByModel[mainModel])
+  const api = Object.hasOwn(value ?? {}, 'api') ? managedModelApi(selected, value.api) : previousApi
+  if (Object.hasOwn(value ?? {}, 'api') && api !== previousApi) {
+    await probeManagedProtocol(ctx, mainModel, api, request, request?.signal, baseURL)
+  }
   const automaticCapability = managedModelCapability(selected)
   const nextVisionModeByModel = reconcileVisionModeByModel(runtime.models, runtime.visionModeByModel)
   if (automaticCapability.source === 'unknown') {
@@ -3454,9 +3692,11 @@ function registerModelManagerRoute(ctx, host) {
               ? 401
               : code === 'unreachable'
                 ? 503
-                : code === 'upstream'
-                  ? 502
-                  : 400
+                : code === 'protocol_temporary'
+                  ? 503
+                  : code === 'upstream'
+                    ? 502
+                    : 400
         send(status, { error: String(error?.message ?? error), code })
       }
     },
@@ -3530,8 +3770,12 @@ function registerConfigRoute(ctx) {
 // both rather than through the HTTP route.
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
 export const __modelManager = {
+  registerClaudeProxyRoute,
+  anthropicUpstreamRoot,
   registerModelManagerRoute,
   modelManagerStatus,
+  probeManagedProtocol,
+  managedProtocolProbeRequest,
   normalizeManagedCredential,
   normalizeManagedBaseURL,
   validateManagedCredential,

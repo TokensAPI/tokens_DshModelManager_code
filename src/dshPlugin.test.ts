@@ -2160,9 +2160,13 @@ describe('dsh paste-to-path host route', () => {
         expect(withoutPaste.map((route) => route.name)).toEqual([
             'modlens-config',
             'tokens-model-manager',
+            'tokens-model-manager-claude-proxy',
         ]);
         const withoutBoth = await routeOf({ pasteToPath: false, settingsCard: false });
-        expect(withoutBoth.map((route) => route.name)).toEqual(['tokens-model-manager']);
+        expect(withoutBoth.map((route) => route.name)).toEqual([
+            'tokens-model-manager',
+            'tokens-model-manager-claude-proxy',
+        ]);
     });
 
     it('sniffs to the CLI table: near-miss magic bytes are refused, real brands pass', async () => {

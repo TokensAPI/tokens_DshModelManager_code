@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Readable, Writable } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error The DSH entry is deliberately dependency-free plain JS.
 import { __modelManager, apply, DEEPSEEK_OFFICIAL, TOKENSAPI } from '../dsh/index.js';
@@ -383,13 +384,17 @@ const API_MODELS = [
 const PUBLIC_API_MODELS = API_MODELS.map((model) => {
     const protocols = model.id.startsWith('claude-')
         ? [{ id: 'anthropic-messages', label: 'Anthropic Messages' }]
-        : [
-              { id: 'openai-completions', label: 'Chat Completions' },
-              ...(model.id !== 'deepseek-v4-flash' &&
-              model.endpointTypes.includes('openai-response')
-                  ? [{ id: 'openai-responses', label: 'Responses API' }]
-                  : []),
-          ];
+        : /^(?:gpt-|codex-)/i.test(model.id)
+          ? [{ id: 'openai-responses', label: 'Responses API' }]
+          : [
+                { id: 'openai-completions', label: 'Chat Completions' },
+                ...(model.endpointTypes.includes('openai-response')
+                    ? [{ id: 'openai-responses', label: 'Responses API' }]
+                    : []),
+                ...(model.endpointTypes.includes('anthropic')
+                    ? [{ id: 'anthropic-messages', label: 'Anthropic Messages' }]
+                    : []),
+            ];
     return {
         ...model,
         api: protocols[0].id,
@@ -424,6 +429,19 @@ const VALID_RESPONSE = async () => ({
         })),
     }),
 });
+
+const VALID_RESPONSE_AND_PROTOCOL = async (
+    _url?: URL | string,
+    options?: Record<string, unknown>,
+) => {
+    if (options?.method === 'POST') {
+        return new Response('event: response.completed\ndata: {"type":"response.completed"}\n\n', {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' },
+        });
+    }
+    return VALID_RESPONSE();
+};
 
 const FUTURE_MODEL_ID = 'future-omni-2027';
 
@@ -1397,6 +1415,97 @@ describe('TokensAPI remote API-key verification', () => {
 });
 
 describe('TokensAPI model discovery and selection', () => {
+    it('proxies Claude Messages through the root endpoint with Claude CLI compatibility identity', async () => {
+        let route: { handler: CallableFunction } | undefined;
+        const request = vi.fn(async (_url: URL, options: Record<string, unknown>) => {
+            let body = '';
+            for await (const chunk of options.body as Readable) body += chunk.toString();
+            expect(body).toContain('claude-opus-5');
+            return new Response('event: message_stop\ndata: {}\n\n', {
+                status: 200,
+                headers: { 'content-type': 'text/event-stream' },
+            });
+        });
+        const host = {};
+        __modelManager.registerClaudeProxyRoute(
+            {
+                webServer: {
+                    port: 43120,
+                    register: (value: { handler: CallableFunction }) => {
+                        route = value;
+                        return () => {};
+                    },
+                },
+            },
+            host,
+            request,
+        );
+        const req = Object.assign(Readable.from(['{"model":"claude-opus-5"}']), {
+            method: 'POST',
+            url: '/tokens/model-manager/claude-proxy/v1/messages',
+            headers: {
+                host: '127.0.0.1:43120',
+                accept: 'text/event-stream',
+                'content-type': 'application/json',
+                'x-api-key': 'secret-test-key',
+                'anthropic-version': '2023-06-01',
+                'user-agent': 'dsh/0.1',
+            },
+            socket: { remoteAddress: '127.0.0.1' },
+        });
+        let status = 0;
+        let output = '';
+        const res = Object.assign(
+            new Writable({
+                write(chunk, _encoding, callback) {
+                    output += chunk.toString();
+                    callback();
+                },
+            }),
+            {
+                writeHead: (value: number) => {
+                    status = value;
+                    return res;
+                },
+            },
+        );
+        await route?.handler(req, res);
+        expect(status).toBe(200);
+        expect(output).toContain('message_stop');
+        expect(request).toHaveBeenCalledTimes(1);
+        const [target, options] = request.mock.calls[0] as unknown as [
+            URL,
+            { headers: Record<string, string> },
+        ];
+        expect(target.href).toBe('https://tokensapi.ai/v1/messages');
+        expect(options.headers['user-agent']).toMatch(/^claude-cli\//);
+        expect(options.headers['x-api-key']).toBe('secret-test-key');
+
+        const remoteReq = Object.assign(Readable.from(['{}']), {
+            method: 'POST',
+            url: '/tokens/model-manager/claude-proxy/v1/messages',
+            headers: { host: '127.0.0.1:43120' },
+            socket: { remoteAddress: '192.0.2.10' },
+        });
+        let remoteStatus = 0;
+        const remoteRes = Object.assign(
+            new Writable({
+                write(_chunk, _encoding, done) {
+                    done();
+                },
+            }),
+            {
+                writeHead: (value: number) => {
+                    remoteStatus = value;
+                    return remoteRes;
+                },
+            },
+        );
+        await route?.handler(remoteReq, remoteRes);
+        expect(remoteStatus).toBe(403);
+        expect(request).toHaveBeenCalledTimes(1);
+    });
+
     it('waits for persisted model settings before exposing startup status', async () => {
         const credential = credentialHarness('tk-startup-settings', true);
         const values = new Map<string, Record<string, unknown>>([
@@ -1446,7 +1555,7 @@ describe('TokensAPI model discovery and selection', () => {
         settingsInjection?.({ settings });
         await expect(statusPromise).resolves.toMatchObject({
             mainModel: 'gpt-5.5',
-            api: 'openai-completions',
+            api: 'openai-responses',
             mainProvider: TOKENSAPI.providerId,
             visionMode: 'native',
             visionModel: 'qwen3.6-35b-a3b',
@@ -1535,7 +1644,7 @@ describe('TokensAPI model discovery and selection', () => {
         );
     });
 
-    it('migrates a persisted Flash Responses choice before the first conversation request', async () => {
+    it('keeps a persisted alternative protocol for a non-native model family', async () => {
         const credential = credentialHarness('tk-startup-protocol', true);
         const values = new Map<string, Record<string, unknown>>([
             [
@@ -1575,7 +1684,7 @@ describe('TokensAPI model discovery and selection', () => {
         await expect(__modelManager.modelManagerStatus(ctx, VALID_RESPONSE)).resolves.toMatchObject(
             {
                 mainModel: 'deepseek-v4-flash',
-                api: 'openai-completions',
+                api: 'openai-responses',
             },
         );
         expect(
@@ -1585,7 +1694,7 @@ describe('TokensAPI model discovery and selection', () => {
         ).toMatchObject({
             providers: {
                 tokensapi: {
-                    api: 'openai-completions',
+                    api: 'openai-responses',
                     defaultContextWindow: 262144,
                     models: expect.arrayContaining([
                         expect.objectContaining({
@@ -1595,7 +1704,6 @@ describe('TokensAPI model discovery and selection', () => {
                         }),
                         expect.objectContaining({ id: 'deepseek-v3.2' }),
                         expect.objectContaining({ id: 'qwen3.6-35b-a3b' }),
-                        expect.objectContaining({ id: 'gpt-5.5' }),
                     ]),
                 },
             },
@@ -1708,7 +1816,7 @@ describe('TokensAPI model discovery and selection', () => {
         ).resolves.toEqual({
             provider: TOKENSAPI.providerId,
             visionMode: 'native',
-            api: 'openai-completions',
+            api: 'openai-responses',
             input: ['text', 'image'],
         });
     });
@@ -1974,6 +2082,30 @@ describe('TokensAPI model discovery and selection', () => {
         expect(
             __modelManager.managedModelApi({ id: 'openai-only', endpointTypes: ['openai'] }),
         ).toBe('openai-completions');
+        expect(
+            __modelManager.managedModelApis({
+                id: 'gpt-5.6-sol',
+                endpointTypes: ['openai', 'openai-response'],
+            }),
+        ).toEqual(['openai-responses']);
+        expect(
+            __modelManager.managedModelApis({
+                id: 'codex-auto-review',
+                endpointTypes: ['openai', 'openai-response'],
+            }),
+        ).toEqual(['openai-responses']);
+        expect(
+            __modelManager.managedModelApis({
+                id: 'qwen3.8-flash-next',
+                endpointTypes: ['openai', 'openai-response'],
+            }),
+        ).toEqual(['openai-completions', 'openai-responses']);
+        expect(
+            __modelManager.managedModelApis({
+                id: 'qwen3.6-35b-a3b',
+                endpointTypes: ['openai', 'openai-response'],
+            }),
+        ).toEqual(['openai-completions', 'openai-responses']);
         expect(() =>
             __modelManager.managedModelApi({ id: 'gemini-only', endpointTypes: ['gemini'] }),
         ).toThrow(/暂不支持 DSH/);
@@ -1986,6 +2118,193 @@ describe('TokensAPI model discovery and selection', () => {
                 'openai-responses',
             ),
         ).toThrow(/不支持所选请求协议/);
+    });
+
+    it('classifies future model versions by family and keeps unknown families extensible', () => {
+        expect(
+            __modelManager.managedModelApis({
+                id: 'gpt-7-future',
+                endpointTypes: ['openai', 'openai-response', 'anthropic'],
+            }),
+        ).toEqual(['openai-responses']);
+        expect(
+            __modelManager.managedModelApis({
+                id: 'codex-next-2028',
+                endpointTypes: ['openai', 'openai-response', 'anthropic'],
+            }),
+        ).toEqual(['openai-responses']);
+        expect(
+            __modelManager.managedModelApis({
+                id: 'openai/gpt-7-future',
+                endpointTypes: ['openai', 'openai-response', 'anthropic'],
+            }),
+        ).toEqual(['openai-responses']);
+        expect(
+            __modelManager.managedModelApis({
+                id: 'claude-opus-6',
+                endpointTypes: ['openai', 'openai-response', 'anthropic'],
+            }),
+        ).toEqual(['anthropic-messages']);
+        expect(
+            __modelManager.managedModelApis({
+                id: 'vertex-ai/claude-opus-6',
+                endpointTypes: ['openai', 'openai-response', 'anthropic'],
+            }),
+        ).toEqual(['anthropic-messages']);
+        expect(__modelManager.managedModelApis({ id: 'future-family-v1' })).toEqual([
+            'openai-completions',
+            'openai-responses',
+            'anthropic-messages',
+        ]);
+        expect(
+            __modelManager.managedModelApis({
+                id: 'future-family-v2',
+                endpointTypes: ['openai', 'openai-response', 'anthropic'],
+            }),
+        ).toEqual(['openai-completions', 'openai-responses', 'anthropic-messages']);
+    });
+
+    it('probes alternative protocols with their real streamed wire contracts', async () => {
+        const harness = credentialHarness('tk-protocol-probe', true);
+        const calls: Array<{ url: URL; options: Record<string, unknown> }> = [];
+        const request = vi.fn(async (url: URL, options: Record<string, unknown>) => {
+            calls.push({ url, options });
+            const body = JSON.parse(String(options.body));
+            if (url.pathname.endsWith('/chat/completions')) {
+                expect(body.stream_options).toEqual({ include_usage: true });
+                return new Response('data: {"finish_reason":"stop"}\n\ndata: [DONE]\n\n');
+            }
+            if (url.pathname.endsWith('/responses')) {
+                return new Response(
+                    'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+                );
+            }
+            expect(url.pathname).toBe('/v1/messages');
+            return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+        });
+
+        await __modelManager.probeManagedProtocol(
+            harness.ctx,
+            'future-family-v1',
+            'openai-completions',
+            request,
+        );
+        await __modelManager.probeManagedProtocol(
+            harness.ctx,
+            'future-family-v1',
+            'openai-responses',
+            request,
+        );
+        await __modelManager.probeManagedProtocol(
+            harness.ctx,
+            'future-family-v1',
+            'anthropic-messages',
+            request,
+        );
+
+        expect(calls.map((entry) => entry.url.pathname)).toEqual([
+            '/v1/chat/completions',
+            '/v1/responses',
+            '/v1/messages',
+        ]);
+        expect(calls[2]?.options).toMatchObject({
+            headers: expect.objectContaining({
+                'x-api-key': 'tk-protocol-probe',
+                'user-agent': expect.stringMatching(/^claude-cli\//),
+            }),
+        });
+    });
+
+    it('distinguishes hard incompatibility from temporary protocol failures', async () => {
+        const harness = credentialHarness('tk-protocol-errors', true);
+        await expect(
+            __modelManager.probeManagedProtocol(
+                harness.ctx,
+                'future-family-v1',
+                'openai-responses',
+                async () => new Response('{}', { status: 400 }),
+            ),
+        ).rejects.toMatchObject({ code: 'unsupported_protocol' });
+        await expect(
+            __modelManager.probeManagedProtocol(
+                harness.ctx,
+                'future-family-v1',
+                'openai-responses',
+                async () => new Response('{}', { status: 503 }),
+            ),
+        ).rejects.toMatchObject({ code: 'protocol_temporary' });
+        await expect(
+            __modelManager.probeManagedProtocol(
+                harness.ctx,
+                'future-family-v1',
+                'openai-responses',
+                async () => new Response('event: response.output_text.delta\n\n'),
+            ),
+        ).rejects.toMatchObject({ code: 'unsupported_protocol' });
+        await expect(
+            __modelManager.probeManagedProtocol(
+                harness.ctx,
+                'future-family-v1',
+                'openai-responses',
+                async () => {
+                    throw new TypeError('connection reset');
+                },
+            ),
+        ).rejects.toMatchObject({ code: 'protocol_temporary' });
+    });
+
+    it('bounds both stalled protocol headers and stalled response bodies', async () => {
+        vi.useFakeTimers();
+        try {
+            const harness = credentialHarness('tk-protocol-timeout', true);
+            for (const stage of ['headers', 'body']) {
+                const never = new Promise(() => {});
+                const request = vi.fn(() =>
+                    stage === 'headers'
+                        ? never
+                        : Promise.resolve({ ok: true, status: 200, text: () => never }),
+                );
+                const result = __modelManager
+                    .probeManagedProtocol(
+                        harness.ctx,
+                        'future-family-v1',
+                        'openai-responses',
+                        request,
+                    )
+                    .catch((error: unknown) => error);
+                await vi.advanceTimersByTimeAsync(20_001);
+                await expect(result).resolves.toMatchObject({ code: 'protocol_temporary' });
+                expect(vi.getTimerCount()).toBe(0);
+            }
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps the saved route unchanged when an alternative protocol probe fails', async () => {
+        const harness = credentialHarness();
+        await __modelManager.setManagedCredential(
+            harness.ctx,
+            'tk-protocol-rollback',
+            VALID_RESPONSE,
+        );
+        await expect(
+            __modelManager.setManagedModels(
+                harness.ctx,
+                {
+                    mainModel: 'deepseek-v3.2',
+                    api: 'openai-responses',
+                    visionModel: TOKENSAPI.visionModel,
+                },
+                async () => new Response('{}', { status: 503 }),
+            ),
+        ).rejects.toMatchObject({ code: 'protocol_temporary' });
+        await expect(
+            __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE),
+        ).resolves.toMatchObject({
+            mainModel: TOKENSAPI.mainModel,
+            api: 'openai-completions',
+        });
     });
 
     it('declares verified native multimodal models as accepting image input', () => {
@@ -2079,26 +2398,31 @@ describe('TokensAPI model discovery and selection', () => {
         ).toBe(32768);
     });
 
-    it('keeps DeepSeek V4 Flash on Chat Completions after Responses failures', () => {
+    it('defaults non-native families to Chat while keeping declared alternatives selectable', () => {
         const model = {
             id: 'deepseek-v4-flash',
             endpointTypes: ['openai', 'openai-response', 'openai-response-compact'],
         };
-        expect(__modelManager.managedModelApis(model)).toEqual(['openai-completions']);
+        expect(__modelManager.managedModelApis(model)).toEqual([
+            'openai-completions',
+            'openai-responses',
+        ]);
         expect(__modelManager.managedModelApi(model, 'openai-completions')).toBe(
             'openai-completions',
         );
-        expect(() => __modelManager.managedModelApi(model, 'openai-responses')).toThrow(
-            '不支持所选请求协议',
-        );
+        expect(__modelManager.managedModelApi(model, 'openai-responses')).toBe('openai-responses');
         expect(
             __modelManager.normalizeProtocolByModel({
                 'deepseek-v4-flash': 'openai-responses',
                 'qwen3.6-35b-a3b': 'openai-responses',
+                'gpt-6-astra': 'openai-completions',
+                'claude-opus-5': 'openai-completions',
             }),
         ).toEqual({
-            'deepseek-v4-flash': 'openai-completions',
+            'deepseek-v4-flash': 'openai-responses',
             'qwen3.6-35b-a3b': 'openai-responses',
+            'gpt-6-astra': 'openai-responses',
+            'claude-opus-5': 'anthropic-messages',
         });
     });
 
@@ -2177,6 +2501,19 @@ describe('TokensAPI model discovery and selection', () => {
             { id: 'hybrid-chat-model', name: 'hybrid-chat-model' },
             { id: 'metadata-free-chat-model', name: 'metadata-free-chat-model' },
         ]);
+    });
+
+    it('filters speech-recognition models from the conversation catalog', async () => {
+        const models = await __modelManager.parseManagedModels({
+            json: async () => ({
+                data: [
+                    { id: 'qwen3-asr', supported_endpoint_types: ['openai'] },
+                    { id: 'meeting-asr', supported_endpoint_types: ['openai'] },
+                    { id: 'deepseek-v4-flash', supported_endpoint_types: ['openai'] },
+                ],
+            }),
+        });
+        expect(models.map((model: { id: string }) => model.id)).toEqual(['deepseek-v4-flash']);
     });
 
     it('rejects catalogs containing only non-chat models', async () => {
@@ -2284,7 +2621,7 @@ describe('TokensAPI model discovery and selection', () => {
                 api: 'openai-responses',
                 visionModel: TOKENSAPI.visionModel,
             },
-            VALID_RESPONSE,
+            VALID_RESPONSE_AND_PROTOCOL,
         );
         expect(responses.api).toBe('openai-responses');
         expect(
@@ -2310,7 +2647,7 @@ describe('TokensAPI model discovery and selection', () => {
         expect(restored.api).toBe('openai-responses');
     });
 
-    it('rejects a protocol that the selected model does not advertise', async () => {
+    it('rejects a protocol that the selected model cannot serve', async () => {
         const harness = credentialHarness();
         await __modelManager.setManagedCredential(
             harness.ctx,
@@ -2322,7 +2659,7 @@ describe('TokensAPI model discovery and selection', () => {
                 harness.ctx,
                 {
                     mainModel: 'gpt-5.5',
-                    api: 'openai-responses',
+                    api: 'openai-completions',
                     visionModel: TOKENSAPI.visionModel,
                 },
                 VALID_RESPONSE,
@@ -2389,6 +2726,9 @@ describe('TokensAPI model discovery and selection', () => {
             tools: { register: () => {} },
             inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
                 if (services.includes('settings')) callback({ settings });
+                if (services.includes('webServer')) {
+                    callback({ webServer: { port: 43120, register: () => () => {} } });
+                }
                 if (services.includes('agentDefaultModel')) {
                     callback({
                         agentDefaultModel: {
@@ -2447,7 +2787,6 @@ describe('TokensAPI model discovery and selection', () => {
                         }),
                         expect.objectContaining({ id: 'deepseek-v4-flash' }),
                         expect.objectContaining({ id: 'qwen3.6-35b-a3b' }),
-                        expect.objectContaining({ id: 'gpt-5.5' }),
                     ]),
                 },
             },
@@ -2457,7 +2796,6 @@ describe('TokensAPI model discovery and selection', () => {
             'deepseek-v4-flash',
             'qwen3.6-35b-a3b',
             'qwen3.8-flash-next',
-            'gpt-5.5',
         ]);
         // The settings page still receives every API model for its own
         // selector; only the conversation catalog is narrowed.
@@ -2466,6 +2804,30 @@ describe('TokensAPI model discovery and selection', () => {
         expect(selections.at(-1)).toEqual({
             provider: TOKENSAPI.providerId,
             model: 'deepseek-v3.2',
+        });
+
+        await __modelManager.setManagedModels(
+            ctx,
+            { mainModel: 'gpt-5.5', visionModel: 'qwen3.6-35b-a3b' },
+            VALID_RESPONSE,
+        );
+        expect(
+            [...updates]
+                .reverse()
+                .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch,
+        ).toMatchObject({
+            providers: {
+                tokensapi: {
+                    api: 'openai-responses',
+                    baseURL: 'https://gateway.example/v1',
+                    models: expect.arrayContaining([
+                        expect.objectContaining({
+                            id: 'gpt-5.5',
+                            compat: { supportsMaxOutputTokens: false },
+                        }),
+                    ]),
+                },
+            },
         });
 
         await __modelManager.setManagedModels(
@@ -2481,13 +2843,14 @@ describe('TokensAPI model discovery and selection', () => {
             providers: {
                 tokensapi: {
                     api: 'anthropic-messages',
-                    models: [
-                        {
+                    baseURL: 'http://127.0.0.1:43120/tokens/model-manager/claude-proxy',
+                    models: expect.arrayContaining([
+                        expect.objectContaining({
                             id: 'claude-opus-4-7',
                             name: 'Claude Opus 4.7',
                             input: ['text', 'image'],
-                        },
-                    ],
+                        }),
+                    ]),
                 },
             },
         });
