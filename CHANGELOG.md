@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.19 - 2026-09-17
+
+- Classify protocol defaults by model family instead of complete model ids: GPT and Codex use Responses, Claude uses Anthropic Messages, and other or unknown families default to Chat Completions while retaining advertised or fallback alternatives.
+- Verify an explicitly selected alternative with the same streamed wire contract before saving it. Schema, route and missing-terminal failures are rejected as incompatible; rate limits, server errors, timeouts and network failures remain retryable and never overwrite the saved route.
+- Route Claude Messages through the loopback compatibility proxy with the upstream root path and Claude CLI identity, omit the unsupported GPT/Codex Responses output cap, and filter speech-recognition entries from the conversation catalog.
+- Cover future and namespaced model families, all three protocol probes, response-header and response-body deadlines, temporary versus permanent failures, rollback behavior, Claude compatibility, GPT 6 visibility and the production protocol matrix. No production dependency changes.
+
 ## 0.2.18 - 2026-09-09
 
 - Select native multimodal models on the direct TokensAPI provider. Only text-only models that need image-to-text conversion use the visual bridge; legacy sessions on `modlens-tokensapi` remain compatible.
