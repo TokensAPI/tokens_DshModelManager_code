@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.20 - 2026-09-17
+
+- Send Claude Anthropic Messages directly through the DSH `pi-ai` adapter instead of a loopback WebServer proxy. TokensCowork's renderer capability correctly rejects Host-originated LLM traffic at that boundary, which previously surfaced as `403 AUTH` before a Claude request reached TokensAPI.
+- Preserve the Claude-compatible upstream root and client identity through the provider's supported `baseURL` and `headers` settings. Regression coverage verifies that production startup no longer registers the blocked proxy route.
+
 ## 0.2.19 - 2026-09-17
 
 - Classify protocol defaults by model family instead of complete model ids: GPT and Codex use Responses, Claude uses Anthropic Messages, and other or unknown families default to Chat Completions while retaining advertised or fallback alternatives.

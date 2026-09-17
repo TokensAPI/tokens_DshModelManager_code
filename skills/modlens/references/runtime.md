@@ -8,7 +8,7 @@ shell syntax.
 
 ## Pinned version
 
-- Pinned CLI version: 0.2.19
+- Pinned CLI version: 0.2.20
 - npm package: `@tokens/dsh-model-manager`
 - CLI binary name: `modlens`
 
