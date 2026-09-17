@@ -69,6 +69,60 @@ function credentialHarness(initial?: string, verified = false): CredentialHarnes
     return harness;
 }
 
+describe('Claude compatibility transport', () => {
+    it('rewrites DSH attribution on the real wire without exposing another path', async () => {
+        const ctx = credentialHarness().ctx;
+        const request = vi.fn(
+            async (target: URL, options: RequestInit & { body?: AsyncIterable<Uint8Array> }) => {
+                let body = '';
+                for await (const chunk of options.body ?? [])
+                    body += Buffer.from(chunk).toString('utf8');
+                const headers = new Headers(options.headers);
+                expect(target.href).toBe('https://tokensapi.ai/v1/messages');
+                expect(headers.get('user-agent')).toBe('claude-cli/2.1.0');
+                expect(headers.get('x-api-key')).toBe('test-key');
+                expect(headers.get('anthropic-version')).toBe('2023-06-01');
+                expect(body).toBe('{"model":"claude-opus-5"}');
+                return new Response('event: message_stop\ndata: {"type":"message_stop"}\n\n', {
+                    status: 200,
+                    headers: {
+                        'content-type': 'text/event-stream',
+                        'request-id': 'safe-request-id',
+                    },
+                });
+            },
+        );
+
+        try {
+            const baseURL = await __modelManager.ensureClaudeProxy(ctx, request);
+            const response = await fetch(`${baseURL}/v1/messages`, {
+                method: 'POST',
+                headers: {
+                    'content-type': 'application/json',
+                    'user-agent': 'deepseek-harness/0.1.5-rc.2',
+                    'x-api-key': 'test-key',
+                    'anthropic-version': '2023-06-01',
+                },
+                body: '{"model":"claude-opus-5"}',
+            });
+            expect(response.status).toBe(200);
+            expect(response.headers.get('request-id')).toBe('safe-request-id');
+            await expect(response.text()).resolves.toContain('message_stop');
+
+            const refused = await fetch(`${baseURL}/v1/models`, { method: 'POST' });
+            expect(refused.status).toBe(403);
+            const spoofed = await fetch(
+                `${baseURL.replace('/tokens/model-manager/claude-proxy', '/untrusted/prefix')}/v1/messages`,
+                { method: 'POST' },
+            );
+            expect(spoofed.status).toBe(403);
+            expect(request).toHaveBeenCalledTimes(1);
+        } finally {
+            await __modelManager.closeClaudeProxy(ctx);
+        }
+    });
+});
+
 describe('offline fallback and complete catalog deadlines', () => {
     afterEach(() => {
         vi.useRealTimers();
@@ -2763,8 +2817,9 @@ describe('TokensAPI model discovery and selection', () => {
             providers: {
                 tokensapi: {
                     api: 'anthropic-messages',
-                    baseURL: 'https://gateway.example/',
-                    headers: { 'user-agent': expect.stringMatching(/^claude-cli\//) },
+                    baseURL: expect.stringMatching(
+                        /^http:\/\/127\.0\.0\.1:\d+\/tokens\/model-manager\/claude-proxy$/,
+                    ),
                     models: expect.arrayContaining([
                         expect.objectContaining({
                             id: 'claude-opus-4-7',
@@ -2779,5 +2834,6 @@ describe('TokensAPI model discovery and selection', () => {
             provider: TOKENSAPI.providerId,
             model: 'claude-opus-4-7',
         });
+        await __modelManager.closeClaudeProxy(ctx);
     });
 });

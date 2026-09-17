@@ -740,6 +740,7 @@ describe('Desktop model-manager settings section', () => {
             snapshot: Record<string, unknown>,
             model: string,
             provider: string,
+            managedModels?: Array<Record<string, unknown>>,
         ) => {
             groups: Array<{
                 id: string;
@@ -838,6 +839,43 @@ describe('Desktop model-manager settings section', () => {
                     { id: 'gpt-5.5', name: 'GPT-5.5' },
                     { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
                     { id: 'deepseek-v3.2', name: 'DeepSeek V3.2' },
+                ],
+            },
+        ]);
+        expect(
+            project(snapshot, 'deepseek-v4-flash', 'modlens-tokensapi', [
+                {
+                    id: 'claude-opus-5',
+                    name: 'Claude Opus 5',
+                    protocols: [{ id: 'anthropic-messages' }],
+                    visionMode: 'native',
+                },
+                {
+                    id: 'deepseek-v4-flash',
+                    name: 'DeepSeek-V4-Flash',
+                    protocols: [{ id: 'openai-completions' }],
+                    visionMode: 'bridge',
+                },
+                {
+                    id: 'gpt-5.5',
+                    name: 'GPT-5.5',
+                    protocols: [{ id: 'openai-responses' }],
+                    visionMode: 'bridge',
+                },
+                {
+                    id: 'unsupported-image-only',
+                    protocols: [],
+                    visionMode: 'unknown',
+                },
+            ]).groups,
+        ).toEqual([
+            {
+                id: 'modlens-tokensapi',
+                name: 'TokensAPI',
+                models: [
+                    { id: 'deepseek-v4-flash', name: 'DeepSeek-V4-Flash' },
+                    { id: 'claude-opus-5', name: 'Claude Opus 5' },
+                    { id: 'gpt-5.5', name: 'GPT-5.5' },
                 ],
             },
         ]);
@@ -1383,6 +1421,143 @@ describe('Desktop model-manager settings section', () => {
         },
     );
 
+    it('shows a cross-protocol model and reconfigures the Host before selecting it', async () => {
+        let loaded:
+            | {
+                  factory: (require: () => unknown) => {
+                      __manager: { registerManagerSection: (ctx: Record<string, unknown>) => void };
+                  };
+              }
+            | undefined;
+        const models = [
+            {
+                id: 'deepseek-v4-flash',
+                name: 'DeepSeek V4 Flash',
+                protocols: [{ id: 'openai-completions' }],
+                visionMode: 'bridge',
+            },
+            {
+                id: 'claude-opus-5',
+                name: 'Claude Opus 5',
+                protocols: [{ id: 'anthropic-messages' }],
+                visionMode: 'native',
+            },
+        ];
+        const events: string[] = [];
+        const fetchStub = async (_url: string, init?: { method?: string; body?: string }) => {
+            if (init?.method === 'POST') {
+                events.push(`post:${JSON.parse(init.body || '{}').model}`);
+                return {
+                    ok: true,
+                    json: async () => ({
+                        provider: 'TokensAPI',
+                        authenticated: true,
+                        mainModel: 'claude-opus-5',
+                        activeMainModel: 'claude-opus-5',
+                        mainProvider: 'tokensapi',
+                        models,
+                    }),
+                };
+            }
+            return {
+                ok: true,
+                json: async () => ({
+                    provider: 'TokensAPI',
+                    authenticated: true,
+                    mainModel: 'deepseek-v4-flash',
+                    activeMainModel: 'deepseek-v4-flash',
+                    mainProvider: 'modlens-tokensapi',
+                    models,
+                }),
+            };
+        };
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            fetchStub,
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+
+        const state = {
+            current: { provider: 'modlens-tokensapi', model: 'deepseek-v4-flash' },
+            groups: [
+                {
+                    id: 'modlens-tokensapi',
+                    name: 'TokensAPI',
+                    models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }],
+                },
+            ],
+            failures: [],
+        };
+        const listeners = new Set<() => void>();
+        const store = {
+            getSnapshot: () => state,
+            subscribe: (listener: () => void) => {
+                listeners.add(listener);
+                return () => listeners.delete(listener);
+            },
+            update: (mutator: (draft: typeof state) => void) => {
+                mutator(state);
+                for (const listener of [...listeners]) listener();
+            },
+        };
+        const directory = {
+            store,
+            load: async () => {
+                events.push('load:anthropic');
+                state.groups = [
+                    {
+                        id: 'tokensapi',
+                        name: 'TokensAPI',
+                        models: [{ id: 'claude-opus-5', name: 'Claude Opus 5' }],
+                    },
+                ];
+                for (const listener of [...listeners]) listener();
+                return state;
+            },
+            select: async (selection: { provider: string; model: string }) => {
+                events.push(`select:${selection.provider}/${selection.model}`);
+                state.current = selection;
+            },
+        };
+        loaded
+            .factory(() => ({}))
+            .__manager.registerManagerSection({
+                inject: (_services: string[], callback: (scope: Record<string, unknown>) => void) =>
+                    callback({
+                        sessions: {
+                            list: {
+                                getSnapshot: () => ({ current: 'session-cross-protocol' }),
+                                subscribe: () => () => undefined,
+                            },
+                            subagentAddress: () => undefined,
+                        },
+                        modelDirectories: { directoryFor: () => directory },
+                        slots: { inject: () => undefined },
+                    }),
+            });
+        for (let index = 0; index < 30; index++) await Promise.resolve();
+
+        expect(state.groups[0]?.models.map((entry) => entry.id)).toEqual([
+            'deepseek-v4-flash',
+            'claude-opus-5',
+        ]);
+        await directory.select({ provider: 'modlens-tokensapi', model: 'claude-opus-5' });
+
+        expect(events).toEqual([
+            'post:claude-opus-5',
+            'load:anthropic',
+            'select:tokensapi/claude-opus-5',
+        ]);
+        expect(state.current).toEqual({ provider: 'tokensapi', model: 'claude-opus-5' });
+        expect(state.groups[0]?.models.map((entry) => entry.id)).toEqual([
+            'claude-opus-5',
+            'deepseek-v4-flash',
+        ]);
+    });
+
     it('rolls the conversation selector back when persisting the choice fails', async () => {
         let loaded:
             | {
@@ -1462,10 +1637,7 @@ describe('Desktop model-manager settings section', () => {
             directory.select({ provider: 'modlens-tokensapi', model: 'deepseek-v3.2' }),
         ).rejects.toThrow('save failed');
         expect(postCalls).toBe(1);
-        expect(selected).toEqual([
-            { provider: 'modlens-tokensapi', model: 'deepseek-v3.2' },
-            { provider: 'modlens-tokensapi', model: 'deepseek-v4-flash' },
-        ]);
+        expect(selected).toEqual([{ provider: 'modlens-tokensapi', model: 'deepseek-v4-flash' }]);
         expect(state.current).toEqual({
             provider: 'modlens-tokensapi',
             model: 'deepseek-v4-flash',

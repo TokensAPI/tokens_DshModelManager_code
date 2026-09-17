@@ -2667,7 +2667,7 @@ window.__ModuleLoader__.load({
      * selection to the native provider or visual bridge; saved legacy routes
      * remain available without exposing duplicate implementation groups.
      */
-    function managedCatalogProjection(snapshot, mainModel, mainProvider) {
+    function managedCatalogProjection(snapshot, mainModel, mainProvider, managedModels) {
       var provider = typeof mainProvider === 'string' ? mainProvider.trim() : ''
       var model = typeof mainModel === 'string' ? mainModel.trim() : ''
       var groups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
@@ -2683,16 +2683,39 @@ window.__ModuleLoader__.load({
         if (!model) return cleaned
         return cleaned.filter((entry) => entry?.id === model).concat(cleaned.filter((entry) => entry?.id !== model))
       }
-      var projectGroup = (group, name) => {
+      var fullManagedModels = (Array.isArray(managedModels) ? managedModels : [])
+        .filter(
+          (entry) =>
+            typeof entry?.id === 'string' &&
+            entry.id.trim() !== '' &&
+            Array.isArray(entry?.protocols) &&
+            entry.protocols.length > 0 &&
+            entry?.visionMode !== 'unknown',
+        )
+        .map((entry) => ({
+          id: entry.id.trim(),
+          name:
+            typeof entry?.name === 'string' && entry.name.trim()
+              ? entry.name.trim().replace(/\s*\(modlens vision\)\s*$/i, '')
+              : entry.id.trim(),
+        }))
+      var projectGroup = (group, name, complete) => {
         if (!group) return null
         var models = cleanModels(group)
+        if (complete === true && fullManagedModels.length > 0) {
+          var hostById = new Map(models.map((entry) => [entry?.id, entry]))
+          models = fullManagedModels.map((entry) => ({ ...(hostById.get(entry.id) || {}), ...entry }))
+          if (model) {
+            models = models.filter((entry) => entry?.id === model).concat(models.filter((entry) => entry?.id !== model))
+          }
+        }
         return models.length > 0 ? { ...group, name: name, models: models } : null
       }
       var visibleGroups = []
       if (provider === 'tokensapi' || provider === 'modlens-tokensapi') {
         var bridgeGroup = groups.find((entry) => entry?.id === 'modlens-tokensapi')
         var directGroup = groups.find((entry) => entry?.id === 'tokensapi')
-        var tokens = projectGroup(provider === 'tokensapi' ? directGroup : bridgeGroup, 'TokensAPI')
+        var tokens = projectGroup(provider === 'tokensapi' ? directGroup : bridgeGroup, 'TokensAPI', true)
         if (tokens) visibleGroups = [tokens]
       } else if (provider === 'modlens-tokens-fallback') {
         var fallback = projectGroup(
@@ -2882,6 +2905,7 @@ window.__ModuleLoader__.load({
             var initialSelection = activeSelectionFromStatus(body)
             var desiredMainModel = initialSelection.model
             var desiredMainProvider = initialSelection.provider
+            var managedModelCatalog = Array.isArray(body.models) ? body.models : []
             var desiredSelectionEnabled = body.authenticated === true
             var lastActivationKey = ''
             var projectedDirectories = new WeakMap()
@@ -2928,9 +2952,10 @@ window.__ModuleLoader__.load({
                 if (!selectedModel || providerFamily(selectedProvider) !== expectedFamily) {
                   return originalSelect.call(directory, selection)
                 }
+                if (selectedModel === desiredMainModel && selectedProvider === desiredMainProvider) {
+                  return originalSelect.call(directory, selection)
+                }
                 var previousSelection = directory.store?.getSnapshot?.()?.current
-                var result = await originalSelect.call(directory, selection)
-                if (selectedModel === desiredMainModel && selectedProvider === desiredMainProvider) return result
                 try {
                   var response = await managerFetch('/tokens/model-manager', {
                     method: 'POST',
@@ -2945,17 +2970,21 @@ window.__ModuleLoader__.load({
                   if (!response.ok) throw new Error(body?.error || '模型选择保存失败')
                   var active = activeSelectionFromStatus(body)
                   if (!active.model || !active.provider) throw new Error('模型选择保存返回无效状态')
-                  // A native/bridge switch changes provider as well as model.
-                  // Apply the Host's resolved route to this durable session.
-                  if (active.provider !== selectedProvider || active.model !== selectedModel) {
-                    await selectDirectory(
-                      directory,
-                      { ...selection, provider: active.provider, model: active.model },
-                      true,
-                    )
-                  }
                   desiredMainModel = active.model
                   desiredMainProvider = active.provider
+                  if (Array.isArray(body.models)) managedModelCatalog = body.models
+                  // The public menu contains every selectable managed model,
+                  // including models outside the currently active provider
+                  // protocol. Reconfigure the Host first, then reload and
+                  // select the resolved native/bridge route. This prevents a
+                  // Claude/GPT choice from being applied through the previous
+                  // model's adapter even for one transient selection.
+                  if (typeof directory.load === 'function') await directory.load()
+                  var result = await selectDirectory(
+                    directory,
+                    { ...selection, provider: active.provider, model: active.model },
+                    true,
+                  )
                   for (var entry of projectedDirectoryEntries) entry.apply()
                   notifySettingsSelectionChanged()
                   return result
@@ -2988,7 +3017,12 @@ window.__ModuleLoader__.load({
                 if (!sourceSnapshot || snapshot.groups !== projectedGroups) {
                   sourceSnapshot = { groups: snapshot.groups, failures: snapshot.failures }
                 }
-                var projection = managedCatalogProjection(sourceSnapshot, desiredMainModel, desiredMainProvider)
+                var projection = managedCatalogProjection(
+                  sourceSnapshot,
+                  desiredMainModel,
+                  desiredMainProvider,
+                  managedModelCatalog,
+                )
                 var currentGroups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
                 var currentFailures = Array.isArray(snapshot?.failures) ? snapshot.failures : []
                 if (

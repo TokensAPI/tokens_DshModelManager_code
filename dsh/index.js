@@ -13,8 +13,11 @@
 
 import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
 import { builtinModelVisionMode } from './modelCapabilities.js'
 import { spawnHidden } from './spawnHidden.js'
@@ -42,6 +45,7 @@ const MANAGED_MODEL_API_LABELS = Object.freeze({
 const RESPONSES_ONLY_MODEL_ID = /(?:^|\/)(?:gpt-|codex-)/i
 const ANTHROPIC_ONLY_MODEL_ID = /(?:^|\/)claude(?:-|$)/i
 const NON_CONVERSATION_MODEL_ID = /(?:^|[-_.])asr(?:$|[-_.])/i
+const CLAUDE_PROXY_PATH = '/tokens/model-manager/claude-proxy'
 const CLAUDE_COMPAT_USER_AGENT = 'claude-cli/2.1.0'
 const PROTOCOL_PROBE_TIMEOUT_MS = 20_000
 
@@ -86,6 +90,10 @@ function managerRuntime(ctx) {
   if (!runtime) {
     runtime = {
       baseURL: TOKENSAPI.baseURL,
+      claudeProxyBaseURL: '',
+      claudeProxyPromise: null,
+      claudeProxyServer: null,
+      claudeProxyDisposerRegistered: false,
       mainModel: TOKENSAPI.mainModel,
       protocolByModel: {},
       visionModeByModel: {},
@@ -2069,6 +2077,131 @@ function anthropicUpstreamRoot(baseURL) {
   return parsed
 }
 
+function isLoopbackPeer(req) {
+  const address = String(req.socket?.remoteAddress ?? '').toLowerCase()
+  return address === '::1' || address.startsWith('127.') || address.startsWith('::ffff:127.')
+}
+
+function sendClaudeProxyError(res, status, message) {
+  if (res.headersSent || res.writableEnded) return
+  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+  res.end(JSON.stringify({ error: { type: 'proxy_error', message } }))
+}
+
+async function handleClaudeProxyRequest(runtime, req, res, request = globalThis.fetch) {
+  const pathname = new URL(req.url ?? '/', 'http://localhost').pathname
+  const suffix = pathname.slice(CLAUDE_PROXY_PATH.length)
+  const allowedPath =
+    pathname === `${CLAUDE_PROXY_PATH}/v1/messages` || pathname === `${CLAUDE_PROXY_PATH}/v1/messages/count_tokens`
+  if (!isLoopbackPeer(req) || !isTrustedRequest(req) || req.method !== 'POST' || !allowedPath) {
+    sendClaudeProxyError(res, 403, 'Claude compatibility route refused')
+    return
+  }
+
+  const controller = new AbortController()
+  const cancel = () => controller.abort('local Claude compatibility request closed')
+  req.once?.('aborted', cancel)
+  res.once?.('close', () => {
+    if (!res.writableEnded) cancel()
+  })
+  try {
+    const root = anthropicUpstreamRoot(runtime.baseURL)
+    const target = new URL(suffix.replace(/^\//, ''), root.href.endsWith('/') ? root.href : `${root.href}/`)
+    const headers = {
+      accept: String(req.headers?.accept ?? 'application/json'),
+      'content-type': String(req.headers?.['content-type'] ?? 'application/json'),
+      'user-agent': CLAUDE_COMPAT_USER_AGENT,
+    }
+    for (const name of ['x-api-key', 'authorization', 'anthropic-version', 'anthropic-beta']) {
+      const value = req.headers?.[name]
+      if (typeof value === 'string' && value) headers[name] = value
+    }
+    const upstream = await request(target, {
+      method: 'POST',
+      headers,
+      body: req,
+      duplex: 'half',
+      signal: controller.signal,
+      redirect: 'error',
+    })
+    const responseHeaders = {}
+    for (const [name, value] of upstream.headers.entries()) {
+      const lower = name.toLowerCase()
+      if (
+        lower === 'content-type' ||
+        lower === 'cache-control' ||
+        lower === 'request-id' ||
+        lower === 'x-request-id' ||
+        lower === 'retry-after' ||
+        lower.startsWith('anthropic-ratelimit-')
+      ) {
+        responseHeaders[name] = value
+      }
+    }
+    res.writeHead(upstream.status, responseHeaders)
+    if (!upstream.body) {
+      res.end()
+      return
+    }
+    await pipeline(Readable.fromWeb(upstream.body), res, { signal: controller.signal })
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      console.error(`[tokens-model-manager] Claude compatibility request failed: ${error}`)
+      sendClaudeProxyError(res, 502, 'Claude upstream request failed')
+    }
+  } finally {
+    req.removeListener?.('aborted', cancel)
+  }
+}
+
+function closeClaudeProxy(ctx) {
+  const runtime = managerRuntime(ctx)
+  const server = runtime.claudeProxyServer
+  runtime.claudeProxyServer = null
+  runtime.claudeProxyPromise = null
+  runtime.claudeProxyBaseURL = ''
+  if (!server) return Promise.resolve()
+  return new Promise((resolve) => {
+    server.close(() => resolve())
+    server.closeAllConnections?.()
+  })
+}
+
+function ensureClaudeProxy(ctx, request = globalThis.fetch) {
+  const runtime = managerRuntime(ctx)
+  if (runtime.claudeProxyBaseURL) return Promise.resolve(runtime.claudeProxyBaseURL)
+  if (runtime.claudeProxyPromise) return runtime.claudeProxyPromise
+
+  const server = createServer((req, res) => {
+    void handleClaudeProxyRequest(runtime, req, res, request)
+  })
+  server.unref()
+  runtime.claudeProxyServer = server
+  runtime.claudeProxyPromise = new Promise((resolve, reject) => {
+    const failed = (error) => {
+      runtime.claudeProxyServer = null
+      runtime.claudeProxyPromise = null
+      reject(error)
+    }
+    server.once('error', failed)
+    server.listen(0, '127.0.0.1', () => {
+      server.removeListener('error', failed)
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        failed(new Error('Claude compatibility route did not receive a TCP port'))
+        return
+      }
+      runtime.claudeProxyBaseURL = `http://127.0.0.1:${String(address.port)}${CLAUDE_PROXY_PATH}`
+      resolve(runtime.claudeProxyBaseURL)
+    })
+  })
+  if (!runtime.claudeProxyDisposerRegistered && typeof ctx.effect === 'function') {
+    runtime.claudeProxyDisposerRegistered = true
+    ctx.effect(() => () => closeClaudeProxy(ctx), 'tokens-model-manager.claude-compatibility')
+  }
+  return runtime.claudeProxyPromise
+}
+
 /**
  * How long a pasted file stays reachable.
  *
@@ -2734,14 +2867,14 @@ async function synchronizeMainModel(ctx, mainModel, models) {
     const conversationModels = managedConversationModels(runtime, models, route.api)
     const mainIndex = conversationModels.findIndex((model) => model.id === mainModel)
     if (mainIndex > 0) conversationModels.unshift(...conversationModels.splice(mainIndex, 1))
-    // Desktop protects every WebServer route with a renderer-only capability.
-    // LLM adapter requests are Host traffic and cannot possess that browser
-    // token, so routing Claude through a loopback WebServer proxy makes Desktop
-    // reject the request before it reaches TokensAPI. pi-ai already supports
-    // route headers: use the Anthropic root directly and apply the compatibility
-    // identity on the provider instead of crossing the renderer security gate.
+    // DSH reserves its provider User-Agent for product attribution and removes
+    // a route's configured value before dispatch. TokensAPI's Claude endpoint
+    // requires the Claude CLI identity, so a private plugin-owned loopback
+    // transport rewrites that one header after DSH has applied attribution.
+    // It is deliberately separate from Desktop WebServer: those routes require
+    // a renderer capability token that an internal LLM request must not have.
     const isClaudeRoute = route.api === 'anthropic-messages'
-    const providerBaseURL = isClaudeRoute ? anthropicUpstreamRoot(runtime.baseURL).href : runtime.baseURL
+    const providerBaseURL = isClaudeRoute ? await ensureClaudeProxy(ctx) : runtime.baseURL
     await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
       providers: {
         [TOKENSAPI.providerId]: {
@@ -2749,7 +2882,6 @@ async function synchronizeMainModel(ctx, mainModel, models) {
           apiKeyEnv: TOKENSAPI.credentialRef,
           api: route.api,
           baseURL: providerBaseURL,
-          ...(isClaudeRoute ? { headers: { 'user-agent': CLAUDE_COMPAT_USER_AGENT } } : {}),
           ...(contextWindow === undefined ? {} : { defaultContextWindow: contextWindow }),
           models: conversationModels,
         },
@@ -3682,6 +3814,8 @@ function registerConfigRoute(ctx) {
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
 export const __modelManager = {
   anthropicUpstreamRoot,
+  ensureClaudeProxy,
+  closeClaudeProxy,
   registerModelManagerRoute,
   modelManagerStatus,
   probeManagedProtocol,
