@@ -39,6 +39,18 @@ Key 并进入 Desktop，401/403、网络失败和上游错误均保持锁定。
 视觉识别内核基于开源项目 [ModLens](https://github.com/liustack/modlens)，保留其 MIT 许可与原作者声明。
 下方保留 ModLens 引擎的技术资料，便于维护和理解底层能力；本插件安装后的提供方和模型选择由上述产品层统一管理。
 
+## 功能测试用例
+
+[`test/test_cases.csv`](test/test_cases.csv) 是功能测试用例定义及现有自动化关联的唯一维护入口。
+不按优先级过滤，运行当前可安全执行的完整自动化检查：
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+```
+
 ## 交流
 
 欢迎随时提[issue](https://github.com/liustack/modlens/issues/new/choose)。也欢迎来 X 上聊：**[@liustack](https://x.com/liustack)**，你用它做了什么、在哪个 harness 上跑、接下来该做什么，新版本也是那边先发。社群正在筹备中。

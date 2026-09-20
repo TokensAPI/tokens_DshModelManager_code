@@ -45,6 +45,19 @@ Its MIT license and original attribution are preserved. The remaining ModLens
 documentation is retained below as implementation reference; installed product
 provider and model choices are managed by this package.
 
+## Functional test cases
+
+[`test/test_cases.csv`](test/test_cases.csv) is the single source of truth for
+functional test-case definitions and their links to existing automation. Run
+the current safe automated checks without priority filtering:
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm test
+pnpm build
+```
+
 ## Talk to us
 
 Issues are welcome any time: [open one](https://github.com/liustack/modlens/issues/new/choose). And come find me on X: **[@liustack](https://x.com/liustack)**. What you built with it, which harness you are on, what should come next. New releases land there first, and a proper community space is on the way.
