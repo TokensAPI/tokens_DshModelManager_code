@@ -58,6 +58,15 @@ pnpm test
 pnpm build
 ```
 
+Run the CSV as an executable release checklist with `pnpm test:functional`.
+The runner executes every referenced test, maps its real result back to each
+case, and writes ignored evidence to
+`test-output/functional-cases-latest.json`. The report queues incomplete
+Desktop checks for an agent and leaves only machine-specific macOS checks for
+manual execution. To add a read-only live catalog check, set
+`TOKENSAPI_TEST_API_KEY` and run `pnpm test:functional -- --live-api`; the key
+is never written to the report.
+
 ## Talk to us
 
 Issues are welcome any time: [open one](https://github.com/liustack/modlens/issues/new/choose). And come find me on X: **[@liustack](https://x.com/liustack)**. What you built with it, which harness you are on, what should come next. New releases land there first, and a proper community space is on the way.

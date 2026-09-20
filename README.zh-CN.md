@@ -51,6 +51,12 @@ pnpm test
 pnpm build
 ```
 
+执行 `pnpm test:functional` 会把 CSV 作为发布检查清单实际运行：脚本执行所有已关联测试，
+将真实结果逐条映射回用例，并把证据写入已忽略的
+`test-output/functional-cases-latest.json`。报告会把未完成的 Desktop 场景交给 Agent，
+仅将必须依赖特定 macOS 机器的场景留给人工。若要增加只读的真实模型目录检查，设置
+`TOKENSAPI_TEST_API_KEY` 后运行 `pnpm test:functional -- --live-api`；报告不会保存 Key。
+
 ## 交流
 
 欢迎随时提[issue](https://github.com/liustack/modlens/issues/new/choose)。也欢迎来 X 上聊：**[@liustack](https://x.com/liustack)**，你用它做了什么、在哪个 harness 上跑、接下来该做什么，新版本也是那边先发。社群正在筹备中。

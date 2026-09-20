@@ -12,6 +12,7 @@
         "prepublishOnly": "pnpm build",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
+        "test:functional": "node scripts/run-functional-cases.mjs",
         "coverage": "vitest run --coverage",
         "lint": "biome check src scripts dsh",
         "format": "biome check --write src scripts",
