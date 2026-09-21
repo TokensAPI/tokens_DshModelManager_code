@@ -1132,6 +1132,133 @@ describe('Desktop model-manager settings section', () => {
         ]);
     });
 
+    it('replaces startup placeholder models after the background catalog refresh', async () => {
+        let loaded:
+            | {
+                  factory: (require: () => unknown) => {
+                      __manager: { registerManagerSection: (ctx: Record<string, unknown>) => void };
+                  };
+              }
+            | undefined;
+        const initialModels = [
+            {
+                id: 'deepseek-v4-flash-vision-exp',
+                name: 'deepseek-v4-flash-vision-exp',
+                protocols: [{ id: 'openai-completions' }],
+                visionMode: 'native',
+            },
+            {
+                id: 'gemma-4-27b-a4b',
+                name: 'gemma-4-27b-a4b',
+                protocols: [{ id: 'openai-completions' }],
+                visionMode: 'bridge',
+            },
+        ];
+        const refreshedModels = [
+            ...initialModels,
+            {
+                id: 'claude-opus-5',
+                name: 'claude-opus-5',
+                protocols: [{ id: 'anthropic-messages' }],
+                visionMode: 'native',
+            },
+            {
+                id: 'gpt-6-astra',
+                name: 'gpt-6-astra',
+                protocols: [{ id: 'openai-responses' }],
+                visionMode: 'native',
+            },
+        ];
+        const calls: string[] = [];
+        const fetchStub = async (url: string) => {
+            calls.push(url);
+            const refreshed = url.includes('refresh=1');
+            return {
+                ok: true,
+                json: async () => ({
+                    provider: 'TokensAPI',
+                    authenticated: true,
+                    channel: 'tokensapi',
+                    mainModel: 'deepseek-v4-flash-vision-exp',
+                    activeMainModel: 'deepseek-v4-flash-vision-exp',
+                    mainProvider: 'tokensapi',
+                    modelsAvailable: refreshed,
+                    models: refreshed ? refreshedModels : initialModels,
+                }),
+            };
+        };
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            fetchStub,
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+
+        const state = {
+            current: null as null | { provider: string; model: string },
+            groups: [
+                {
+                    id: 'tokensapi',
+                    name: 'TokensAPI',
+                    models: initialModels.map(({ id, name }) => ({ id, name })),
+                },
+            ],
+            failures: [],
+        };
+        const listeners = new Set<() => void>();
+        const store = {
+            getSnapshot: () => state,
+            subscribe: (listener: () => void) => {
+                listeners.add(listener);
+                return () => listeners.delete(listener);
+            },
+            update: (mutator: (draft: typeof state) => void) => {
+                mutator(state);
+                for (const listener of [...listeners]) listener();
+            },
+        };
+        const directory = {
+            store,
+            load: async () => state,
+            select: async (selection: { provider: string; model: string }) => {
+                state.current = selection;
+            },
+        };
+
+        loaded
+            .factory(() => ({}))
+            .__manager.registerManagerSection({
+                inject: (_services: string[], callback: (scope: Record<string, unknown>) => void) =>
+                    callback({
+                        sessions: {
+                            list: {
+                                getSnapshot: () => ({ current: 'session-startup-refresh' }),
+                                subscribe: () => () => undefined,
+                            },
+                            subagentAddress: () => undefined,
+                        },
+                        modelDirectories: { directoryFor: () => directory },
+                        slots: { inject: () => undefined },
+                    }),
+            });
+        for (let index = 0; index < 50; index++) await Promise.resolve();
+
+        expect(calls).toContain('/tokens/model-manager?refresh=1');
+        expect(state.current).toEqual({
+            provider: 'tokensapi',
+            model: 'deepseek-v4-flash-vision-exp',
+        });
+        expect(state.groups).toEqual([
+            {
+                id: 'tokensapi',
+                name: 'TokensAPI',
+                models: refreshedModels.map(({ id, name }) => ({ id, name })),
+            },
+        ]);
+    });
+
     it('keeps the shared conversation selector projected after catalog reloads', async () => {
         let loaded:
             | {

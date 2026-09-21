@@ -1361,7 +1361,7 @@ window.__ModuleLoader__.load({
       return scope
     }
 
-    function ModelManagerSection(react, synchronizeMainSelection) {
+    function ModelManagerSection(react, synchronizeMainSelection, synchronizeModelCatalog) {
       var h = react.createElement
       return function TokensModelManager() {
         var statePair = react.useState(null)
@@ -1402,6 +1402,9 @@ window.__ModuleLoader__.load({
         var note = notePair[0]
         var busy = busyPair[0]
         var t = managerLabels()
+        var acceptManagedCatalog = (body) => {
+          if (Array.isArray(body?.models)) synchronizeModelCatalog?.(body.models)
+        }
         // This state controls only which configuration page is visible. The
         // active route is tracked independently by state.channel.
         var officialPanel = officialPanelOpen
@@ -1440,6 +1443,7 @@ window.__ModuleLoader__.load({
               { cache: 'no-store' },
               {
                 success: (body, alive) => {
+                  acceptManagedCatalog(body)
                   statePair[1](body)
                   basePair[1](body.baseURL || '')
                   mainPair[1](body.mainModel || '')
@@ -1484,6 +1488,7 @@ window.__ModuleLoader__.load({
             { cache: 'no-store' },
             {
               success: (body) => {
+                acceptManagedCatalog(body)
                 statePair[1](body)
                 if (body.modelListError) notePair[1](body.modelListError)
               },
@@ -1522,6 +1527,7 @@ window.__ModuleLoader__.load({
               }),
             )
             .then((body) => {
+              acceptManagedCatalog(body)
               statePair[1](body)
               basePair[1](body.baseURL || '')
               mainPair[1](body.mainModel || '')
@@ -1579,6 +1585,7 @@ window.__ModuleLoader__.load({
               }),
             )
             .then((body) => {
+              acceptManagedCatalog(body)
               statePair[1](body)
               basePair[1](body.baseURL || '')
               mainPair[1](body.mainModel || '')
@@ -1761,6 +1768,7 @@ window.__ModuleLoader__.load({
                 }
               : { action: 'switchOfficial' },
             async (body, alive) => {
+              acceptManagedCatalog(body)
               officialKeyPair[1]('')
               officialRevealPair[1](false)
               fallbackBasePair[1](body.official?.baseURL || fallbackBaseURL)
@@ -1781,6 +1789,7 @@ window.__ModuleLoader__.load({
             return
           }
           return performFallback({ action: 'switchTokensAPI' }, async (body, alive) => {
+            acceptManagedCatalog(body)
             statePair[1](body)
             var selection = activeSelectionFromStatus(body)
             await synchronizeMainSelection(selection.model, selection.provider)
@@ -2911,6 +2920,11 @@ window.__ModuleLoader__.load({
             var projectedDirectories = new WeakMap()
             var projectedDirectoryEntries = new Set()
             var projectionStops = []
+            var synchronizeModelCatalog = (models) => {
+              if (!Array.isArray(models)) return
+              managedModelCatalog = models
+              for (var entry of projectedDirectoryEntries) entry.apply()
+            }
             var ensureManagedCatalogProjection = (directory) => {
               var store = directory?.store
               if (
@@ -2972,7 +2986,7 @@ window.__ModuleLoader__.load({
                   if (!active.model || !active.provider) throw new Error('模型选择保存返回无效状态')
                   desiredMainModel = active.model
                   desiredMainProvider = active.provider
-                  if (Array.isArray(body.models)) managedModelCatalog = body.models
+                  synchronizeModelCatalog(body.models)
                   // The public menu contains every selectable managed model,
                   // including models outside the currently active provider
                   // protocol. Reconfigure the Host first, then reload and
@@ -3111,7 +3125,7 @@ window.__ModuleLoader__.load({
               lastActivationKey = ''
               return activateDesiredSelection()
             }
-            var Section = ModelManagerSection(react, synchronizeMainSelection)
+            var Section = ModelManagerSection(react, synchronizeMainSelection, synchronizeModelCatalog)
             // Existing sessions retain their own model selection across Host
             // restarts. Only apply the centrally saved model when a session has
             // no manual or restored selection of its own.
@@ -3140,7 +3154,13 @@ window.__ModuleLoader__.load({
             // Mount the settings entry before refreshing the primary catalog,
             // so a stalled primary cannot keep fallback settings inaccessible.
             if (body.authenticated === true && body.channel !== 'official' && body.modelsAvailable === false) {
-              managerFetch('/tokens/model-manager?refresh=1', { cache: 'no-store' }).catch(() => {})
+              managerFetch('/tokens/model-manager?refresh=1', { cache: 'no-store' })
+                .then((response) => response.json().then((refreshed) => ({ response, refreshed })))
+                .then(({ response, refreshed }) => {
+                  if (!response.ok || refreshed?.provider !== 'TokensAPI') return
+                  synchronizeModelCatalog(refreshed.models)
+                })
+                .catch(() => {})
             }
             scope.slots.inject('settings.section', function* () {
               yield scope.slots.register(
