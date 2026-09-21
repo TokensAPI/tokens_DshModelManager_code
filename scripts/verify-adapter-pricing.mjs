@@ -133,11 +133,29 @@ test('real DSH manual, pressure and overflow compaction recover on legacy and na
             assert.equal(options.provider, 'tokensapi');
             assert.equal(options.model, model);
             summaryCalls++;
+            const checkpoint = [
+                '## Primary Request and Intent',
+                '- Verify the plugin against the real DSH compaction contract.',
+                '## Key Technical Concepts',
+                '- TokenMeter and BasicCompactionEngine compatibility.',
+                '## Files and Code',
+                '- scripts/verify-adapter-pricing.mjs: isolated contract fixture.',
+                '## Errors and Fixes',
+                '- (none)',
+                '## Pending Jobs',
+                '- (none)',
+                '## Current Work',
+                '- Exercising manual and automatic compaction.',
+                '## Next Step',
+                '- Complete the contract assertions.',
+                '## Critical Context',
+                '- Network access is forbidden in this fixture.',
+            ].join('\n');
             yield { type: 'block-start', index: 0, blockType: 'text' };
             yield {
                 type: 'block-end',
                 index: 0,
-                block: { type: 'text', text: 'Offline regression summary of the completed work.' },
+                block: { type: 'text', text: checkpoint },
             };
             yield { type: 'finish', reason: { kind: 'stop' } };
         }

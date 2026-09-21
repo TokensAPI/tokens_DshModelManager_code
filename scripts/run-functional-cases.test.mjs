@@ -10,6 +10,25 @@ const headers =
     '用例编号,所属模块,用例标题,前置条件,测试数据,操作步骤,预期结果,优先级,自动化状态,对应测试';
 
 describe('functional case runner', () => {
+    it('never passes empty, skipped, TODO or missing mappings', () => {
+        for (const status of ['skipped', 'skip', 'pending', 'todo', 'missing', 'unknown']) {
+            const result = evaluateCases(
+                [
+                    {
+                        用例编号: 'A',
+                        自动化状态: '已自动化',
+                        references: [{ file: 'a.test.ts', name: 'check' }],
+                    },
+                ],
+                new Map([['a.test.ts :: check', status]]),
+            );
+            expect(result[0].result).toBe('blocked');
+        }
+        expect(
+            evaluateCases([{ 用例编号: 'A', 自动化状态: '已自动化', references: [] }], new Map())[0]
+                .result,
+        ).toBe('blocked');
+    });
     it('parses BOM, escaped quotes, commas and multiline cells', () => {
         const rows = parseCsv(`\uFEFFa,b,c\n1,"two,2","line 1\nline ""2"""\n`);
         expect(rows).toEqual([
@@ -18,11 +37,14 @@ describe('functional case runner', () => {
         ]);
     });
 
-    it('validates the fixed schema and preserves complete references', () => {
+    it('validates the fixed schema and accepts pipe-separated references', () => {
         const cases = loadCases(
-            `${headers}\nCASE-001,模块,标题,前置,数据,步骤,预期,P0,已自动化,"src/a.test.ts :: suite > test\n"\n`,
+            `${headers}\nCASE-001,模块,标题,前置,数据,步骤,预期,P0,已自动化,"src/a.test.ts :: suite > first | src/b.test.ts :: suite > second"\n`,
         );
-        expect(cases[0].references).toEqual([{ file: 'src/a.test.ts', name: 'suite > test' }]);
+        expect(cases[0].references).toEqual([
+            { file: 'src/a.test.ts', name: 'suite > first' },
+            { file: 'src/b.test.ts', name: 'suite > second' },
+        ]);
     });
 
     it('maps Vitest assertions back to CSV references', () => {

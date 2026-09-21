@@ -71,7 +71,7 @@ export function loadCases(source) {
             throw new Error(`CSV row ${index + 2} has an invalid automation status`);
         seen.add(entry.用例编号);
         entry.references = entry.对应测试
-            .split(/\r?\n/u)
+            .split(/\s+\|\s+|\r?\n/u)
             .filter(Boolean)
             .map((reference) => {
                 const marker = reference.indexOf(' :: ');
@@ -110,9 +110,9 @@ export function evaluateCases(cases, statuses) {
             return { ...reference, status: statuses.get(key) ?? 'missing' };
         });
         const failed = referenceResults.some(({ status }) => status === 'failed');
-        const blocked = referenceResults.some(({ status }) =>
-            ['missing', 'skipped', 'pending', 'todo'].includes(status),
-        );
+        const blocked =
+            referenceResults.length === 0 ||
+            referenceResults.some(({ status }) => status !== 'passed');
         let result;
         let next;
         if (failed) {
@@ -203,6 +203,19 @@ async function runLiveCatalogCheck() {
 }
 
 function runVitest(files) {
+    if (files.length === 0) {
+        return {
+            payload: {
+                testResults: [],
+                numTotalTests: 0,
+                numPassedTests: 0,
+                numFailedTests: 0,
+                numPendingTests: 0,
+            },
+            exitCode: 0,
+            stderr: '',
+        };
+    }
     const executable = path.join(ROOT, 'node_modules', 'vitest', 'vitest.mjs');
     const child = spawnSync(
         process.execPath,
@@ -221,6 +234,34 @@ function runVitest(files) {
     return { payload, exitCode: child.status ?? 1, stderr: child.stderr };
 }
 
+function runNodeContractTests(files) {
+    const statuses = new Map();
+    const runs = [];
+    for (const file of files) {
+        const child = spawnSync(
+            process.execPath,
+            ['--test', '--test-reporter=tap', path.join(ROOT, file)],
+            { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+        );
+        if (child.error) throw child.error;
+        for (const line of child.stdout.split(/\r?\n/u)) {
+            const match = line.match(
+                /^\s*(ok|not ok)\s+\d+\s+-\s+(.+?)(?:\s+#\s+(SKIP|TODO).*)?$/u,
+            );
+            if (!match) continue;
+            const [, verdict, name, directive] = match;
+            const status = directive
+                ? directive.toLowerCase()
+                : verdict === 'ok'
+                  ? 'passed'
+                  : 'failed';
+            statuses.set(`${file} :: ${name.trim()}`, status);
+        }
+        runs.push({ file, exitCode: child.status ?? 1, stderr: child.stderr });
+    }
+    return { statuses, runs };
+}
+
 function countsBy(items, key) {
     return Object.fromEntries(
         [...new Set(items.map((item) => item[key]))]
@@ -235,8 +276,13 @@ export async function main(argv = process.argv.slice(2)) {
     const files = [
         ...new Set(cases.flatMap((testCase) => testCase.references.map(({ file }) => file))),
     ];
-    const vitest = runVitest(files);
-    const results = evaluateCases(cases, collectVitestStatuses(vitest.payload));
+    const nodeContractFiles = files.filter((file) => file === 'scripts/verify-adapter-pricing.mjs');
+    const vitestFiles = files.filter((file) => !nodeContractFiles.includes(file));
+    const vitest = runVitest(vitestFiles);
+    const nodeContracts = runNodeContractTests(nodeContractFiles);
+    const statuses = collectVitestStatuses(vitest.payload);
+    for (const [key, status] of nodeContracts.statuses) statuses.set(key, status);
+    const results = evaluateCases(cases, statuses);
     let liveApi = { status: 'not-requested' };
     if (options.liveApi) {
         try {
@@ -263,18 +309,22 @@ export async function main(argv = process.argv.slice(2)) {
             failed: vitest.payload.numFailedTests,
             skipped: vitest.payload.numPendingTests,
         },
+        nodeContracts: nodeContracts.runs.map(({ file, exitCode }) => ({ file, exitCode })),
         liveApi,
         summary: { byResult: countsBy(results, 'result'), byNext: countsBy(results, 'next') },
         cases: results,
     };
     fs.mkdirSync(path.dirname(options.report), { recursive: true });
     fs.writeFileSync(options.report, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-    console.log(`Functional cases: ${results.length}`);
-    console.log(`Results: ${JSON.stringify(report.summary.byResult)}`);
-    console.log(`Next: ${JSON.stringify(report.summary.byNext)}`);
-    console.log(`Evidence: ${path.relative(ROOT, options.report)}`);
-    const failed = results.some(({ result }) => ['failed', 'blocked'].includes(result));
-    if (failed || vitest.exitCode !== 0 || liveApi.status === 'failed') process.exitCode = 1;
+    const incomplete = results.filter(({ result }) => result !== 'passed');
+    if (incomplete.length === 0) console.log(`All ${results.length} functional cases passed.`);
+    else {
+        console.error('Failed or incomplete functional cases:');
+        for (const item of incomplete) console.error(`- ${item.id}: ${item.result} (${item.next})`);
+    }
+    const nodeFailed = nodeContracts.runs.some(({ exitCode }) => exitCode !== 0);
+    if (incomplete.length > 0 || vitest.exitCode !== 0 || nodeFailed || liveApi.status === 'failed')
+        process.exitCode = 1;
     return report;
 }
 

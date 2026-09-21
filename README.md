@@ -58,14 +58,24 @@ pnpm test
 pnpm build
 ```
 
-Run the CSV as an executable release checklist with `pnpm test:functional`.
-The runner executes every referenced test, maps its real result back to each
-case, and writes ignored evidence to
-`test-output/functional-cases-latest.json`. The report queues incomplete
-Desktop checks for an agent and leaves only machine-specific macOS checks for
-manual execution. To add a read-only live catalog check, set
-`TOKENSAPI_TEST_API_KEY` and run `pnpm test:functional -- --live-api`; the key
-is never written to the report.
+Run the code-driven catalog with `pnpm test:cases` (`pnpm test:functional`
+remains an alias). The runner validates every mapping and exits nonzero for a
+failed, skipped, missing, TODO, or incomplete case. Set `DSH_RUNTIME_ROOT` to
+an installed or staged Desktop runtime to execute the real DSH token-meter and
+compaction compatibility cases. Visual layout, real installation, paid model
+quality, and machine-specific acceptance are deliberately outside this CSV.
+
+On Windows, run the catalog against an existing runtime (no Desktop build):
+
+```powershell
+$env:DSH_RUNTIME_ROOT = 'C:\path\to\desktop\dsh-plugin-desktop'
+node test/run-test-cases.mjs
+```
+
+Startup catalog regression `SYNC-010` and session synchronization cases
+`SYNC-011`–`SYNC-014` are P0. Mock-backed cases assert client/model-manager
+behavior, not installation success or visual appearance. Empty mappings and
+skipped dependency checks are incomplete, never passes.
 
 ## Talk to us
 
