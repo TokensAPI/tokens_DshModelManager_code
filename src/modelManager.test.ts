@@ -2522,6 +2522,7 @@ describe('TokensAPI model discovery and selection', () => {
             modelsAvailable: true,
         });
         expect(status.modelListError).toMatch(/暂不支持 DSH/);
+        expect(status.modelListErrorCode).toBe('unsupported_model');
     });
 
     it('rejects an empty usable model list', async () => {

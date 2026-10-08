@@ -77,6 +77,10 @@ Startup catalog regression `SYNC-010` and session synchronization cases
 behavior, not installation success or visual appearance. Empty mappings and
 skipped dependency checks are incomplete, never passes.
 
+## Error message language
+
+Model settings errors and failed image reads follow the host language. Unsupported host locales fall back to English; the browser language is used when the document has no language. Cached image failures are translated at retry time. Unknown errors show a localized fallback and retain their original text separately in `error.diagnostic`. Historical turn errors retain their recorded language. Automated output checks do not establish visual acceptance of the image error card; that check remains unverified.
+
 ## Talk to us
 
 Issues are welcome any time: [open one](https://github.com/liustack/modlens/issues/new/choose). And come find me on X: **[@liustack](https://x.com/liustack)**. What you built with it, which harness you are on, what should come next. New releases land there first, and a proper community space is on the way.

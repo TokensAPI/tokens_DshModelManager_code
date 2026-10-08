@@ -21,6 +21,73 @@ if (process.env.DSH_SESSION_REPLAY === '1') {
         .map((line) => JSON.parse(line));
 }
 
+test('real DSH settings localize cached image failures after language changes', {
+    skip: !process.env.DSH_RUNTIME_ROOT,
+}, async () => {
+    const require = createRequire(resolve(process.env.DSH_RUNTIME_ROOT, 'package.json'));
+    const load = (name) => import(pathToFileURL(require.resolve(name)));
+    const { Context } = await load('@deepseek-ai/cordis');
+    const { SettingsProvider } = await load('@deepseek-ai/dsh-settings');
+    const { default: z } = await load('@deepseek-ai/schemastery');
+    class MemorySettings extends SettingsProvider {
+        async load() {
+            return {};
+        }
+        async persist() {}
+    }
+    const ctx = new Context();
+    const settings = new MemorySettings(ctx);
+    settings.register('locale', z.object({ preference: z.string().default('en') }));
+    let handler;
+    let reads = 0;
+    apply(
+        {
+            settings,
+            tools: { register() {} },
+            attachments: {
+                async readImage() {
+                    reads += 1;
+                    return {};
+                },
+            },
+            on(event, callback) {
+                if (event === 'agent/pre-step') handler = callback;
+            },
+        },
+        { autoRead: true, visionProvider: false, settingsCard: false, pasteToPath: false },
+    );
+    const messages = [
+        {
+            role: 'user',
+            content: [{ type: 'image', attachment: { id: 'settings-language-contract' } }],
+        },
+    ];
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+        for (const [preference, message] of [
+            [
+                'en',
+                'Image recognition failed. Please retry or switch the vision model in TokensAPI model settings.',
+            ],
+            ['zh', '图片识别失败，请重试或在 TokensAPI 模型设置中切换视觉模型。'],
+        ]) {
+            settings.publish({ locale: { preference } });
+            assert.equal(settings.get('locale').preference, preference);
+            await assert.rejects(
+                handler({}, async () => ({ kind: 'enter', messages })),
+                {
+                    code: 'MODLENS_VISION_READ_FAILED',
+                    message,
+                },
+            );
+        }
+        assert.equal(reads, 1);
+    } finally {
+        console.error = originalError;
+    }
+});
+
 test('real DSH token-meter can price text and image histories through the plugin', {
     skip: !process.env.DSH_RUNTIME_ROOT,
 }, async () => {

@@ -19,6 +19,74 @@ window.__ModuleLoader__.load({
     var module = { exports: {} }
     var exports = module.exports
 
+    var ERROR_MESSAGES = {
+      en: {
+        timeout: 'Request timed out. Please retry.',
+        request: 'Request failed. Please retry.',
+        cancelled: 'Request cancelled.',
+        directory: 'The session model catalog is not ready. Please retry shortly.',
+        refresh: 'Unable to refresh the model catalog. Please retry shortly.',
+        missingModel: 'The model catalog does not yet contain {provider}/{model}. Please retry shortly.',
+        save: 'Unable to save the model selection.',
+        invalidSelection: 'Saving the model selection returned an invalid state.',
+        invalid_key: 'The API key was rejected. Check the key and retry.',
+        unauthenticated: 'A verified API key is required. Check the key in model settings.',
+        unreachable: 'Unable to connect to the model service. Check your connection and retry.',
+        protocol_temporary: 'Protocol verification is temporarily unavailable. Please retry.',
+        unsupported_protocol:
+          'This model does not support the selected request protocol. Choose another protocol or model.',
+        unsupported_model: 'This model has no supported request protocol. Choose another model.',
+        unknown_capability: 'Image support is unknown. Choose how images are handled in model settings.',
+        upstream: 'The model service returned an unavailable or invalid response. Please retry.',
+        invalid_model: 'The selected model is unavailable on this route. Refresh the catalog and choose another model.',
+        invalid_provider: 'The selected provider is unavailable on the current route.',
+        invalid_input: 'Invalid settings. Check the entered values and retry.',
+      },
+      zh: {
+        timeout: '请求超时，请重试',
+        request: '请求失败，请重试',
+        cancelled: '请求已取消',
+        directory: '会话模型目录尚未就绪，请稍后重试',
+        refresh: '模型目录刷新失败，请稍后重试',
+        missingModel: '模型目录尚未刷新到 {provider}/{model}，请稍后重试',
+        save: '模型选择保存失败',
+        invalidSelection: '模型选择保存返回无效状态',
+        invalid_key: 'API Key 被拒绝，请检查后重试。',
+        unauthenticated: '需要已验证的 API Key，请在模型设置中检查 Key。',
+        unreachable: '无法连接模型服务，请检查网络后重试。',
+        protocol_temporary: '协议验证暂时不可用，请重试。',
+        unsupported_protocol: '模型不支持所选请求协议，请选择其他协议或模型。',
+        unsupported_model: '模型没有受支持的请求协议，请选择其他模型。',
+        unknown_capability: '图片能力尚未确认，请在模型设置中选择图片处理方式。',
+        upstream: '模型服务不可用或返回了无效响应，请重试。',
+        invalid_model: '所选模型在当前线路不可用，请刷新目录后选择其他模型。',
+        invalid_provider: '所选提供商在当前线路不可用。',
+        invalid_input: '设置无效，请检查输入后重试。',
+      },
+    }
+
+    function managerError(key, params = {}) {
+      var language = typeof document === 'undefined' ? '' : document.documentElement?.lang
+      if (!language && typeof navigator !== 'undefined') language = navigator.language
+      var labels = ERROR_MESSAGES[/^zh(?:-|$)/i.test(language || '') ? 'zh' : 'en']
+      var message = labels[key] || labels.request
+      for (var name of Object.keys(params)) message = message.replace(`{${name}}`, () => String(params[name]))
+      var error = new Error(message)
+      error.code = key
+      error.localized = true
+      return error
+    }
+
+    function responseError(body, fallback = 'request') {
+      var known = typeof body?.code === 'string' && Object.hasOwn(ERROR_MESSAGES.en, body.code)
+      var error = managerError(known ? body.code : fallback)
+      // Preserve unclassified diagnostics separately from the localized UI
+      // message. Never infer an error category from a provider's prose.
+      if (typeof body?.code === 'string') error.code = body.code
+      if (typeof body?.error === 'string') error.diagnostic = body.error
+      return error
+    }
+
     function imageFilesOf(event) {
       var items = event.clipboardData?.items
       if (!items) return []
@@ -478,7 +546,7 @@ window.__ModuleLoader__.load({
           fetch('/modlens/config?discover=1')
             .then((r) =>
               r.json().then((body) => {
-                if (!r.ok) throw new Error(body.error || 'load failed')
+                if (!r.ok) throw responseError(body)
                 return body
               }),
             )
@@ -1246,7 +1314,7 @@ window.__ModuleLoader__.load({
             )
             .then(({ response, body }) => {
               input.value = ''
-              if (!response.ok || body?.authenticated !== true) throw new Error(body?.error || t.missing)
+              if (!response.ok || body?.authenticated !== true) throw responseError(body, 'unauthenticated')
               close()
             })
             .catch((error) => {
@@ -1272,7 +1340,7 @@ window.__ModuleLoader__.load({
             .then((body) => ({ response: response, body: body })),
         )
         .then(({ response, body }) => {
-          if (!response.ok) throw new Error(body?.error || 'status unavailable')
+          if (!response.ok) throw responseError(body)
           if (body?.authenticated === true) close()
           else renderForm(body, '')
         })
@@ -1290,14 +1358,14 @@ window.__ModuleLoader__.load({
       if (signal?.aborted) cancel()
       var timer
       var rejectAbort
-      var abort = () => rejectAbort(new Error('请求已取消'))
+      var abort = () => rejectAbort(managerError('cancelled'))
       try {
         var stopped = new Promise((_, reject) => {
           rejectAbort = reject
           controller.signal.addEventListener('abort', abort, { once: true })
           if (controller.signal.aborted) abort()
           timer = setTimeout(() => {
-            reject(new Error('请求超时，请重试'))
+            reject(managerError('timeout'))
             controller.abort()
           }, 25_000)
         })
@@ -1309,6 +1377,9 @@ window.__ModuleLoader__.load({
             return { ok: response.ok, status: response.status, json: async () => body }
           })(),
         ])
+      } catch (error) {
+        if (error?.localized) throw error
+        throw responseError({ code: error?.code, error: error?.message })
       } finally {
         clearTimeout(timer)
         signal?.removeEventListener('abort', cancel)
@@ -1346,7 +1417,7 @@ window.__ModuleLoader__.load({
           try {
             var response = await managerFetch(url, { ...options, signal: controller.signal })
             var body = await response.json()
-            if (!response.ok) throw new Error(body.error || '请求失败，请重试')
+            if (!response.ok) throw responseError(body)
             if (alive()) await handlers.success?.(body, alive)
           } catch (error) {
             if (alive()) handlers.error?.(error)
@@ -1490,7 +1561,8 @@ window.__ModuleLoader__.load({
               success: (body) => {
                 acceptManagedCatalog(body)
                 statePair[1](body)
-                if (body.modelListError) notePair[1](body.modelListError)
+                if (body.modelListError)
+                  notePair[1](responseError({ code: body.modelListErrorCode, error: body.modelListError }).message)
               },
               error: (error) => notePair[1](String(error.message || error)),
             },
@@ -1522,7 +1594,7 @@ window.__ModuleLoader__.load({
           })
             .then((response) =>
               response.json().then((body) => {
-                if (!response.ok) throw new Error(body.error || 'save failed')
+                if (!response.ok) throw responseError(body, 'save')
                 return body
               }),
             )
@@ -1580,7 +1652,7 @@ window.__ModuleLoader__.load({
           })
             .then((response) =>
               response.json().then((body) => {
-                if (!response.ok) throw new Error(body.error || 'save failed')
+                if (!response.ok) throw responseError(body, 'save')
                 return body
               }),
             )
@@ -1612,7 +1684,7 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ action: 'revealApiKey' }),
           }).then((response) =>
             response.json().then((body) => {
-              if (!response.ok || typeof body.apiKey !== 'string') throw new Error(body.error || 'load failed')
+              if (!response.ok || typeof body.apiKey !== 'string') throw responseError(body)
               keyPair[1](body.apiKey)
               return body.apiKey
             }),
@@ -1653,7 +1725,7 @@ window.__ModuleLoader__.load({
             body: JSON.stringify(payload),
           }).then(async (response) => {
             var body = await response.json()
-            if (!response.ok) throw new Error(body.error || 'request failed')
+            if (!response.ok) throw responseError(body)
             return body
           })
 
@@ -2319,7 +2391,9 @@ window.__ModuleLoader__.load({
                     ? h(
                         'p',
                         { style: { margin: '8px 0', color: 'var(--dsw-alias-state-error-primary)', fontSize: 13 } },
-                        state.modelListError || t.modelsUnavailable,
+                        state.modelListError
+                          ? responseError({ code: state.modelListErrorCode, error: state.modelListError }).message
+                          : t.modelsUnavailable,
                       )
                     : null,
                   h(
@@ -2835,7 +2909,7 @@ window.__ModuleLoader__.load({
         }
       }
       if (!directory) {
-        if (directoryError) throw new Error('会话模型目录尚未就绪，请稍后重试')
+        if (directoryError) throw managerError('directory')
         return false
       }
       // The Host keeps a durable selection per session. During startup and
@@ -2885,8 +2959,8 @@ window.__ModuleLoader__.load({
           }
         }
         if (!available) {
-          if (loadError) throw new Error('模型目录刷新失败，请稍后重试')
-          throw new Error(`模型目录尚未刷新到 ${provider}/${model}，请稍后重试`)
+          if (loadError) throw managerError('refresh')
+          throw managerError('missingModel', { provider, model })
         }
       }
       await selectDirectory(directory, { provider: provider, model: model }, true)
@@ -2981,9 +3055,9 @@ window.__ModuleLoader__.load({
                     }),
                   })
                   var body = await response.json().catch(() => ({}))
-                  if (!response.ok) throw new Error(body?.error || '模型选择保存失败')
+                  if (!response.ok) throw responseError(body, 'save')
                   var active = activeSelectionFromStatus(body)
-                  if (!active.model || !active.provider) throw new Error('模型选择保存返回无效状态')
+                  if (!active.model || !active.provider) throw managerError('invalidSelection')
                   desiredMainModel = active.model
                   desiredMainProvider = active.provider
                   synchronizeModelCatalog(body.models)
@@ -3217,6 +3291,8 @@ window.__ModuleLoader__.load({
       ConfigCard: ConfigCard,
     }
     exports.__manager = {
+      managerError,
+      responseError,
       ModelManagerSection,
       createManagerRequests,
       registerAccessGate: registerAccessGate,

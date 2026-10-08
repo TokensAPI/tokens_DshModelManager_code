@@ -412,7 +412,7 @@ describe('Desktop startup API-key gate', () => {
             harness.body.find((element) => element.id === 'tokens-model-manager-gate'),
         ).toBeTruthy();
         expect(
-            harness.body.find((element) => element.textContent.includes('API Key 无效')),
+            harness.body.find((element) => element.textContent.includes('API Key 被拒绝')),
         ).toBeTruthy();
     });
 
@@ -1762,7 +1762,10 @@ describe('Desktop model-manager settings section', () => {
 
         await expect(
             directory.select({ provider: 'modlens-tokensapi', model: 'deepseek-v3.2' }),
-        ).rejects.toThrow('save failed');
+        ).rejects.toMatchObject({
+            message: '模型选择保存失败',
+            diagnostic: 'save failed',
+        });
         expect(postCalls).toBe(1);
         expect(selected).toEqual([{ provider: 'modlens-tokensapi', model: 'deepseek-v4-flash' }]);
         expect(state.current).toEqual({

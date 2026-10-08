@@ -64,6 +64,24 @@ modlens config show
 
 ## Verification
 
+### TokensCowork error messages
+
+- User-facing model-manager errors must have English and Chinese messages. Keep
+  error codes, provider/model ids, validation and routing behavior stable.
+- Browser errors use the active document language (synchronized by the host
+  locale service); map plugin-owned API error codes rather than displaying
+  backend Chinese text. Unknown errors use a localized fallback message;
+  preserve original third-party diagnostics separately in error.diagnostic.
+- Host image failures read the saved `locale.preference` at failure time.
+  Missing or unsupported preferences fall back to English. Do not persist a
+  translated failure in the shared image cache or overwrite locale settings.
+- Every changed error path needs regression checks for English, Chinese,
+  language changes and fallback. Register useful cases in `test/test_cases.csv`;
+  tests must preserve failure blocking, retries and the current model selection.
+- Runtime checks do not establish visual acceptance. Historical turn errors
+  retain the text recorded when the failure occurred; browser-only language
+  detection without a saved preference is not available to host image errors.
+
 - `pnpm typecheck && pnpm test` for unit-level checks; `pnpm build` must produce a single `dist/main.js`.
 - Real end-to-end runs consume the user's provider quota (agy, API keys, Claude subscription). Ask before running them in bulk.
 

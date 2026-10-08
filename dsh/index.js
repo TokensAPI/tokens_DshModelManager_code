@@ -1335,7 +1335,25 @@ function cachedEvidence(ctx, adapter, block, walk) {
   return pending
 }
 
-const VISION_READ_FAILURE_MESSAGE = '图片识别失败，请重试或在 TokensAPI 模型设置中切换视觉模型。'
+const VISION_READ_FAILURE_MESSAGES = Object.freeze({
+  en: 'Image recognition failed. Please retry or switch the vision model in TokensAPI model settings.',
+  zh: '图片识别失败，请重试或在 TokensAPI 模型设置中切换视觉模型。',
+})
+
+// The locale plugin persists explicit UI choices in locale.preference. Read
+// it at failure time, outside the shared evidence cache, so changing language
+// does not require another image read or affect other callers' cache entries.
+function hostLanguage(ctx) {
+  try {
+    const settings = managerRuntime(ctx).settings ?? ctx.settings
+    const preference = settings?.get?.('locale')?.preference
+    return typeof preference === 'string' && /^zh(?:-|$)/i.test(preference) ? 'zh' : 'en'
+  } catch {
+    // Older/embedded hosts may not register the locale namespace. English is
+    // the host's fallback; an unavailable setting must not hide the failure.
+    return 'en'
+  }
+}
 
 /**
  * Failed visual evidence is never safe input for a text-only model. Sending a
@@ -1343,9 +1361,9 @@ const VISION_READ_FAILURE_MESSAGE = '图片识别失败，请重试或在 Tokens
  * the workspace for the pasted file. Stop before the upstream request while
  * keeping the cached failure result available for the cooldown.
  */
-function evidenceBlockOrThrow(evidence) {
+function evidenceBlockOrThrow(evidence, ctx) {
   if (!evidence.ok) {
-    const error = new Error(VISION_READ_FAILURE_MESSAGE)
+    const error = new Error(VISION_READ_FAILURE_MESSAGES[hostLanguage(ctx)])
     error.code = 'MODLENS_VISION_READ_FAILED'
     throw error
   }
@@ -1512,7 +1530,9 @@ async function convertImagesToEvidence(ctx, messages, signal, adapter) {
         continue
       }
       const content = await convertBlocks(message.content, (block) =>
-        abortableWait(cachedEvidence(ctx, adapter, block, walk), signal).then(evidenceBlockOrThrow),
+        abortableWait(cachedEvidence(ctx, adapter, block, walk), signal).then((evidence) =>
+          evidenceBlockOrThrow(evidence, ctx),
+        ),
       )
       out.push({ ...message, content })
     }
@@ -1552,7 +1572,9 @@ function registerAutoRead(ctx, evidenceCache) {
         const content = await convertBlocks(message.content, (block) =>
           // The same cache the wrapper routes use: auto-read used to re-read
           // every image on every step, healthy engine or not (issue #68).
-          abortableWait(cachedEvidence(ctx, { evidenceCache }, block, walk), payload.signal).then(evidenceBlockOrThrow),
+          abortableWait(cachedEvidence(ctx, { evidenceCache }, block, walk), payload.signal).then((evidence) =>
+            evidenceBlockOrThrow(evidence, ctx),
+          ),
         )
         messages.push({ ...message, content })
       }
@@ -3138,6 +3160,7 @@ async function modelManagerStatus(ctx, request = globalThis.fetch, { refreshMode
   }
   const runtime = managerRuntime(ctx)
   let modelListError = ''
+  let modelListErrorCode = ''
   if (authenticated && refreshModels && runtime.models.length === 0) {
     try {
       runtime.models = await validateManagedCredential(
@@ -3157,6 +3180,7 @@ async function modelManagerStatus(ctx, request = globalThis.fetch, { refreshMode
       }
     } catch (error) {
       modelListError = String(error?.message ?? error)
+      modelListErrorCode = typeof error?.code === 'string' ? error.code : ''
       if (error?.code === 'invalid_key') {
         runtime.rejectedFingerprint = checkedFingerprint
         authenticated = false
@@ -3172,7 +3196,10 @@ async function modelManagerStatus(ctx, request = globalThis.fetch, { refreshMode
   try {
     api = configuredManagedModelApi(selectedMain, runtime.protocolByModel[runtime.mainModel])
   } catch (error) {
-    if (modelListError === '') modelListError = String(error?.message ?? error)
+    if (modelListError === '') {
+      modelListError = String(error?.message ?? error)
+      modelListErrorCode = typeof error?.code === 'string' ? error.code : ''
+    }
   }
   return {
     configured: credential.configured === true,
@@ -3189,6 +3216,7 @@ async function modelManagerStatus(ctx, request = globalThis.fetch, { refreshMode
     models: publicModels(runtime),
     modelsAvailable: authenticated && runtime.models.length > 0,
     ...(modelListError === '' ? {} : { modelListError }),
+    ...(modelListErrorCode === '' ? {} : { modelListErrorCode }),
     baseURL: runtime.baseURL,
     official: {
       configured: officialCredential.configured === true,

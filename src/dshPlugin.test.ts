@@ -166,7 +166,8 @@ describe('dsh plugin auto-read (phase 2)', () => {
                 })),
             ).rejects.toMatchObject({
                 code: 'MODLENS_VISION_READ_FAILED',
-                message: '图片识别失败，请重试或在 TokensAPI 模型设置中切换视觉模型。',
+                message:
+                    'Image recognition failed. Please retry or switch the vision model in TokensAPI model settings.',
             });
         } finally {
             console.error = original;
@@ -277,7 +278,8 @@ describe('dsh plugin auto-read (phase 2)', () => {
                 })),
             ).rejects.toMatchObject({
                 code: 'MODLENS_VISION_READ_FAILED',
-                message: '图片识别失败，请重试或在 TokensAPI 模型设置中切换视觉模型。',
+                message:
+                    'Image recognition failed. Please retry or switch the vision model in TokensAPI model settings.',
             });
         } finally {
             delete process.env.MODLENS_DSH_CLI;
