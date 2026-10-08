@@ -79,7 +79,7 @@ skipped dependency checks are incomplete, never passes.
 
 ## Error message language
 
-Model settings errors and failed image reads follow the host language. Unsupported host locales fall back to English; the browser language is used when the document has no language. Cached image failures are translated at retry time. Unknown errors show a localized fallback and retain their original text separately in `error.diagnostic`. Historical turn errors retain their recorded language. Automated output checks do not establish visual acceptance of the image error card; that check remains unverified.
+Model settings errors and failed image reads follow the host language. Unsupported host locales fall back to English; the browser language is used when the document has no language. Cached image failures are translated at retry time. Unknown errors show a localized fallback and retain their original text separately in `error.diagnostic`. Historical turn errors retain their recorded language. The user has confirmed acceptance of this code change; no separate visual language-switching test of the image error card was performed.
 
 ## Talk to us
 
