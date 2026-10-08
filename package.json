@@ -2,6 +2,19 @@
     "name": "@tokens/dsh-model-manager",
     "version": "0.2.22",
     "description": "TokensAPI managed model and vision provider for DeepSeek Harness Desktop",
+    "tokenscowork": {
+        "displayName": {
+            "zh-CN": "TokensAPI 模型",
+            "en-US": "TokensAPI Models"
+        },
+        "summary": {
+            "zh-CN": "统一管理 TokensAPI API Key、主模型与图片视觉桥接，并同步当前会话模型。",
+            "en-US": "Manage the TokensAPI API key, chat model and image vision bridge, and synchronize the current session model."
+        }
+    },
+    "publishConfig": {
+        "registry": "https://npm.tokensapi.ai/"
+    },
     "type": "module",
     "bin": {
         "modlens": "./dist/main.js"
@@ -24,6 +37,7 @@
     "files": [
         "dist",
         "docs",
+        "README.zh-CN.md",
         "skills/modlens/SKILL.md",
         "skills/modlens/scripts",
         "skills/modlens/references",

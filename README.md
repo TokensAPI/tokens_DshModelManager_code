@@ -4,17 +4,17 @@
 
 <h1 align="center">Tokens DSH Model Manager</h1>
 
-<p align="center"><b>One API key for the managed TokensAPI chat and vision models.</b></p>
+<p align="center"><b>一个 API Key，统一启用 TokensAPI 主模型与视觉模型。</b></p>
 
-<p align="center">🥇 <b>The most capable vision plugin for DeepSeek Harness (dsh)</b> 🥇</p>
+<p align="center">🥇 <b>全网最强的 DeepSeek Harness（dsh）视觉插件</b> 🥇</p>
 
 <p align="center">
-  <a href="./README.zh-CN.md">简体中文</a> ·
-  <a href="docs/troubleshooting.md">Troubleshooting</a> ·
-  <a href="skills/modlens/references/configure.md">Configuration</a> ·
-  <a href="docs/output-schema.md">Output contract</a> ·
-  <a href="docs/security.md">Security</a> ·
-  <a href="https://github.com/liustack/modsearch"><b>🔎 ModSearch (web search)</b></a>
+  <a href="docs/README.en-US.md">English</a> ·
+  <a href="docs/troubleshooting.zh-CN.md">故障排查</a> ·
+  <a href="skills/modlens/references/configure.zh-CN.md">配置</a> ·
+  <a href="docs/output-schema.zh-CN.md">输出契约</a> ·
+  <a href="docs/security.zh-CN.md">安全</a> ·
+  <a href="https://github.com/liustack/modsearch"><b>🔎 ModSearch（联网搜索）</b></a>
 </p>
 
 <p align="center">
@@ -26,30 +26,23 @@
   <img src="https://img.shields.io/badge/users-unknown-lightgrey?style=flat-square" alt="Users unknown">
 </p>
 
-This package is the TokensAPI product layer for DSH Desktop. It hides the stock
-DSH model-provider editor and fixes `https://tokensapi.ai/v1` as the endpoint.
-Chat defaults to `deepseek-v4-flash` and vision defaults to
-`qwen3.8-flash-next`; after authentication, both can be selected from the live
-TokensAPI `GET /v1/models` catalog under Settings → Models.
-The user enters only one API key in Settings → Models. DSH's credential service
-stores it; normal status responses and logs never contain the key. The settings
-page reads it only after an explicit Show or Copy action.
+本插件是面向 DSH Desktop 的 TokensAPI 产品层：隐藏 DSH 官方模型入口和通用提供方编辑器，固定接口
+`https://tokensapi.ai/v1`。主模型默认 `deepseek-v4-flash`，视觉模型默认
+`qwen3.8-flash-next`；验证 API Key 后，两者都可以在“设置 → 模型”从 TokensAPI
+`GET /v1/models` 返回的实时列表中独立选择。Key 由 DSH 凭据服务保存，不会写入仓库、模型配置、
+常规状态响应或日志；只有用户明确点击“显示”或“复制”时，设置页才会读取它。
 
-Desktop starts behind a fail-closed full-screen gate. Unknown auth state, a
-missing key, an unverified legacy key, or a failed status request keeps the
-chat shell locked. The Host validates submissions with TokensAPI `GET
-/v1/models`; only HTTP 200 stores the key and opens Desktop.
+Desktop 启动时采用 fail-closed 全屏门禁：认证状态未知、没有 Key、旧 Key 尚未验证或状态接口失败时，
+聊天主界面不会放行。提交后由插件后端请求 TokensAPI `GET /v1/models` 验证；仅 HTTP 200 才保存
+Key 并进入 Desktop，401/403、网络失败和上游错误均保持锁定。
 
-The vision engine is based on [ModLens](https://github.com/liustack/modlens).
-Its MIT license and original attribution are preserved. The remaining ModLens
-documentation is retained below as implementation reference; installed product
-provider and model choices are managed by this package.
+视觉识别内核基于开源项目 [ModLens](https://github.com/liustack/modlens)，保留其 MIT 许可与原作者声明。
+下方保留 ModLens 引擎的技术资料，便于维护和理解底层能力；本插件安装后的提供方和模型选择由上述产品层统一管理。
 
-## Functional test cases
+## 功能测试用例
 
-[`test/test_cases.csv`](test/test_cases.csv) is the single source of truth for
-functional test-case definitions and their links to existing automation. Run
-the current safe automated checks without priority filtering:
+[`test/test_cases.csv`](test/test_cases.csv) 是功能测试用例定义及现有自动化关联的唯一维护入口。
+不按优先级过滤，运行当前可安全执行的完整自动化检查：
 
 ```bash
 pnpm typecheck
@@ -58,100 +51,88 @@ pnpm test
 pnpm build
 ```
 
-Run the code-driven catalog with `pnpm test:cases` (`pnpm test:functional`
-remains an alias). The runner validates every mapping and exits nonzero for a
-failed, skipped, missing, TODO, or incomplete case. Set `DSH_RUNTIME_ROOT` to
-an installed or staged Desktop runtime to execute the real DSH token-meter and
-compaction compatibility cases. Visual layout, real installation, paid model
-quality, and machine-specific acceptance are deliberately outside this CSV.
+执行 `pnpm test:cases`（`pnpm test:functional` 为别名）会运行 CSV 中所有已关联用例。
+执行器校验用例映射；失败、跳过、缺失、TODO 或未完成的用例会导致非零退出。
+设置 `DSH_RUNTIME_ROOT` 指向已安装或暂存的 Desktop 运行目录，可执行真实宿主契约用例。
+视觉排版、真实安装和付费模型识别质量不属于此 CSV 的自动化范围。
+可选的只读真实目录检查使用 `TOKENSAPI_TEST_API_KEY` 与 `pnpm test:cases -- --live-api`，报告不会保存 Key。
 
-On Windows, run the catalog against an existing runtime (no Desktop build):
+## 交流
 
-```powershell
-$env:DSH_RUNTIME_ROOT = 'C:\path\to\desktop\dsh-plugin-desktop'
-node test/run-test-cases.mjs
+欢迎随时提[issue](https://github.com/liustack/modlens/issues/new/choose)。也欢迎来 X 上聊：**[@liustack](https://x.com/liustack)**，你用它做了什么、在哪个 harness 上跑、接下来该做什么，新版本也是那边先发。社群正在筹备中。
+
+## 亮点
+
+**🥇 面向 DeepSeek Harness Desktop 的受管模型插件：**从 GitHub 安装后，DSH 只展示 TokensAPI 模型；主模型和视觉模型保留产品默认值，也能在“设置 → 模型”从已认证的模型列表中分别切换。
+
+DeepSeek Harness 粘贴识图有两种玩法。
+
+**① 直接粘贴** 贴进来的图片自主转换成文件路径进输入框（与 OpenCode、Pi 同款交互），`modlens_read_image` 工具接手读图。
+
+**② 切到带 `(modlens vision)` 后缀的模型变体**（选择器有记忆，选一次就行）再粘贴：缩略图直接可见、所见即所得，体验更接近 Codex App。变体由插件自动发现生成：每条承载纯文本 DeepSeek 或 GLM 模型的 provider 路由各得一组包装条目（默认安装下就是 **`DeepSeek-V4-Flash (modlens vision)`** 和 **`DeepSeek-V4-Pro (modlens vision)`**，装了 opencode-go、zai 等额外路由的机器会各自多出一组），两家自己的视觉型号自动排除。走哪条通路由 host 依据真实模型元数据逐个裁决：只有被元数据确认纯文本的模型才会被接管，确认不了的一律不动，视觉模型因此保留原生贴图（[细节](docs/harness-setup.zh-CN.md)）。
+
+**直接粘贴图片识别** 无需先保存成文件再提供路径。
+
+- **全网最轻量。** 不用 hook，不套壳，不跑本地代理进程，不改任何 harness 配置的一行字：在 skill 类 harness 里它就是一个 skill 文件夹，在 dsh 里就是一个插件。卸载等于删个文件夹，你的 agent 立刻回到原样。
+- **零配置起手。** 复用 Claude Code、Codex、OpenCode、Pi 已配置，直接复用你本机的其他多模态模型。什么都没有？Antigravity CLI 是免 key 的免费通道，配一个免费 Gemini key 可将识别耗时降至 5 到 10 秒。
+- **基于证据而非想象。** 全文转录、按阅读顺序划分的版面区块、实体与关系列表，模型引用的是具体内容。
+- **一次安装，多端可用。** Claude Code、Codex、Pi、OpenCode 均经真机验证。
+
+## 安装
+
+**第一步，交给你的 AI。** 把这句话发给它：
+
+> 按 https://github.com/liustack/modlens 的 INSTALL.md 安装并配置 modlens skill，完成后运行体检并把结果告诉我。
+
+安装会先盘点你机器上已有的东西。Claude Code、Codex、OpenCode 或 Pi 里任何一个已有的登录态都可能就够了：modlens 复用前一定先征得你同意，体检报告会说清现状。
+
+**第二步，只在体检两手空空时，才需要你配一个免费引擎。** 推荐免费的 Gemini api key（到 [Google AI Studio](https://aistudio.google.com) 领取，约三分钟，无需信用卡），配上后每次识别 5 到 10 秒。其他平台的免费 openai 兼容 key 也行。想完全免注册就装 Antigravity CLI，然后完成登录：
+
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+agy                                                           # 浏览器完成登录后退出
 ```
 
-Startup catalog regression `SYNC-010` and session synchronization cases
-`SYNC-011`–`SYNC-014` are P0. Mock-backed cases assert client/model-manager
-behavior, not installation success or visual appearance. Empty mappings and
-skipped dependency checks are incomplete, never passes.
+安装还会盘点本机其他 harness CLI（Codex、OpenCode、Pi）里可触达的视觉能力，并逐个询问是否允许 modlens 复用。获准的登录态与你自己配的引擎平级入池，每次复用都会在结果里标明花的是谁的额度。
 
-## Talk to us
+**DeepSeek Harness Desktop 用户不走 skill 流程**，本包就是原生 dsh 插件。在 PowerShell 中运行：
 
-Issues are welcome any time: [open one](https://github.com/liustack/modlens/issues/new/choose). And come find me on X: **[@liustack](https://x.com/liustack)**. What you built with it, which harness you are on, what should come next. New releases land there first, and a proper community space is on the way.
-
-## Highlights
-
-**🥇 A managed model plugin for DeepSeek Harness Desktop:** after installation from GitHub, DSH exposes only TokensAPI models. Chat and vision keep product defaults but can be changed independently from the authenticated model catalog under Settings → Models.
-
-Pasting an image works two ways. **① Just paste.** On a text-only model the pasted image lands as a private temp file and its path enters the composer — the same interaction OpenCode and Pi ship — and the `modlens_read_image` tool takes it from there. **② Pick a `(modlens vision)` entry** in the model selector (it remembers your choice, so once is enough), then paste: the thumbnail stays visible in your message, closer to the Codex app feel, and the image is converted to structured evidence at request time, answered by the same underlying route. The plugin auto-discovers every provider route carrying text-only DeepSeek or GLM models and adds a wrapped entry per route (a stock install gets **`DeepSeek-V4-Flash (modlens vision)`** and **`DeepSeek-V4-Pro (modlens vision)`**; extra routes like opencode-go or zai get their own); the two families' own vision models are excluded automatically. Which paste route applies is the host's per-model call: only a model its metadata positively confirms text-only is taken over, anything unconfirmed is left alone, so vision models keep their native paste ([details](docs/harness-setup.md)).
-
-**Paste an image and it reads it.** No saving to a file and passing a path first.
-
-- **The lightest touch on the market.** No hooks, no wrappers, no local proxy daemon, not a single line changed in any harness config: on the skill harnesses it is exactly one skill folder, on dsh exactly one plugin. Uninstalling is deleting a folder, and your agents are back to stock.
-- **Zero-config start.** Reuses what Claude Code, Codex, OpenCode, or Pi already have set up: the multimodal models on your machine go straight to work. Nothing at all? Antigravity CLI is a free no-key channel, and a free Gemini key brings a read down to 5-10 seconds.
-- **Evidence, not imagination.** Full transcription, reading-order layout regions, entity and relation lists. The model quotes specifics.
-- **Install once, use everywhere.** Verified on real machines in Claude Code, Codex, Pi, and OpenCode.
-
-## Installation
-
-**DeepSeek Harness Desktop:** run this in PowerShell. The repository includes
-the built vision CLI, so GitHub installation does not run dependency lifecycle
-scripts or need a build allowlist:
-
-Current package identity: `@tokens/dsh-model-manager@0.2.21`.
+当前包标识：`@tokens/dsh-model-manager@0.2.22`。
 
 ```powershell
 npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"
 ```
 
-Restart Desktop, then enter the TokensAPI API key under Settings → Models. To uninstall:
+仓库已经提交可直接运行的视觉 CLI，GitHub 安装不会执行依赖生命周期脚本，也不需要配置构建白名单。安装后重启 Desktop，在“设置 → 模型”填写 TokensAPI API Key。
+
+卸载：
 
 ```powershell
 npx -y @deepseek-ai/dsh plugin --profile desktop remove @tokens/dsh-model-manager
 ```
 
-The remaining instructions describe the upstream ModLens skill workflow for
-other harnesses and are kept as engine-maintenance reference.
+## 用法
 
-**Step 1, hand it to your AI.** Send it this line:
+装好之后不需要记任何命令。正常聊天，粘贴图片或给出图片路径，提问即可，skill 自动触发：图片交给视觉引擎，答案基于读到的内容返回。
 
-> Install and configure the modlens skill following https://github.com/liustack/modlens/blob/main/INSTALL.md, then run the health check and tell me the result.
+## 视觉引擎：六个内置 provider，四家可复用 CLI，一条故障转移链
 
-The install starts by checking what your machine already has. An existing login in Claude Code, Codex, OpenCode, or Pi can be enough: modlens asks before reusing any of them, and the health check tells you where things stand.
+ModLens 不绑定任何单一视觉服务。视觉来源一共十个：六个内置 provider（配好任意一个就能用），加四家本机 agent CLI 的登录可以复用。先看内置的：
 
-**Step 2, only if the health check comes back empty, set up a free engine.** The recommended choice is a free Gemini API key (about three minutes at [Google AI Studio](https://aistudio.google.com), no credit card), which also makes every read 5-10 seconds. A free OpenAI-compatible key from another platform works too. To avoid any sign-up, install Antigravity CLI instead, then sign in:
+| Provider          | 需要什么                                                                 | 单次识别耗时 | 适合谁                 |
+| :---------------- | :----------------------------------------------------------------------- | :----------- | :--------------------- |
+| `gemini-api`      | 免费 Gemini key（[三分钟领取，无需信用卡](https://aistudio.google.com)） | 5-10 秒      | 推荐默认               |
+| `openai`          | 任意 OpenAI 兼容端点（key + baseUrl + model）                            | 5-10 秒      | qwen-vl、GLM、自建网关 |
+| `anthropic`       | Anthropic API key                                                        | 5-10 秒      | 手上已有 key 的机器    |
+| `antigravity-cli` | 免费的 `agy` CLI，浏览器登录一次，无需 key                               | 15-45 秒     | 完全免注册起步         |
+| `claude-cli`      | 已登录的 Claude Code                                                     | 20-45 秒     | 复用现有 Claude 订阅   |
+| `kimi-cli`        | 已登录的 Kimi Code                                                       | 20-45 秒     | 复用现有 Kimi 订阅，需显式点名 |
 
-```bash
-curl -fsSL https://antigravity.google/cli/install.sh | bash
-agy                                                           # sign in, then exit
-```
+不钉死 provider 时，所有配好的引擎组成一条故障转移链：API 快车道先试，agent CLI 兜底，第一个可用结果胜出，`meta.attempts` 记录每次尝试，回退永远不是无声的。
 
-The install also inventories vision reachable through your other local harness CLIs (Codex, OpenCode, Pi) and asks, per harness, whether modlens may reuse it. Granted logins join the engine pool as equals, and every reused read is labeled with whose quota it spent.
+### `openai` 是万能接口，不只是 OpenAI
 
-## Usage
-
-Once installed, just chat. Paste an image or drop a path, ask anything, and the skill triggers on its own: the image goes to a vision engine and the answer comes back grounded in what it read.
-
-## Vision engines: six built-in providers, four reusable CLIs, one failover chain
-
-ModLens does not depend on any single vision service. Ten sources of vision in total: six built-in providers, any one of which is enough, plus four local agent CLIs whose logins can be reused. The built-ins:
-
-| Provider | What it needs | Speed per read | Good for |
-| :-- | :-- | :-- | :-- |
-| `gemini-api` | a free Gemini API key ([3 minutes, no card](https://aistudio.google.com)) | 5-10s | the recommended default |
-| `openai` | any OpenAI-compatible endpoint (key + baseUrl + model) | 5-10s | qwen-vl, GLM, self-hosted gateways |
-| `anthropic` | an Anthropic API key | 5-10s | machines already holding one |
-| `antigravity-cli` | the free `agy` CLI, one browser sign-in, no key | 15-45s | zero-signup starts |
-| `claude-cli` | a signed-in Claude Code | 20-45s | riding your existing Claude subscription |
-| `kimi-cli` | a signed-in Kimi Code | 20-45s | riding your existing Kimi subscription, named explicitly |
-
-Without a pinned provider, every configured engine forms one failover chain: the fast API providers try first, the agent CLIs back them up, the first good result wins, and `meta.attempts` records every attempt so a fallback is never silent.
-
-### `openai` is a universal socket, not just OpenAI
-
-Any endpoint speaking the OpenAI chat-completions protocol with image input plugs straight in — that covers most of the vision-model world:
+任何讲 OpenAI chat-completions 协议、支持图片输入的端点都能直接插上，这基本覆盖了视觉模型的大半个世界：
 
 ```bash
 modlens config set openai.baseUrl https://dashscope.aliyuncs.com/compatible-mode/v1   # qwen-vl
@@ -159,88 +140,88 @@ modlens config set openai.apiKey  <key>
 modlens config set openai.model   qwen3-vl-plus
 ```
 
-The same three keys work for GLM's open platform, SiliconFlow, OpenRouter, a self-hosted vLLM/Ollama, or any gateway of your own. If your favorite vision model has an OpenAI-compatible API, ModLens can drive it.
+同样三个键，换成 GLM 开放平台、SiliconFlow、OpenRouter、自建 vLLM/Ollama 或你自己的网关都一样。你常用的视觉模型只要有 OpenAI 兼容 API，ModLens 就能驱动它。
 
-### Reusing what your machine already has
+### 复用你机器上已有的东西
 
-Two more sources of vision need zero new keys, each behind one explicit consent recorded in config:
+还有两处现成的视觉能力，一个新 key 都不用配，每家都在你明确同意后才启用：
 
-- **The harness you are talking in right now.** Running inside Claude Code with a subscription signed in? `claude-cli` reads images through it out of the box. The install flow asks the same question for whichever harness you install into.
-- **Every other agent CLI on the machine.** `modlens doctor` discovers them, you grant per harness, and they join the same failover chain with no priority over your own keys. Every reused read is labeled in `meta.warnings` with whose quota it spent, so nothing is ever silently billed:
+- **你正在对话的这个 harness 本身。**在登录了订阅的 Claude Code 里用？`claude-cli` 开箱即可借它读图。装进哪个 harness，安装流程就会问哪个 harness 的授权。
+- **机器上其他的 agent CLI。**`modlens doctor` 会逐个发现，你按家授权，它们与你自己的 key 平级入链，不插队。每次复用都在 `meta.warnings` 里标明花的是谁的额度，绝不无声扣费：
 
-| Reused CLI | What it needs | Grant with | Rides as |
-| :-- | :-- | :-- | :-- |
-| Codex | a signed-in Codex CLI with a vision model | `config set reuse.codex true` | agent lane, 15-45s |
-| OpenCode | a vision model configured in OpenCode | `config set reuse.opencode true` | agent lane, 15-45s |
-| Pi | model credentials held by Pi | `config set reuse.pi true` | an API key upgrades to the 5-10s inline lane, OAuth drives Pi itself |
-| Grok | a signed-in Grok CLI (SuperGrok) | `config set reuse.grok true` | agent lane, 15-45s |
+| 复用来源 | 需要什么                       | 授权命令                         | 走哪条道                                               |
+| :------- | :----------------------------- | :------------------------------- | :----------------------------------------------------- |
+| Codex    | 已登录且有视觉模型的 Codex CLI | `config set reuse.codex true`    | agent 通道，15-45 秒                                   |
+| OpenCode | OpenCode 里配好的视觉模型      | `config set reuse.opencode true` | agent 通道，15-45 秒                                   |
+| Pi       | Pi 持有的模型凭据              | `config set reuse.pi true`       | API key 直接升级到 5-10 秒的快车道，OAuth 驱动 Pi 本体 |
+| Grok     | 已登录的 Grok CLI（SuperGrok） | `config set reuse.grok true`     | agent 通道，15-45 秒                                   |
 
-### Picking and routing
+### 选择与路由
 
-Two knobs: `modlens config set provider <name>` states a preference (the chain still backs it up), `-p <name>` pins exactly one with no fallback. Machines behind a proxy set `HTTPS_PROXY` or `modlens config set proxy <url>` and the API providers route through it. Details: the [CLI manual](docs/cli.md) for defaults and flags, [Configuration](skills/modlens/references/configure.md) for every key, and [Security](docs/security.md) for who fetches what on remote URLs.
+两个旋钮：`modlens config set provider <name>` 表达偏好（链继续兜底），`-p <name>` 钉死单个不回退。代理环境设 `HTTPS_PROXY` 或 `modlens config set proxy <url>`，API provider 自动走代理。细节见 [CLI 手册](docs/cli.zh-CN.md)（默认模型与参数）、[配置手册](skills/modlens/references/configure.zh-CN.md)（全部配置键）、[安全说明](docs/security.zh-CN.md)（远程 URL 由谁抓取）。
 
-## See it work
+## 实测
 
-Unedited runs, all driving a text-only DeepSeek-V4-Flash.
+以下均为原样记录，驱动的都是纯文本的 DeepSeek-V4-Flash。
 
-The newest one first: pasting a screenshot straight into DeepSeek Harness on the `DeepSeek-V4-Flash (modlens vision)` variant. The paste keeps its native thumbnail, the trajectory shows the image arriving "already transcribed by the modlens vision bridge", and the answer walks the UI element by element.
+最新的一条放最前：在 DeepSeek Harness 里选 `DeepSeek-V4-Flash (modlens vision)` 变体直接粘贴截图。粘贴保留原生缩略图，轨迹里可见图片抵达时「已由 modlens 视觉桥转写」，回答逐个元素还原了界面。
 
-![Pasting an image straight into DeepSeek Harness, read through the modlens vision plugin](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-dsh-paste.jpg)
+![在 DeepSeek Harness 中直接粘贴图片，经 modlens 视觉插件读取](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-dsh-paste.jpg)
 
-A tweet screenshot in the Codex desktop app. It reads the author, the caption, the photo itself (down to what both people are wearing), the timestamp, and every engagement number: 5.4M views, 1.6K replies, 5.7K reposts, 116K likes.
+Codex 桌面 App 中识别一张推文截图。作者、配文、照片内容（连两人的穿着都在内）、发帖时间和全部互动数据（540 万浏览、1.6K 回复、5.7K 转发、11.6 万点赞）逐项读出。
 
-![Text-only DeepSeek reading a tweet screenshot in full detail via ModLens](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.jpg)
+![纯文本 DeepSeek 通过 ModLens 读出推文截图的全部细节](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-app.jpg)
 
-Three images pasted at once. The model reads them one by one, spots that they belong to one visual family, and describes each illustration's content and style.
+一次粘贴三张图。模型逐张读取，认出三张同属一个视觉家族，并分别描述每张插画的内容和风格。
 
-![Three images dropped together, read one by one](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-batch.jpg)
+![一次粘贴三张图，逐张读取](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-batch.jpg)
 
-The stress test: a scatter plot comparing 128 AI models. It reads both axes, the log scale, the per-provider color coding, the highlighted region, and every DeepSeek model called out with dashed markers. Dense charts are where vision bridges most often fail.
+压力测试：128 个模型的对比散点图。双轴定义、对数刻度、按厂商的配色、高亮区域，以及虚线标注的每一个 DeepSeek 型号全部识别。密集图表是视觉方案最容易出错的场景。
 
-![The 128-model scatter plot read in full: axes, log scale, and highlighted region](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.jpg)
+![128 个模型的散点图完整读出：双轴、对数刻度与高亮区域](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-codex-chart.jpg)
 
-And the paste path, end to end, in a Claude Code terminal on DeepSeek. The pasted image arrives as a path rather than pixels, the skill triggers on its own, the guard confirms the model truly has no vision, and the slide's full content comes back: titles, layout, background, plus an honestly stated uncertainty about the truncated filename.
+粘贴链路的端到端记录：接入 DeepSeek 的 Claude Code 终端里，粘贴的图片以路径而非像素到达，skill 自动触发，guard 确认当前模型确实没有视觉后才开读，PPT 封面幻灯的标题、版式、背景逐项读出，连文件名被截断这个不确定点都如实说明。
 
-![The skill triggering on its own in a DeepSeek Claude Code session and reading a pasted slide](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.jpg)
+![接入 DeepSeek 的 Claude Code 会话中 skill 自动触发并读出粘贴的幻灯片](https://raw.githubusercontent.com/liustack/modlens/main/assets/demo-claude-paste-recovery.jpg)
 
-## Documentation
+## 文档
 
-| Doc | Read it when |
-| :-- | :-- |
-| [Install guide](INSTALL.md) | Installing the skill step by step (written for an agent) |
-| [CLI manual](docs/cli.md) | The CLI the skill drives: flags, config, doctor |
-| [Troubleshooting](docs/troubleshooting.md) | A command failed and the message needs decoding |
-| [Configuration](skills/modlens/references/configure.md) | Setting a key, switching providers, fixing config |
-| [Output contract](docs/output-schema.md) | Parsing the JSON or building on it |
-| [Harness setup](docs/harness-setup.md) | Wiring it into Codex, Claude Code, Pi, or OpenCode |
-| [Security](docs/security.md) | File permissions, image content as untrusted input |
-| [CHANGELOG](CHANGELOG.md) | Finding what changed in a version |
+| 文档                                                     | 适用场景                                   |
+| :------------------------------------------------------- | :----------------------------------------- |
+| [安装手册](INSTALL.md)                                   | 一步步安装 skill（为 agent 编写）          |
+| [CLI 手册](docs/cli.zh-CN.md)                            | skill 所驱动的 CLI：参数、配置与体检       |
+| [故障排查](docs/troubleshooting.zh-CN.md)                | 命令报错，查成因和解法                     |
+| [配置手册](skills/modlens/references/configure.zh-CN.md) | 配置 key、切换 provider、排查配置          |
+| [输出契约](docs/output-schema.zh-CN.md)                  | 解析 JSON 或构建下游工具                   |
+| [宿主接入](docs/harness-setup.zh-CN.md)                  | 在 Codex、Claude Code、Pi、OpenCode 中配置 |
+| [安全说明](docs/security.zh-CN.md)                       | 恢复文件的权限、图片内容作为不可信输入     |
+| [更新日志](CHANGELOG.md)                                 | 查询版本变更                               |
 
-## Contributing
+## 参与方式
 
-ModLens does not accept pull requests. The project is maintained by a single author who reviews every line, which is a deliberate choice for reliability. Two effective ways to contribute:
+本仓库不接受 PR。项目由作者独立维护，所有代码经作者本人审阅，这是它可靠性的前提。两种有效的参与方式：
 
-- **[Open an issue](https://github.com/liustack/modlens/issues).** Bugs, suggestions, confusing errors, unclear docs. Issues are read and shape what gets built next.
-- **Fork it.** Under MIT your copy is fully yours to modify and publish.
+- **[提交 issue](https://github.com/liustack/modlens/issues)。** bug、建议、难以理解的报错或文档都欢迎。issue 会被认真阅读，并影响后续开发方向。
+- **Fork。** MIT 协议下你的副本完全归你，修改和发布不受限制。
 
-## Shameless plug
+## 插入一条硬广
 
-This project runs on LIUSTACK Skills: `shaping` before you build, `coding` while you build, `dig` when it breaks, `snapshot` when you hand off. Lighter than Superpowers, and stronger.
+关注微信公众号「liustack」：AI 创业机会、独立开发见解、AI 实战与工具，第一时间推送。微信扫码，或搜一搜「liustack」：
 
-```bash
-npx -y skills add liustack/vibemaster -g
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/liustack/modlens/main/assets/wechat-qrcode.png" width="420" alt="微信公众号 liustack" />
+</p>
 
-⭐ If it helps, star [ModLens](https://github.com/liustack/modlens) and [VibeMaster](https://github.com/liustack/vibemaster). Stars are how the next developer finds them.
+⭐ 如果它对你有用，请给 [ModLens](https://github.com/liustack/modlens) 一个 star，这是其他开发者找到它的方式。
 
-## Key ecosystem partners
+## 重要生态伙伴
 
-The projects worth recommending in the DeepSeek Harness ecosystem.
+DeepSeek Harness 生态里最值得推荐的项目。
 
-- 🖥️ **[DeepSeek Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop)** — A desktop front end for DeepSeek Harness. Start and manage the Harness service on your own machine without installing Node.js or running a command. A plugin market, remote control from a phone, and IM channels are on its roadmap. [Site](https://www.dshdesktop.cn)
-  为 DeepSeek Harness 生态打造的现代化桌面端。不用配置 Node.js，也不用敲命令，就能启动和管理本机的 Harness 服务。后续还会支持插件市场、移动端远程控制和 IM Channels。[官网](https://www.dshdesktop.cn)
-- 🛒 **[dsh-market](https://github.com/dsh-market/dsh-market)** — The plugin market inside DeepSeek Harness. Browse 800+ community plugins with category filters and screenshot previews, one-click install and update, and live theme switching. Most need no restart.
-  DeepSeek Harness 的可视化插件市场。设置页里直接逛社区全部 800+ 插件：分类筛选、截图预览、一键安装与更新、主题即点即换，装完多数免重启。
+- 🖥️ **[DeepSeek Harness Desktop](https://github.com/anywhere-labs/deepseek-harness-desktop)** — 为 DeepSeek Harness 生态打造的现代化桌面端。不用配置 Node.js，也不用敲命令，就能启动和管理本机的 Harness 服务。后续还会支持插件市场、移动端远程控制和 IM Channels。[官网](https://www.dshdesktop.cn)
+  A desktop front end for DeepSeek Harness. Start and manage the Harness service on your own machine without installing Node.js or running a command. A plugin market, remote control from a phone, and IM channels are on its roadmap. [Site](https://www.dshdesktop.cn)
+- 🛒 **[dsh-market](https://github.com/dsh-market/dsh-market)** — DeepSeek Harness 的可视化插件市场。设置页里直接逛社区全部 800+ 插件：分类筛选、截图预览、一键安装与更新、主题即点即换，装完多数免重启。
+  The plugin market inside DeepSeek Harness. Browse 800+ community plugins with category filters and screenshot previews, one-click install and update, and live theme switching. Most need no restart.
 
 ## Star History
 
@@ -252,9 +233,9 @@ The projects worth recommending in the DeepSeek Harness ecosystem.
  </picture>
 </a>
 
-## Disclaimer
+## 免责声明
 
-Provided as-is under the MIT License below. The author makes no warranty and gives no endorsement for any particular use, commercial use included. Your use of upstream engines (Antigravity CLI, the Gemini, OpenAI, and Anthropic APIs, and any OpenAI-compatible endpoint) is governed by their own terms and quotas, which you are responsible for.
+本项目依下方 MIT 协议按现状提供。作者不对任何特定用途（含商业使用）提供保证或背书。上游引擎（Antigravity CLI，Gemini、OpenAI、Anthropic 的 API，以及任何 OpenAI 兼容端点）的使用受各自条款和额度约束，由使用者负责。
 
 ## License
 

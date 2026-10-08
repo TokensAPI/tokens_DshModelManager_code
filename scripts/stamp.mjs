@@ -96,7 +96,7 @@ export function docTargets(root, pkgName) {
     const escaped = pkgName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return [
         'README.md',
-        'README.zh-CN.md',
+        join('docs', 'README.en-US.md'),
         'INSTALL.md',
         join('docs', 'harness-setup.md'),
         join('docs', 'harness-setup.zh-CN.md'),
