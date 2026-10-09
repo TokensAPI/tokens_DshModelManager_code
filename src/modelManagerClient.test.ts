@@ -41,7 +41,7 @@ describe('bounded model settings operations', () => {
         expect(start).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(25_001);
         await job;
-        expect(error.mock.calls[0][0].message).toContain('超时');
+        expect(error.mock.calls[0][0]).toMatchObject({ code: 'timeout' });
         expect(finish).toHaveBeenCalledOnce();
         expect(success).not.toHaveBeenCalled();
         expect(signal?.aborted).toBe(true);
@@ -223,6 +223,7 @@ describe('fallback settings component clicks', () => {
 
 class FakeElement {
     id = '';
+    lang = '';
     tagName: string;
     type = '';
     name = '';
@@ -283,8 +284,9 @@ class FakeElement {
 
 type ResponseSpec = { status: number; body: Record<string, unknown> } | Error;
 
-function gateHarness(responses: ResponseSpec[]) {
+function gateHarness(responses: ResponseSpec[], locale = 'en-US') {
     const html = new FakeElement('html');
+    html.lang = locale;
     const body = new FakeElement('body');
     html.appendChild(body);
     const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = [];
@@ -397,23 +399,29 @@ describe('Desktop startup API-key gate', () => {
     });
 
     it('keeps the gate visible when verification rejects the key', async () => {
-        const harness = gateHarness([
-            { status: 200, body: { configured: false, authenticated: false } },
-            { status: 401, body: { code: 'invalid_key', error: 'API Key 无效' } },
-        ]);
-        await harness.settle();
-        const input = harness.body.find((element) => element.id === 'tokens-model-manager-key');
-        const form = harness.body.find((element) => element.tagName === 'FORM');
-        if (!input || !form) throw new Error('gate form did not render');
-        input.value = 'bad-key';
-        form.dispatch('submit');
-        await harness.settle();
-        expect(
-            harness.body.find((element) => element.id === 'tokens-model-manager-gate'),
-        ).toBeTruthy();
-        expect(
-            harness.body.find((element) => element.textContent.includes('API Key 被拒绝')),
-        ).toBeTruthy();
+        for (const [locale, message] of [
+            ['en-US', 'The API key was rejected. Check the key and retry.'],
+            ['zh-CN', 'API Key 被拒绝，请检查后重试。'],
+        ]) {
+            const harness = gateHarness(
+                [
+                    { status: 200, body: { configured: false, authenticated: false } },
+                    { status: 401, body: { code: 'invalid_key', error: 'API Key 无效' } },
+                ],
+                locale,
+            );
+            await harness.settle();
+            const input = harness.body.find((element) => element.id === 'tokens-model-manager-key');
+            const form = harness.body.find((element) => element.tagName === 'FORM');
+            if (!input || !form) throw new Error('gate form did not render');
+            input.value = 'bad-key';
+            form.dispatch('submit');
+            await harness.settle();
+            expect(
+                harness.body.find((element) => element.id === 'tokens-model-manager-gate'),
+            ).toBeTruthy();
+            expect(harness.body.find((element) => element.textContent === message)).toBeTruthy();
+        }
     });
 
     it('fails closed when the status endpoint is unreachable', async () => {
@@ -1763,7 +1771,7 @@ describe('Desktop model-manager settings section', () => {
         await expect(
             directory.select({ provider: 'modlens-tokensapi', model: 'deepseek-v3.2' }),
         ).rejects.toMatchObject({
-            message: '模型选择保存失败',
+            code: 'save',
             diagnostic: 'save failed',
         });
         expect(postCalls).toBe(1);
@@ -2179,7 +2187,7 @@ describe('Desktop model-manager settings section', () => {
                 'tokensapi',
                 { attempts: 2, delayMs: 0 },
             ),
-        ).rejects.toThrow(/模型目录尚未刷新/);
+        ).rejects.toMatchObject({ code: 'missingModel' });
         expect(selects).toBe(0);
     });
 

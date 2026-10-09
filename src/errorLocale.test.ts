@@ -189,6 +189,37 @@ describe('model-manager error localization', () => {
             expect(chinese).toMatch(/[\u3400-\u9fff]/);
             expect(chinese).not.toBe(english);
         }
+        const localizedFailures = [
+            {
+                code: 'timeout',
+                en: 'Request timed out. Please retry.',
+                zh: '请求超时，请重试',
+            },
+            {
+                code: 'save',
+                en: 'Unable to save the model selection.',
+                zh: '模型选择保存失败',
+            },
+            {
+                code: 'missingModel',
+                en: 'The model catalog does not yet contain tokensapi/test-model. Please retry shortly.',
+                zh: '模型目录尚未刷新到 tokensapi/test-model，请稍后重试',
+            },
+        ];
+        for (const failure of localizedFailures) {
+            for (const [locale, language] of [
+                ['en-US', 'en'],
+                ['zh-CN', 'zh'],
+            ] as const) {
+                document.documentElement.lang = locale;
+                expect(
+                    manager.managerError(failure.code, {
+                        provider: 'tokensapi',
+                        model: 'test-model',
+                    }),
+                ).toMatchObject({ code: failure.code, message: failure[language] });
+            }
+        }
         document.documentElement.lang = 'en';
         const body = { code: 'unsupported_protocol', error: '模型不支持所选请求协议' };
         expect(manager.responseError(body)).toMatchObject({
