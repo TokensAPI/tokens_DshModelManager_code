@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.23 - 2026-10-13
+
+- Write the TokensAPI route through DSH 0.2 profile settings. DSH 0.2 removed `settings.register`/`get`, and the plugin silently gave up at startup, so on TokensCowork 0.6 no route change ever reached the Host while every write still reported success. Writes now go to the `llm-pi-ai` profile entry with `settings.update`, and the main model is restored from the Host's persisted default.
+- Register every managed model on the single TokensAPI route instead of only the active protocol's models, so DSH 0.2's `requireModel` accepts any pick and `session/model-unavailable` no longer appears. Picking a model of another protocol switches the route to that model's protocol.
+- Show one TokensAPI list in the conversation model picker, identical to the settings page main-model list. The DeepSeek and duplicate vision groups are hidden, the list keeps a fixed identity across route changes, and it only removes and renames Host groups, never adds models the Host does not advertise. Models are hidden only by an explicit id list (shipped empty).
+- Default a model with no declared image capability to the vision bridge, so every listed model is usable when selected; switch it to native handling in settings.
+- Switch protocols in the background on DSH 0.2. Selection returns at once; model calls wait at the Host's `llm/stream` gate until the new route is written, so the first message after a switch uses the new protocol; rapid picks keep only the last one; a failed write rolls back and is reported. Same-protocol picks skip the route write, and the picker no longer spins or flickers during selection or catalog refresh.
+- Return selection failures to the composer as a result instead of throwing, so they are shown rather than silently dropped.
+- Localize model manager and image recognition failures in the current UI language, re-reading the language on cached retries, with a localized fallback that keeps the original diagnostic.
+- Add market metadata in Chinese and English, pin the private registry, and keep launcher and install documentation versions in sync with the package version under a manifest regression check.
+- The DSH 0.1 (TokensCowork 0.5) path is unchanged. No production dependency changes.
+- Known issue: GPT models over the Responses API fail with `403 Unsupported client, use codex only`. The refusal comes from the upstream channel behind TokensAPI, after the key is accepted; DSH reports it as an invalid API key. It awaits a TokensAPI-side fix.
+- Known limitation: on DSH 0.2 the plugin's own settings (image handling and protocol overrides, vision model, endpoint, fallback route) do not survive a restart, because the plugin declares no Cordis Config for 0.2 profile settings. The main model is unaffected.
+
+## 0.2.22 - 2026-09-23
+
+- Published to the private registry on 2026-09-23 from commit `2ff0e21`, which is not part of this repository's history, so its exact contents cannot be reconstructed from git. On the main line the version was set to 0.2.22 by `eb43bbb` ("sync startup catalog"), which synchronizes the managed catalog with the composer at startup.
+
 ## 0.2.21 - 2026-09-17
 
 - Restore Claude Anthropic Messages compatibility at the final wire boundary. A private loopback-only plugin transport rewrites DSH's reserved attribution header to the required Claude CLI identity, streams requests and responses without retaining credentials, and rejects unrelated paths.

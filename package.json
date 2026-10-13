@@ -1,6 +1,6 @@
 {
     "name": "@tokens/dsh-model-manager",
-    "version": "0.2.22",
+    "version": "0.2.23",
     "description": "TokensAPI managed model and vision provider for DeepSeek Harness Desktop",
     "tokenscowork": {
         "displayName": {
