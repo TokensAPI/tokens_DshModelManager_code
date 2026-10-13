@@ -9,10 +9,11 @@
 // anything irreversible (tag, push) happens.
 //
 // This script does NOT publish. It runs the guards, bumps the version, commits,
-// tags, and pushes the tag. Pushing the tag triggers .github/workflows/release.yml,
-// which is the single place that runs `npm publish` and creates the GitHub
-// Release. Publishing from both here and CI is a race that double-publishes or
-// fails half-way, so the tag push is the one handoff.
+// tags, and pushes the tag. Pushing the tag triggers
+// .github/workflows/publish-npm.yml, which is the single place that runs
+// `npm publish`, to the private registry https://npm.tokensapi.ai/ only.
+// Publishing from both here and CI is a race that double-publishes or fails
+// half-way, so the tag push is the one handoff.
 import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -127,6 +128,8 @@ run('git', ['tag', '-a', `v${next}`, '-m', `v${next}`]);
 run('git', ['push', '--atomic', 'origin', 'main', `refs/tags/v${next}`]);
 
 console.log(
-    `\nTag v${next} pushed. CI will finish the release: npm publish and the GitHub Release.`,
+    `\nTag v${next} pushed. CI will finish the release: npm publish to https://npm.tokensapi.ai/.`,
 );
-console.log('Watch it: gh run watch, or https://github.com/liustack/modlens/actions');
+console.log(
+    'Watch it: gh run watch, or https://github.com/TokensAPI/tokens_DshModelManager_code/actions',
+);

@@ -1,0 +1,165 @@
+# Publishes @tokens/dsh-model-manager to the private registry at
+# https://npm.tokensapi.ai/. It never publishes to the public npmjs.org.
+#
+# Pushing a `v*` tag is the only release path: there is no manual trigger, so a
+# version can never be published twice in parallel. To retry a failed release,
+# re-run this workflow from the Actions tab.
+#
+# The check job is deliberate, not a duplicate of ci.yml: `needs:` cannot span
+# workflows, so a release can only gate on checks it runs itself. It mirrors
+# ci.yml's matrix exactly; keep the two in step. ci.yml ignores tags, so
+# nothing runs twice.
+#
+# Requires the repository secret VERDACCIO_PUBLISH_TOKEN, a token for the
+# approved publisher account `tokenscowork`. Without it the publish step stops
+# with an explicit error after every check has passed.
+name: Publish to private npm
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # A release must never be cancelled halfway through publishing.
+  cancel-in-progress: false
+
+env:
+  NPM_REGISTRY: https://npm.tokensapi.ai/
+  EXPECTED_PACKAGE: '@tokens/dsh-model-manager'
+  EXPECTED_REPOSITORY: TokensAPI/tokens_DshModelManager_code
+
+jobs:
+  check:
+    name: Test and build (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same matrix as ci.yml: 22.19 is the engines floor, 24 the current line.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: ['22.19', 24]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Verify committed Git distribution bundle
+        run: git diff --exit-code -- dist/main.js
+
+  publish:
+    name: Publish to private npm
+    # Every OS and Node version must pass before a tag can ship.
+    needs: check
+    # The tag trigger already guarantees this; kept so a stray trigger cannot
+    # reach the publish step.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          # Writes the npm auth config for this registry; NODE_AUTH_TOKEN alone
+          # is not enough.
+          registry-url: https://npm.tokensapi.ai/
+
+      - name: Refuse fork publishing
+        run: |
+          if [ "$GITHUB_REPOSITORY" != "$EXPECTED_REPOSITORY" ]; then
+            echo "Publishing is enabled only for $EXPECTED_REPOSITORY; this run stays check-only." >&2
+            exit 1
+          fi
+
+      - name: Validate release identity
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node - <<'EOF'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const fail = (message) => { console.error(message); process.exit(1); };
+          const tag = process.env.RELEASE_TAG;
+          if (!/^v\d+\.\d+\.\d+$/.test(tag)) fail(`Tag ${tag} is not a stable vX.Y.Z release tag.`);
+          if (tag.slice(1) !== pkg.version) fail(`Tag ${tag} does not match package.json version ${pkg.version}.`);
+          if (pkg.name !== process.env.EXPECTED_PACKAGE) fail(`Unexpected package name ${pkg.name}.`);
+          if (pkg.publishConfig?.registry !== process.env.NPM_REGISTRY) {
+            fail(`publishConfig.registry must be ${process.env.NPM_REGISTRY}, got ${pkg.publishConfig?.registry}.`);
+          }
+          // Parse the repository URL instead of matching a substring.
+          const url = new URL(String(pkg.repository?.url ?? '').replace(/^git\+/, ''));
+          const slug = url.pathname.replace(/^\//, '').replace(/\.git$/, '');
+          if (url.hostname !== 'github.com' || slug !== process.env.EXPECTED_REPOSITORY) {
+            fail(`package.json repository ${pkg.repository?.url} is not ${process.env.EXPECTED_REPOSITORY}.`);
+          }
+          const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+          if (!changelog.split('\n').some((line) => line === `## ${pkg.version}` || line.startsWith(`## ${pkg.version} `))) {
+            fail(`CHANGELOG.md has no "## ${pkg.version}" section.`);
+          }
+          console.log(`Release identity verified: ${pkg.name}@${pkg.version} from ${tag}.`);
+          EOF
+
+      - name: Pack the verified release
+        run: |
+          mkdir -p .release
+          # npm records gitHead only when publishing straight from a directory,
+          # never in a packed tarball. Stamp the tag's commit into this
+          # throwaway checkout first, so the registry can always be traced back
+          # to its source (0.2.22 was published from a commit absent from Git).
+          npm pkg set "gitHead=$GITHUB_SHA"
+          # dist/main.js is committed and verified unchanged by the check job;
+          # prepublishOnly would only rebuild it, so lifecycle scripts are skipped.
+          npm pack --ignore-scripts --pack-destination .release
+          ls -l .release
+
+      - name: Publish to private npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.VERDACCIO_PUBLISH_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo 'Configure the VERDACCIO_PUBLISH_TOKEN repository secret before releasing.' >&2
+            exit 1
+          fi
+          publisher="$(npm whoami --registry="$NPM_REGISTRY")"
+          if [ "$publisher" != 'tokenscowork' ]; then
+            echo 'The registry token does not belong to the approved publisher tokenscowork.' >&2
+            exit 1
+          fi
+          package_version="$(node -p "require('./package.json').version")"
+          # An unreachable or unauthorized registry must abort instead of reading
+          # as "this version is not published yet".
+          set +e
+          view_output="$(npm view "$EXPECTED_PACKAGE@$package_version" version --registry="$NPM_REGISTRY" 2>&1)"
+          view_status=$?
+          set -e
+          if [ "$view_status" -eq 0 ]; then
+            echo "Refusing to overwrite already published $EXPECTED_PACKAGE@$package_version." >&2
+            exit 1
+          fi
+          case "$view_output" in
+            *E404*|*'404 Not Found'*)
+              ;;
+            *)
+              echo "Cannot confirm that $EXPECTED_PACKAGE@$package_version is unpublished; refusing to publish." >&2
+              echo "$view_output" >&2
+              exit 1
+              ;;
+          esac
+          npm publish .release/*.tgz --ignore-scripts --registry="$NPM_REGISTRY" --tag=latest
+          npm view "$EXPECTED_PACKAGE@$package_version" version gitHead dist.integrity --registry="$NPM_REGISTRY"
