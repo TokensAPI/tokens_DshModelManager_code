@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Agent, fetch as undiciFetch } from 'undici';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error The DSH entry is deliberately dependency-free plain JS.
 import { __modelManager, apply, DEEPSEEK_OFFICIAL, TOKENSAPI } from '../dsh/index.js';
@@ -93,9 +94,16 @@ describe('Claude compatibility transport', () => {
             },
         );
 
+        // The wire test owns its HTTP client. Requests through the shared global
+        // dispatcher outlive the test: an unread response keeps its connection,
+        // and the pool later re-arms a keep-alive timer inside whichever test
+        // runs next, which on Linux and macOS was a fake-timer test.
+        const client = new Agent();
+        const send = (url: string, init: RequestInit) =>
+            undiciFetch(url, { ...init, dispatcher: client } as Parameters<typeof undiciFetch>[1]);
         try {
             const baseURL = await __modelManager.ensureClaudeProxy(ctx, request);
-            const response = await fetch(`${baseURL}/v1/messages`, {
+            const response = await send(`${baseURL}/v1/messages`, {
                 method: 'POST',
                 headers: {
                     'content-type': 'application/json',
@@ -109,16 +117,19 @@ describe('Claude compatibility transport', () => {
             expect(response.headers.get('request-id')).toBe('safe-request-id');
             await expect(response.text()).resolves.toContain('message_stop');
 
-            const refused = await fetch(`${baseURL}/v1/models`, { method: 'POST' });
+            const refused = await send(`${baseURL}/v1/models`, { method: 'POST' });
             expect(refused.status).toBe(403);
-            const spoofed = await fetch(
+            await refused.arrayBuffer();
+            const spoofed = await send(
                 `${baseURL.replace('/tokens/model-manager/claude-proxy', '/untrusted/prefix')}/v1/messages`,
                 { method: 'POST' },
             );
             expect(spoofed.status).toBe(403);
+            await spoofed.arrayBuffer();
             expect(request).toHaveBeenCalledTimes(1);
         } finally {
             await __modelManager.closeClaudeProxy(ctx);
+            await client.close();
         }
     });
 });
