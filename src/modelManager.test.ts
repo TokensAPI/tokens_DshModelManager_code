@@ -1126,6 +1126,253 @@ describe('independent fallback route', () => {
         });
     });
 
+    it('writes the LLM route through DSH 0.2 profile settings, which have no namespace registry', async () => {
+        // DSH 0.2 removed settings.register/get. Live settings are volatile
+        // fields of profile entries: written with update(entryId, patch), read
+        // back through describe(). Before this branch existed the manager got no
+        // settings handle on 0.2, so every route write was silently skipped.
+        const credential = credentialHarness('tk-dsh02', true);
+        const profile = new Map<string, Record<string, unknown>>([
+            ['agent-default-model', { provider: TOKENSAPI.providerId, model: 'deepseek-v3.2' }],
+            ['llm-pi-ai', { providers: {} }],
+        ]);
+        const writes: Array<{ ns: string; patch: Record<string, unknown> }> = [];
+        const settings = {
+            describe: () => [...profile].map(([ns, value]) => ({ ns, value })),
+            update: async (ns: string, patch: Record<string, unknown>) => {
+                writes.push({ ns, patch });
+                profile.set(ns, { ...(profile.get(ns) ?? {}), ...patch });
+            },
+            mutate: async () => {},
+        };
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.length === 1 && services[0] === 'settings') callback({ settings });
+            },
+        };
+        apply(ctx, { settingsCard: false, pasteToPath: false });
+        // Route writes run in the background, and a Claude route also starts the
+        // loopback proxy (real I/O), so let the event loop turn, not just microtasks.
+        const settle = async () => {
+            for (let index = 0; index < 10; index++)
+                await new Promise((resolve) => setTimeout(resolve, 5));
+        };
+        await settle();
+
+        const routeWrites = () =>
+            writes.filter((entry) => entry.ns === TOKENSAPI.llmSettingsNamespace);
+        type RoutePatch = {
+            providers: Record<string, { api: string; models: Array<{ id: string }> }>;
+        };
+        const lastRoute = () => {
+            const patch = routeWrites().at(-1)?.patch as RoutePatch | undefined;
+            if (!patch) throw new Error('no route write reached the settings service');
+            return patch.providers[TOKENSAPI.providerId];
+        };
+        // Startup restored the Host's persisted default instead of overwriting it.
+        expect(routeWrites().length).toBeGreaterThan(0);
+        expect(lastRoute().models[0]?.id).toBe('deepseek-v3.2');
+
+        await __modelManager.selectMainModel(
+            ctx,
+            { provider: TOKENSAPI.agentProviderId, model: 'claude-opus-4-7' },
+            VALID_RESPONSE,
+        );
+        await settle();
+        // The route now carries every managed model and speaks the new protocol.
+        expect(lastRoute().api).toBe('anthropic-messages');
+        expect(lastRoute().models.map((model) => model.id)).toEqual(
+            expect.arrayContaining(['claude-opus-4-7', 'gpt-5.5', 'deepseek-v3.2']),
+        );
+        // The plugin's own choices have no profile entry on 0.2, so they never
+        // reach the Host settings service (which would reject them).
+        expect(writes.some((entry) => entry.ns === TOKENSAPI.settingsNamespace)).toBe(false);
+
+        // A route write costs about a second on 0.2 and holds the picker, so it
+        // happens only when the route changes: switching protocol writes...
+        await __modelManager.selectMainModel(
+            ctx,
+            { provider: TOKENSAPI.agentProviderId, model: 'qwen3.6-35b-a3b' },
+            VALID_RESPONSE,
+        );
+        await settle();
+        expect(lastRoute().api).toBe('openai-completions');
+        const writesAfterSwitch = routeWrites().length;
+        // ...while another model of the same protocol leaves the route as it is.
+        await __modelManager.selectMainModel(
+            ctx,
+            { provider: TOKENSAPI.agentProviderId, model: 'qwen3.8-flash-next' },
+            VALID_RESPONSE,
+        );
+        await settle();
+        expect(routeWrites().length).toBe(writesAfterSwitch);
+    });
+
+    it('switches the route in the background on DSH 0.2 and holds model calls until it lands', async () => {
+        const credential = credentialHarness('tk-dsh02-bg', true);
+        const profile = new Map<string, Record<string, unknown>>([
+            ['agent-default-model', { provider: TOKENSAPI.providerId, model: 'deepseek-v3.2' }],
+            ['llm-pi-ai', { providers: {} }],
+        ]);
+        type RouteWrite = {
+            api: string;
+            resolve: () => void;
+            reject: (error: Error) => void;
+        };
+        const pending: RouteWrite[] = [];
+        const landed: string[] = [];
+        let holdWrites = false;
+        const settings = {
+            describe: () => [...profile].map(([ns, value]) => ({ ns, value })),
+            update: (ns: string, patch: Record<string, unknown>) => {
+                const apply = () => profile.set(ns, { ...(profile.get(ns) ?? {}), ...patch });
+                const route = (patch as { providers?: Record<string, { api: string }> })
+                    .providers?.[TOKENSAPI.providerId];
+                if (!holdWrites || !route) {
+                    apply();
+                    return Promise.resolve();
+                }
+                return new Promise<void>((resolve, reject) => {
+                    pending.push({
+                        api: route.api,
+                        resolve: () => {
+                            apply();
+                            landed.push(route.api);
+                            resolve();
+                        },
+                        reject,
+                    });
+                });
+            },
+            mutate: async () => {},
+        };
+        let gate:
+            | ((options: unknown, next: () => AsyncIterable<unknown>) => AsyncIterable<unknown>)
+            | undefined;
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            on: (name: string, listener: typeof gate) => {
+                if (name === 'llm/stream') gate = listener;
+            },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.length === 1 && services[0] === 'settings') callback({ settings });
+            },
+        };
+        apply(ctx, { settingsCard: false, pasteToPath: false });
+        // Route writes run in the background, and a Claude route also starts the
+        // loopback proxy (real I/O), so let the event loop turn, not just microtasks.
+        const settle = async () => {
+            for (let index = 0; index < 10; index++)
+                await new Promise((resolve) => setTimeout(resolve, 5));
+        };
+        await settle();
+        // Load the full catalog through one ordinary pick before holding writes.
+        await __modelManager.selectMainModel(
+            ctx,
+            { provider: TOKENSAPI.agentProviderId, model: 'qwen3.6-35b-a3b' },
+            VALID_RESPONSE,
+        );
+        await settle();
+        if (!gate) throw new Error('the llm/stream gate was not registered');
+        holdWrites = true;
+
+        // 1. Selecting answers before the slow route write has finished.
+        const status = await __modelManager.selectMainModel(
+            ctx,
+            { provider: TOKENSAPI.agentProviderId, model: 'claude-opus-4-7' },
+            VALID_RESPONSE,
+        );
+        expect(status).toMatchObject({ mainModel: 'claude-opus-4-7' });
+        await settle();
+        expect(pending.map((write) => write.api)).toEqual(['anthropic-messages']);
+
+        // 2. A model call made now waits for the write, then dispatches.
+        const order: string[] = [];
+        const call = (async () => {
+            const chunks: unknown[] = [];
+            for await (const chunk of gate(
+                { provider: TOKENSAPI.providerId, model: 'claude-opus-4-7' },
+                () =>
+                    (async function* () {
+                        order.push(`dispatched after ${landed.join(',') || 'nothing'}`);
+                        yield { type: 'text-delta' };
+                    })(),
+            )) {
+                chunks.push(chunk);
+            }
+            return chunks;
+        })();
+        await settle();
+        expect(order).toEqual([]);
+
+        // 3. Rapid picks: B is replaced by C while A is still being written.
+        await __modelManager.selectMainModel(
+            ctx,
+            { provider: TOKENSAPI.agentProviderId, model: 'gpt-5.5' },
+            VALID_RESPONSE,
+        );
+        await __modelManager.selectMainModel(
+            ctx,
+            { provider: TOKENSAPI.agentProviderId, model: 'qwen3.8-flash-next' },
+            VALID_RESPONSE,
+        );
+        pending.shift()?.resolve();
+        await settle();
+        // Only the last choice is written next; the intermediate one is dropped.
+        expect(pending.map((write) => write.api)).toEqual(['openai-completions']);
+        pending.shift()?.resolve();
+        await settle();
+        expect(landed).toEqual(['anthropic-messages', 'openai-completions']);
+        expect(order).toEqual(['dispatched after anthropic-messages,openai-completions']);
+        expect(await call).toEqual([{ type: 'text-delta' }]);
+
+        // 4. A failed background write rolls back and is reported, never silent.
+        await __modelManager.selectMainModel(
+            ctx,
+            { provider: TOKENSAPI.agentProviderId, model: 'claude-opus-4-7' },
+            VALID_RESPONSE,
+        );
+        await settle();
+        pending.shift()?.reject(new Error('profile write refused'));
+        await settle();
+        const failed: unknown[] = [];
+        for await (const chunk of gate(
+            { provider: TOKENSAPI.providerId, model: 'claude-opus-4-7' },
+            () =>
+                (async function* () {
+                    yield { type: 'text-delta' };
+                })(),
+        )) {
+            failed.push(chunk);
+        }
+        expect(failed).toEqual([
+            {
+                type: 'finish',
+                reason: {
+                    kind: 'error',
+                    failure: {
+                        code: 'INVALID_CONFIG',
+                        message: expect.stringContaining('profile write refused'),
+                    },
+                },
+            },
+        ]);
+        expect(
+            String(
+                (failed[0] as { reason: { failure: { message: string } } }).reason.failure.message,
+            ),
+        ).toContain('qwen3.8-flash-next');
+        // The manager is back on the last route that did persist.
+        expect(
+            await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE, { refreshModels: false }),
+        ).toMatchObject({
+            mainModel: 'qwen3.8-flash-next',
+        });
+    });
+
     it('persists a TokensAPI model chosen from the conversation selector', async () => {
         const harness = credentialHarness('tk-primary', true);
         await expect(
@@ -1468,6 +1715,58 @@ describe('TokensAPI remote API-key verification', () => {
 });
 
 describe('TokensAPI model discovery and selection', () => {
+    it('hides exactly the ids on the explicit hidden list, from both the settings and the composer lists', () => {
+        const runtime = {
+            models: [
+                { id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', endpointTypes: ['openai'] },
+                { id: 'kimi-k3', name: 'kimi-k3', endpointTypes: ['openai'] },
+                { id: 'claude-opus-4-7', name: 'claude-opus-4-7', endpointTypes: ['anthropic'] },
+            ],
+            mainModel: 'deepseek-v4-flash',
+            visionModel: 'deepseek-v4-flash',
+            protocolByModel: {},
+            visionModeByModel: {},
+            visionProviderEnabled: true,
+        };
+        const ids = (models: Array<{ id: string }>) => models.map((model) => model.id).sort();
+        const hidden: Set<string> = __modelManager.hiddenManagedModelIds;
+        // Shipped empty: every model the API returns is shown by default.
+        expect(hidden.size).toBe(0);
+        expect(ids(__modelManager.publicModels(runtime))).toEqual([
+            'claude-opus-4-7',
+            'deepseek-v4-flash',
+            'kimi-k3',
+        ]);
+        expect(
+            ids(
+                __modelManager.managedConversationModels(
+                    runtime,
+                    runtime.models,
+                    'openai-completions',
+                ),
+            ),
+        ).toEqual(['claude-opus-4-7', 'deepseek-v4-flash', 'kimi-k3']);
+        hidden.add('kimi-k3');
+        try {
+            // One list in one place: both the settings page and the composer drop it.
+            expect(ids(__modelManager.publicModels(runtime))).toEqual([
+                'claude-opus-4-7',
+                'deepseek-v4-flash',
+            ]);
+            expect(
+                ids(
+                    __modelManager.managedConversationModels(
+                        runtime,
+                        runtime.models,
+                        'openai-completions',
+                    ),
+                ),
+            ).toEqual(['claude-opus-4-7', 'deepseek-v4-flash']);
+        } finally {
+            hidden.delete('kimi-k3');
+        }
+    });
+
     it('waits for persisted model settings before exposing startup status', async () => {
         const credential = credentialHarness('tk-startup-settings', true);
         const values = new Map<string, Record<string, unknown>>([
@@ -1783,11 +2082,20 @@ describe('TokensAPI model discovery and selection', () => {
         });
     });
 
-    it('rejects an unknown model until its image handling is explicitly confirmed', async () => {
+    it('routes an undeclared model through the vision bridge by default', async () => {
+        // Selecting a model must never fail for want of a capability the API did
+        // not declare: the bridge keeps the main model text-only and sends
+        // images to the vision model, which works whatever it really supports.
         await expect(
             __modelManager.resolveManagedMainRoute({}, 'unclassified-text-model'),
-        ).rejects.toMatchObject({ code: 'unknown_capability' });
+        ).resolves.toMatchObject({
+            provider: TOKENSAPI.agentProviderId,
+            visionMode: 'bridge',
+            input: ['text'],
+        });
 
+        // The raw capability still reports the undeclared state, so the settings
+        // page can show it and offer native handling.
         expect(__modelManager.managedModelCapability({ id: 'unclassified-text-model' })).toEqual({
             input: ['text'],
             visionMode: 'unknown',
@@ -1817,18 +2125,27 @@ describe('TokensAPI model discovery and selection', () => {
         });
     });
 
-    it('routes a future model only after the user chooses native or bridge handling', async () => {
+    it('defaults a future model to the bridge and still honours an explicit choice', async () => {
         const harness = credentialHarness();
         const response = managedResponseWithFuture();
         await __modelManager.setManagedCredential(harness.ctx, 'tk-future-route', response);
 
+        // No explicit choice: the model is usable immediately, through the bridge.
+        const defaulted = await __modelManager.setManagedModels(
+            harness.ctx,
+            { mainModel: FUTURE_MODEL_ID, visionModel: TOKENSAPI.visionModel },
+            response,
+        );
+        expect(
+            defaulted.models.find((model: { id: string }) => model.id === FUTURE_MODEL_ID),
+        ).toMatchObject({ visionMode: 'bridge' });
         await expect(
-            __modelManager.setManagedModels(
-                harness.ctx,
-                { mainModel: FUTURE_MODEL_ID, visionModel: TOKENSAPI.visionModel },
-                response,
-            ),
-        ).rejects.toMatchObject({ code: 'unknown_capability' });
+            __modelManager.resolveManagedMainRoute(harness.ctx, FUTURE_MODEL_ID),
+        ).resolves.toMatchObject({
+            provider: TOKENSAPI.agentProviderId,
+            visionMode: 'bridge',
+            input: ['text'],
+        });
 
         const native = await __modelManager.setManagedModels(
             harness.ctx,
@@ -1877,7 +2194,7 @@ describe('TokensAPI model discovery and selection', () => {
         });
     });
 
-    it('persists a future-model decision, restores it, and hides unconfirmed models from chat', async () => {
+    it('persists a future-model decision, restores it, and lists unconfirmed models as text-only', async () => {
         const values = new Map<string, Record<string, unknown>>();
         const updates: Array<{ namespace: string; patch: Record<string, unknown> }> = [];
         const settings = {
@@ -1911,7 +2228,19 @@ describe('TokensAPI model discovery and selection', () => {
         const beforeConfirmation = [...updates]
             .reverse()
             .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch;
-        expect(JSON.stringify(beforeConfirmation)).not.toContain(FUTURE_MODEL_ID);
+        // The route advertises every managed model, so the composer lists exactly
+        // what the settings page lists. A model with no declared image capability
+        // is registered text-only; selecting it is refused with a message asking
+        // for an image handling mode rather than silently disappearing.
+        expect(beforeConfirmation).toMatchObject({
+            providers: {
+                [TOKENSAPI.providerId]: {
+                    models: expect.arrayContaining([
+                        expect.objectContaining({ id: FUTURE_MODEL_ID, input: ['text'] }),
+                    ]),
+                },
+            },
+        });
 
         await __modelManager.setManagedModels(
             ctx,
@@ -2766,15 +3095,25 @@ describe('TokensAPI model discovery and selection', () => {
                 },
             },
         });
+        // The route carries every selectable managed model, including the ones
+        // whose protocol is not the one in force: DSH 0.2 refuses to select a
+        // model the Host does not advertise, so narrowing this list by protocol
+        // is what made cross-protocol models unselectable.
         expect(managedModels?.map((model) => model.id)).toEqual([
             'deepseek-v3.2',
             'deepseek-v4-flash',
             'qwen3.6-35b-a3b',
             'qwen3.8-flash-next',
+            'claude-opus-4-7',
+            'gpt-5.5',
         ]);
-        // The settings page still receives every API model for its own
-        // selector; only the conversation catalog is narrowed.
+        // The conversation catalog now matches the settings selector.
         expect(status.models).toEqual(DIRECT_PUBLIC_API_MODELS);
+        // Same set as the settings selector; the route only reorders it so the
+        // main model leads.
+        expect([...(managedModels ?? [])].map((model) => model.id).sort()).toEqual(
+            DIRECT_PUBLIC_API_MODELS.map((model) => model.id).sort(),
+        );
         expect(status.baseURL).toBe('https://gateway.example/v1');
         expect(selections.at(-1)).toEqual({
             provider: TOKENSAPI.providerId,

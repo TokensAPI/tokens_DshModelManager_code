@@ -85,6 +85,58 @@ export const DEEPSEEK_OFFICIAL = Object.freeze({
 let lastVisionFailure = null
 const managerRuntimes = new WeakMap()
 
+/**
+ * The DSH 0.2 settings service behind the shape this plugin was written for.
+ *
+ * DSH 0.2 removed the namespace registry (`register`/`get`): live settings
+ * are the volatile fields of profile entries, written into the profile's
+ * cordis.patch.yml with `update(entryId, patch)` and read back through
+ * `describe()`. The LLM route lives in such an entry (`llm-pi-ai`), so it is
+ * written for real. This plugin declares no Cordis Config, so its own choices
+ * have no entry to live in on 0.2: they are kept for the running session, and
+ * the main model survives restarts through the Host's own persisted default.
+ *
+ * @param settings - the DSH 0.2 settings service.
+ * @returns the get/update/mutate surface the manager calls.
+ */
+function profileSettingsAdapter(settings) {
+  const own = {}
+  const entryValue = (ns) => {
+    try {
+      return settings.describe().find((row) => row?.ns === ns)?.value
+    } catch {
+      return undefined
+    }
+  }
+  return {
+    get: (ns) => (ns === TOKENSAPI.settingsNamespace ? { ...own } : entryValue(ns)),
+    update: async (ns, patch) => {
+      if (ns === TOKENSAPI.settingsNamespace) {
+        Object.assign(own, patch)
+        return
+      }
+      await settings.update(ns, patch)
+    },
+    ...(typeof settings.mutate === 'function' ? { mutate: (ns, ops) => settings.mutate(ns, ops) } : {}),
+  }
+}
+
+/**
+ * The main model the Host persisted as its default, when it is a TokensAPI one.
+ * @param settings - the DSH 0.2 settings service.
+ * @returns the model id, or '' when the Host default is not a TokensAPI route.
+ */
+function hostDefaultTokensModel(settings) {
+  try {
+    const value = settings.describe().find((row) => row?.ns === 'agent-default-model')?.value
+    const provider = typeof value?.provider === 'string' ? value.provider : ''
+    if (provider !== TOKENSAPI.providerId && provider !== TOKENSAPI.agentProviderId) return ''
+    return normalizeModelId(value?.model, '')
+  } catch {
+    return ''
+  }
+}
+
 function managerRuntime(ctx) {
   let runtime = managerRuntimes.get(ctx)
   if (!runtime) {
@@ -109,6 +161,13 @@ function managerRuntime(ctx) {
       visionProviderEnabled: true,
       models: [],
       settings: null,
+      // DSH 0.2 only: route writes run in one background worker (see
+      // queueMainRoutePersist); model calls wait for it in the llm/stream gate.
+      profileSettings: false,
+      routeTarget: null,
+      routeWorker: null,
+      routeFailure: null,
+      persistedMain: null,
       settingsReady: Promise.resolve(),
       agentDefaultModel: null,
     }
@@ -131,6 +190,19 @@ export const MEDIA_EXT = {
 
 export function apply(ctx, config = {}) {
   const managed = managerRuntime(ctx)
+  // Every model call passes through the Host's llm/stream waterfall. A call to
+  // a TokensAPI route made while a route switch is still being written waits
+  // for it here, so it goes out with the protocol the user just picked.
+  if (typeof ctx.on === 'function') {
+    ctx.on('llm/stream', async function* (options, next) {
+      const failure = await awaitManagedRoute(ctx, options)
+      if (failure) {
+        yield { type: 'finish', reason: { kind: 'error', failure } }
+        return
+      }
+      yield* next()
+    })
+  }
   let settleManagerSettings = () => {}
   if (typeof ctx.inject === 'function') {
     let settled = false
@@ -257,7 +329,29 @@ export function apply(ctx, config = {}) {
   if (typeof ctx.inject === 'function') {
     ctx.inject(['settings'], (scope) => {
       if (typeof scope.settings?.register !== 'function' || typeof scope.settings?.get !== 'function') {
-        settleManagerSettings()
+        if (typeof scope.settings?.update !== 'function' || typeof scope.settings?.describe !== 'function') {
+          settleManagerSettings()
+          return
+        }
+        // DSH 0.2: there is no namespace to register. Without this branch the
+        // manager never received a settings handle, so every route write was
+        // skipped while still reporting success.
+        const runtime = managerRuntime(ctx)
+        runtime.settings = profileSettingsAdapter(scope.settings)
+        runtime.profileSettings = true
+        runtime.mainModel = hostDefaultTokensModel(scope.settings) || runtime.mainModel || TOKENSAPI.mainModel
+        runtime.persistedMain = mainRouteSnapshot(runtime)
+        Promise.resolve()
+          .then(async () => {
+            const models =
+              runtime.models.length > 0 ? runtime.models : [{ id: runtime.mainModel, name: runtime.mainModel }]
+            await synchronizeMainModel(ctx, runtime.mainModel, models)
+            await hideFallbackModel(ctx)
+          })
+          .catch((error) => {
+            console.error(`[tokens-model-manager] saved model route activation skipped: ${error}`)
+          })
+          .finally(settleManagerSettings)
         return
       }
       try {
@@ -976,7 +1070,9 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
                 ? options.messages
                 : await convertImagesToEvidence(ctx, options.messages, options.signal, self)
             const messages = restoreUpstreamSource(routedMessages, providerId, upstream)
-            yield* ctx.llm.stream({ ...options, provider: upstream, messages })
+            const forwarded = { ...options, provider: upstream, messages }
+            bridgeForwardedRequests.add(forwarded)
+            yield* ctx.llm.stream(forwarded)
           })()
         },
         evidenceCache,
@@ -2526,6 +2622,48 @@ function reconcileVisionModeByModel(models, value) {
   return modes
 }
 
+/**
+ * Models hidden from both the settings picker and the composer, by exact id.
+ *
+ * Deliberately an explicit list and not a capability guess: inferring
+ * "unusable" from missing metadata is what hid models that worked and left the
+ * two lists disagreeing. Empty by default — a new model shows up normally, and
+ * an id belongs here only once it is confirmed unusable.
+ */
+const HIDDEN_MANAGED_MODEL_IDS = new Set([])
+
+/**
+ * Whether a model is on the explicit hidden list.
+ * @param id - managed model id.
+ * @returns true when neither list should offer it.
+ */
+function isHiddenManagedModel(id) {
+  return HIDDEN_MANAGED_MODEL_IDS.has(normalizeModelId(id, ''))
+}
+
+/**
+ * Image handling for a model that declares none.
+ *
+ * The vision bridge keeps the main model text-only and sends images to the
+ * vision model, which works whatever the main model actually supports. It is
+ * therefore the safe default that makes every listed model usable the moment
+ * it is selected; a model that really handles images natively is one settings
+ * change away, and only loses image fidelity until then.
+ */
+const DEFAULT_UNKNOWN_VISION_MODE = 'bridge'
+
+/**
+ * Capability for routing, with the undeclared case resolved to the default.
+ * @param model - managed model descriptor.
+ * @param preferredMode - the user's recorded choice for this model, if any.
+ * @returns a capability whose visionMode is never 'unknown'.
+ */
+function managedModelRouteCapability(model, preferredMode = '') {
+  const capability = managedModelCapability(model, preferredMode)
+  if (capability.visionMode !== 'unknown') return capability
+  return { input: ['text'], visionMode: DEFAULT_UNKNOWN_VISION_MODE, source: 'default' }
+}
+
 function managedModelCapability(model, preferredMode = '') {
   const declared = Array.isArray(model?.input)
     ? model.input
@@ -2757,8 +2895,9 @@ function selectedVisionModel(ctx) {
 }
 
 function publicModels(runtime) {
-  const models = [...runtime.models]
+  const models = [...runtime.models].filter((model) => !isHiddenManagedModel(model?.id))
   for (const id of [runtime.mainModel, runtime.visionModel]) {
+    if (!id || isHiddenManagedModel(id)) continue
     if (!models.some((model) => model.id === id)) models.push({ id, name: id })
   }
   return models.map((model) => {
@@ -2830,13 +2969,7 @@ async function parseManagedModels(response) {
 async function resolveManagedMainRoute(ctx, mainModel) {
   const runtime = managerRuntime(ctx)
   const selected = runtime.models.find((model) => model.id === mainModel) ?? { id: mainModel, name: mainModel }
-  const capability = managedModelCapability(selected, runtime.visionModeByModel[mainModel])
-  if (capability.visionMode === 'unknown') {
-    throw new ManagedCredentialError(
-      'unknown_capability',
-      `模型 "${mainModel}" 没有声明图片能力，请选择由主模型原生处理图片或使用视觉模型处理`,
-    )
-  }
+  const capability = managedModelRouteCapability(selected, runtime.visionModeByModel[mainModel])
   const input = capability.input
   const api = configuredManagedModelApi(selected, runtime.protocolByModel[mainModel])
   let visionMode = capability.visionMode
@@ -2849,16 +2982,28 @@ async function resolveManagedMainRoute(ctx, mainModel) {
   }
 }
 
+/**
+ * Every model the composer may select, as one route catalog.
+ *
+ * DSH 0.2 checks a Session's selection against the models the Host advertises
+ * (session-controller requireModel), so a model missing from this list cannot
+ * be selected at all. The route therefore carries the whole managed catalog
+ * and `api` only decides the wire protocol in force right now; picking a model
+ * of another protocol switches the route to it. A model whose protocol cannot
+ * be determined at all stays out: it could be listed but never routed.
+ *
+ * @param runtime - manager runtime holding the per-model vision choices.
+ * @param models - the managed catalog from TokensAPI.
+ * @param api - the wire protocol this route speaks after the current selection.
+ * @returns route model entries for every selectable managed model.
+ */
 function managedConversationModels(runtime, models, api) {
   const visible = []
   for (const model of models) {
-    try {
-      if (!managedModelApis(model).includes(api)) continue
-    } catch {
-      continue
-    }
-    const capability = managedModelCapability(model, runtime.visionModeByModel[model.id])
-    if (capability.visionMode === 'unknown') continue
+    if (isHiddenManagedModel(model?.id)) continue
+    // An undeclared image capability resolves to the bridge default, so the
+    // entry is text-only and the model is usable as soon as it is selected.
+    const capability = managedModelRouteCapability(model, runtime.visionModeByModel[model.id])
     const contextWindow = managedModelContextWindow(model)
     const maxTokens = managedModelMaxTokens(model)
     visible.push({
@@ -2875,7 +3020,173 @@ function managedConversationModels(runtime, models, api) {
   return visible
 }
 
+/**
+ * Whether the stored TokensAPI route already says what a write would say.
+ *
+ * On DSH 0.2 every route write rewrites the profile document and reconciles
+ * the Loader, which takes about a second and holds the conversation picker
+ * until it finishes. Picking another model of the same protocol changes
+ * nothing the Host routes on, so that write is skipped. Model order is ignored
+ * (it only puts the main model first); every field this plugin sets must match
+ * exactly, so a doubtful comparison falls back to writing.
+ *
+ * @param stored - the route as the settings service reports it.
+ * @param desired - the route this plugin is about to write.
+ * @returns true only when the write would change nothing that matters.
+ */
+function sameManagedRoute(stored, desired) {
+  if (!stored || typeof stored !== 'object') return false
+  for (const [key, value] of Object.entries(desired)) {
+    if (key === 'models') continue
+    if (JSON.stringify(stored[key]) !== JSON.stringify(value)) return false
+  }
+  const storedModels = Array.isArray(stored.models) ? stored.models : null
+  if (!storedModels || storedModels.length !== desired.models.length) return false
+  const byId = new Map(storedModels.map((entry) => [entry?.id, entry]))
+  return desired.models.every((entry) => {
+    const current = byId.get(entry.id)
+    if (!current) return false
+    return Object.entries(entry).every(([key, value]) => JSON.stringify(current[key]) === JSON.stringify(value))
+  })
+}
+
+/** Model calls our vision bridge forwards upstream; they were gated once already. */
+const bridgeForwardedRequests = new WeakSet()
+
+/**
+ * Make the runtime describe `mainModel` at once, before anything is written.
+ * @param ctx - plugin context.
+ * @param mainModel - managed model id.
+ * @returns the resolved route.
+ */
+async function applyMainRouteState(ctx, mainModel) {
+  const runtime = managerRuntime(ctx)
+  const route = await resolveManagedMainRoute(ctx, mainModel)
+  runtime.tokensMainProvider = route.provider
+  runtime.visionMode = route.visionMode
+  if (runtime.activeChannel !== 'official') runtime.mainProvider = route.provider
+  return route
+}
+
+function mainRouteSnapshot(runtime) {
+  return {
+    model: runtime.mainModel,
+    protocolByModel: runtime.protocolByModel,
+    visionModeByModel: runtime.visionModeByModel,
+  }
+}
+
+/**
+ * Persist the route for `mainModel` in the background (DSH 0.2).
+ *
+ * A route write takes about a second on DSH 0.2 (it rewrites the profile and
+ * reconciles the Loader). Selection therefore returns before it finishes, and
+ * one worker performs the writes in order. A newer target replaces a queued
+ * one, so after rapid picks only the last choice is written, never out of order.
+ * When the last choice fails to persist, the runtime returns to the last route
+ * that did persist and records why; the llm/stream gate and the composer then
+ * report it.
+ *
+ * @param ctx - plugin context.
+ * @param mainModel - managed model id to persist.
+ * @param models - managed catalog to register.
+ * @returns the worker, settled once no write is pending.
+ */
+function queueMainRoutePersist(ctx, mainModel, models) {
+  const runtime = managerRuntime(ctx)
+  runtime.routeTarget = { model: mainModel, models }
+  runtime.routeFailure = null
+  if (!runtime.routeWorker) {
+    runtime.routeWorker = (async () => {
+      try {
+        for (;;) {
+          const target = runtime.routeTarget
+          try {
+            await synchronizeMainModelNow(ctx, target.model, target.models)
+            if (runtime.routeTarget === target) runtime.persistedMain = mainRouteSnapshot(runtime)
+          } catch (error) {
+            if (runtime.routeTarget === target) {
+              await rollbackMainRoute(ctx, target, error)
+              return
+            }
+            // Superseded while writing: the next pass writes the newer target.
+          }
+          if (runtime.routeTarget === target) return
+        }
+      } finally {
+        runtime.routeWorker = null
+      }
+    })()
+  }
+  return runtime.routeWorker
+}
+
+async function rollbackMainRoute(ctx, target, error) {
+  const runtime = managerRuntime(ctx)
+  const previous = runtime.persistedMain
+  const message = typeof error?.message === 'string' && error.message ? error.message : String(error)
+  runtime.routeFailure = {
+    model: target.model,
+    restoredModel: previous?.model ?? '',
+    code: typeof error?.code === 'string' ? error.code : 'route_write_failed',
+    message,
+    error,
+  }
+  console.error(`[tokens-model-manager] switching to ${target.model} failed: ${message}`)
+  if (!previous) return
+  runtime.mainModel = previous.model
+  runtime.protocolByModel = previous.protocolByModel
+  runtime.visionModeByModel = previous.visionModeByModel
+  await applyMainRouteState(ctx, previous.model).catch(() => {})
+}
+
+/**
+ * Hold a TokensAPI model call until a pending route switch has landed, so the
+ * first message after a switch already uses the new protocol.
+ * @param ctx - plugin context.
+ * @param options - the model call.
+ * @returns a failure to report instead of dispatching, or null to dispatch.
+ */
+async function awaitManagedRoute(ctx, options) {
+  const runtime = managerRuntime(ctx)
+  if (!runtime.profileSettings || bridgeForwardedRequests.has(options)) return null
+  if (options?.provider !== TOKENSAPI.providerId && options?.provider !== TOKENSAPI.agentProviderId) return null
+  const worker = runtime.routeWorker
+  if (worker) {
+    const signal = options?.signal
+    await new Promise((resolve) => {
+      if (signal?.aborted) return resolve()
+      const onAbort = () => resolve()
+      signal?.addEventListener?.('abort', onAbort, { once: true })
+      worker
+        .catch(() => {})
+        .then(() => {
+          signal?.removeEventListener?.('abort', onAbort)
+          resolve()
+        })
+    })
+  }
+  const failure = runtime.routeFailure
+  if (failure && failure.model === options.model) {
+    const restored = failure.restoredModel ? `，已恢复为 ${failure.restoredModel}` : ''
+    return { code: 'INVALID_CONFIG', message: `切换到 ${failure.model} 失败${restored}：${failure.message}` }
+  }
+  return null
+}
+
 async function synchronizeMainModel(ctx, mainModel, models) {
+  const runtime = managerRuntime(ctx)
+  if (!runtime.profileSettings) return synchronizeMainModelNow(ctx, mainModel, models)
+  // DSH 0.2: every route write goes through the one worker, so a status
+  // refresh can never race a selection.
+  const route = await applyMainRouteState(ctx, mainModel)
+  await queueMainRoutePersist(ctx, mainModel, models)
+  const failure = runtime.routeFailure
+  if (failure && failure.model === mainModel) throw failure.error
+  return route
+}
+
+async function synchronizeMainModelNow(ctx, mainModel, models) {
   const runtime = managerRuntime(ctx)
   const route = await resolveManagedMainRoute(ctx, mainModel)
   if (runtime.settings?.update) {
@@ -2897,18 +3208,25 @@ async function synchronizeMainModel(ctx, mainModel, models) {
     // a renderer capability token that an internal LLM request must not have.
     const isClaudeRoute = route.api === 'anthropic-messages'
     const providerBaseURL = isClaudeRoute ? await ensureClaudeProxy(ctx) : runtime.baseURL
-    await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
-      providers: {
-        [TOKENSAPI.providerId]: {
-          displayName: 'TokensAPI',
-          apiKeyEnv: TOKENSAPI.credentialRef,
-          api: route.api,
-          baseURL: providerBaseURL,
-          ...(contextWindow === undefined ? {} : { defaultContextWindow: contextWindow }),
-          models: conversationModels,
-        },
-      },
-    })
+    const desiredRoute = {
+      displayName: 'TokensAPI',
+      apiKeyEnv: TOKENSAPI.credentialRef,
+      api: route.api,
+      baseURL: providerBaseURL,
+      ...(contextWindow === undefined ? {} : { defaultContextWindow: contextWindow }),
+      models: conversationModels,
+    }
+    let storedRoute
+    try {
+      storedRoute = runtime.settings.get?.(TOKENSAPI.llmSettingsNamespace)?.providers?.[TOKENSAPI.providerId]
+    } catch {
+      storedRoute = undefined
+    }
+    if (!sameManagedRoute(storedRoute, desiredRoute)) {
+      await runtime.settings.update(TOKENSAPI.llmSettingsNamespace, {
+        providers: { [TOKENSAPI.providerId]: desiredRoute },
+      })
+    }
   }
   runtime.tokensMainProvider = route.provider
   runtime.visionMode = route.visionMode
@@ -3345,13 +3663,7 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
     const requestedMode = Object.hasOwn(value ?? {}, 'visionMode')
       ? normalizeVisionMode(value.visionMode)
       : normalizeVisionMode(runtime.visionModeByModel[mainModel])
-    if (!requestedMode) {
-      throw new ManagedCredentialError(
-        'unknown_capability',
-        `模型 "${mainModel}" 没有声明图片能力，请先选择图片处理方式`,
-      )
-    }
-    nextVisionModeByModel[mainModel] = requestedMode
+    nextVisionModeByModel[mainModel] = requestedMode || DEFAULT_UNKNOWN_VISION_MODE
   } else {
     delete nextVisionModeByModel[mainModel]
   }
@@ -3445,14 +3757,9 @@ async function selectMainModel(ctx, value, request = globalThis.fetch) {
   const automaticCapability = managedModelCapability(selected)
   const nextVisionModeByModel = reconcileVisionModeByModel(runtime.models, runtime.visionModeByModel)
   if (automaticCapability.source === 'unknown') {
-    const requestedMode = normalizeVisionMode(runtime.visionModeByModel[model])
-    if (!requestedMode) {
-      throw new ManagedCredentialError(
-        'unknown_capability',
-        `模型 "${model}" 没有声明图片能力，请先在设置页选择图片处理方式`,
-      )
-    }
-    nextVisionModeByModel[model] = requestedMode
+    // Record the default rather than refusing: the model is usable at once and
+    // the settings page shows the mode in force, which the user can change.
+    nextVisionModeByModel[model] = normalizeVisionMode(runtime.visionModeByModel[model]) || DEFAULT_UNKNOWN_VISION_MODE
   } else {
     delete nextVisionModeByModel[model]
   }
@@ -3461,6 +3768,26 @@ async function selectMainModel(ctx, value, request = globalThis.fetch) {
   const previousVisionModeByModel = runtime.visionModeByModel
   runtime.protocolByModel = { ...runtime.protocolByModel, [model]: api }
   runtime.visionModeByModel = nextVisionModeByModel
+  if (runtime.profileSettings) {
+    // DSH 0.2: the composer shows the new model immediately; the route write
+    // finishes in the background and model calls wait for it at the gate.
+    try {
+      runtime.mainModel = model
+      await applyMainRouteState(ctx, model)
+    } catch (error) {
+      runtime.mainModel = previousModel
+      runtime.protocolByModel = previousProtocolByModel
+      runtime.visionModeByModel = previousVisionModeByModel
+      throw error
+    }
+    queueMainRoutePersist(ctx, model, runtime.models)
+    await runtime.settings.update(TOKENSAPI.settingsNamespace, {
+      mainModel: model,
+      protocolByModel: runtime.protocolByModel,
+      visionModeByModel: runtime.visionModeByModel,
+    })
+    return modelManagerStatus(ctx, request, { refreshModels: false })
+  }
   try {
     await synchronizeMainModel(ctx, model, runtime.models)
     if (runtime.settings?.update) {
@@ -3745,6 +4072,20 @@ function registerModelManagerRoute(ctx, host) {
           send(200, await discoverFallback(host, body, request))
         } else if (body?.action === 'configureFallback') {
           send(200, await configureFallback(host, body, request))
+        } else if (body?.action === 'awaitMainModel') {
+          const runtime = managerRuntime(host)
+          if (runtime.routeWorker) await runtime.routeWorker.catch(() => {})
+          const failure = runtime.routeFailure
+          send(200, {
+            failure: failure
+              ? {
+                  model: failure.model,
+                  restoredModel: failure.restoredModel,
+                  code: failure.code,
+                  message: failure.message,
+                }
+              : null,
+          })
         } else if (body?.action === 'selectMainModel') {
           send(200, await selectMainModel(host, body, request))
         } else if (Object.hasOwn(body ?? {}, 'officialApiKey')) {
@@ -3841,6 +4182,9 @@ function registerConfigRoute(ctx) {
 // both rather than through the HTTP route.
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
 export const __modelManager = {
+  hiddenManagedModelIds: HIDDEN_MANAGED_MODEL_IDS,
+  publicModels,
+  managedConversationModels,
   anthropicUpstreamRoot,
   ensureClaudeProxy,
   closeClaudeProxy,

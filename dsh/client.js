@@ -87,6 +87,23 @@ window.__ModuleLoader__.load({
       return error
     }
 
+    /**
+     * Report a managed selection failure the way the composer renders failures.
+     *
+     * The conversation model seat calls select() as
+     * `void select(selection).then(settleSelection)` with no catch, so a
+     * rejected promise shows the user nothing. Returning the Host's own
+     * RemoteResult failure shape puts the localized reason in the toast.
+     *
+     * @param error - the failure raised while persisting the selection.
+     * @returns a RemoteResult failure carrying the localized reason.
+     */
+    function managedSelectionFailure(error) {
+      var code = typeof error?.code === 'string' && error.code ? error.code : 'request'
+      var message = typeof error?.message === 'string' && error.message ? error.message : String(error)
+      return { ok: false, error: { code: code, message: message } }
+    }
+
     function imageFilesOf(event) {
       var items = event.clipboardData?.items
       if (!items) return []
@@ -2750,89 +2767,73 @@ window.__ModuleLoader__.load({
      * selection to the native provider or visual bridge; saved legacy routes
      * remain available without exposing duplicate implementation groups.
      */
-    function managedCatalogProjection(snapshot, mainModel, mainProvider, managedModels) {
-      var provider = typeof mainProvider === 'string' ? mainProvider.trim() : ''
-      var model = typeof mainModel === 'string' ? mainModel.trim() : ''
+    /**
+     * Show the Host catalog as one list.
+     *
+     * DSH draws one titled section per registered provider and cannot hide a
+     * provider, so the TokensAPI route, its vision wrapper and the DeepSeek
+     * account each get a section. This keeps only the group the active route
+     * selects through, under one name. It only removes and renames: every model
+     * shown is one the Host itself advertises, so a pick can never name a model
+     * the Host would refuse as unavailable.
+     *
+     * @param snapshot - the directory state as the Host published it.
+     * @param mainProvider - provider of the managed main model.
+     * @returns the groups and failures to display.
+     */
+    function managedDisplayCatalog(snapshot, mainProvider) {
       var groups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
       var failures = Array.isArray(snapshot?.failures) ? snapshot.failures : []
-      if (!provider) return { groups: groups, failures: failures }
-
-      var cleanModels = (group) => {
-        var cleaned = (Array.isArray(group?.models) ? group.models : []).map((entry) => {
-          var id = typeof entry?.id === 'string' ? entry.id : ''
-          var rawName = typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : id
-          return { ...entry, name: rawName.replace(/\s*\(modlens vision\)\s*$/i, '') }
-        })
-        if (!model) return cleaned
-        return cleaned.filter((entry) => entry?.id === model).concat(cleaned.filter((entry) => entry?.id !== model))
-      }
-      var fullManagedModels = (Array.isArray(managedModels) ? managedModels : [])
-        .filter(
-          (entry) =>
-            typeof entry?.id === 'string' &&
-            entry.id.trim() !== '' &&
-            Array.isArray(entry?.protocols) &&
-            entry.protocols.length > 0 &&
-            entry?.visionMode !== 'unknown',
-        )
-        .map((entry) => ({
-          id: entry.id.trim(),
-          name:
-            typeof entry?.name === 'string' && entry.name.trim()
-              ? entry.name.trim().replace(/\s*\(modlens vision\)\s*$/i, '')
-              : entry.id.trim(),
-        }))
-      var projectGroup = (group, name, complete) => {
-        if (!group) return null
-        var models = cleanModels(group)
-        if (complete === true && fullManagedModels.length > 0) {
-          var hostById = new Map(models.map((entry) => [entry?.id, entry]))
-          models = fullManagedModels.map((entry) => ({ ...(hostById.get(entry.id) || {}), ...entry }))
-          if (model) {
-            models = models.filter((entry) => entry?.id === model).concat(models.filter((entry) => entry?.id !== model))
-          }
-        }
-        return models.length > 0 ? { ...group, name: name, models: models } : null
-      }
-      var visibleGroups = []
-      if (provider === 'tokensapi' || provider === 'modlens-tokensapi') {
-        var bridgeGroup = groups.find((entry) => entry?.id === 'modlens-tokensapi')
-        var directGroup = groups.find((entry) => entry?.id === 'tokensapi')
-        var tokens = projectGroup(provider === 'tokensapi' ? directGroup : bridgeGroup, 'TokensAPI', true)
-        if (tokens) visibleGroups = [tokens]
-      } else if (provider === 'modlens-tokens-fallback') {
-        var fallback = projectGroup(
-          groups.find((entry) => entry?.id === 'modlens-tokens-fallback'),
-          '备用线路',
-        )
-        if (fallback) visibleGroups = [fallback]
-      } else {
-        var current = projectGroup(
-          groups.find((entry) => entry?.id === provider),
-          'TokensAPI',
-        )
-        if (current) visibleGroups = [current]
-      }
-      var visibleIds = new Set(visibleGroups.map((entry) => entry.id))
+      var tokensIds = ['tokensapi', 'modlens-tokensapi']
+      var fallbackIds = ['modlens-tokens-fallback']
+      var preferred = fallbackIds.includes(mainProvider) ? fallbackIds : tokensIds
+      var chosen =
+        groups.find((group) => group?.id === mainProvider && preferred.includes(group.id)) ||
+        groups.find((group) => preferred.includes(group?.id))
+      // Nothing of ours is loaded yet: show the Host catalog unchanged rather
+      // than an empty menu.
+      if (!chosen) return { groups: groups, failures: failures }
+      var name = fallbackIds.includes(chosen.id) ? managerLabels().fallbackRoute : 'TokensAPI'
+      // The direct and vision routes carry the same models; showing them under
+      // one fixed id keeps React from rebuilding the list when the route flips.
+      var shownId = displayProviderOf(chosen.id)
+      var models = (Array.isArray(chosen.models) ? chosen.models : []).map((entry) => {
+        var label = typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : entry?.id
+        return { ...entry, name: String(label ?? '').replace(/\s*\(modlens vision\)\s*$/i, '') }
+      })
       return {
-        groups: visibleGroups,
-        failures: failures.filter((entry) => visibleIds.has(entry?.id)),
+        groups: [{ ...chosen, id: shownId, name: name, models: models }],
+        failures: failures.filter((entry) => entry?.id === chosen.id).map((entry) => ({ ...entry, id: shownId })),
       }
     }
 
-    function sameManagedCatalog(left, right) {
+    /**
+     * The provider id the composer shows for a Host provider. Both TokensAPI
+     * routes appear as one list, so both map to one id.
+     * @param provider - Host provider id.
+     * @returns the id shown in the composer.
+     */
+    function displayProviderOf(provider) {
+      return provider === 'tokensapi' || provider === 'modlens-tokensapi' ? 'tokensapi' : provider
+    }
+
+    function sameSelection(left, right) {
+      if (!left || !right) return left === right
+      return (
+        left.provider === right.provider && left.model === right.model && left.reasoningEffort === right.reasoningEffort
+      )
+    }
+
+    function sameDisplayCatalog(left, right) {
       if (left.length !== right.length) return false
-      return left.every((entry, index) => {
-        var candidate = right[index]
-        if (entry?.id !== candidate?.id || entry?.name !== candidate?.name) return false
-        var models = Array.isArray(entry?.models) ? entry.models : []
-        var candidateModels = Array.isArray(candidate?.models) ? candidate.models : []
+      return left.every((group, index) => {
+        var other = right[index]
+        if (group?.id !== other?.id || group?.name !== other?.name) return false
+        var models = Array.isArray(group?.models) ? group.models : []
+        var otherModels = Array.isArray(other?.models) ? other.models : []
         return (
-          models.length === candidateModels.length &&
-          models.every(
-            (model, modelIndex) =>
-              model?.id === candidateModels[modelIndex]?.id && model?.name === candidateModels[modelIndex]?.name,
-          )
+          models.length === otherModels.length &&
+          models.every((model, i) => model?.id === otherModels[i]?.id && model?.name === otherModels[i]?.name)
         )
       })
     }
@@ -2849,6 +2850,14 @@ window.__ModuleLoader__.load({
     // the model-manager route.  Internal activation must bypass that write or
     // startup/session navigation would POST the same selection repeatedly.
     var managedSelectionGuards = new WeakMap()
+    // The composer store shows a presentation (one list, no loading flashes);
+    // decisions here must read what the Host actually published instead.
+    var managedHostViews = new WeakMap()
+    function hostViewOf(directory) {
+      var read = managedHostViews.get(directory)
+      var view = typeof read === 'function' ? read() : undefined
+      return view ?? directory?.store?.getSnapshot?.()
+    }
     async function selectDirectory(directory, selection, internal) {
       if (internal === true) {
         var depth = managedSelectionGuards.get(directory) || 0
@@ -2863,6 +2872,19 @@ window.__ModuleLoader__.load({
       return directory.select(selection)
     }
 
+    // The Session's own model choice, `null` when it has none, or `undefined`
+    // while that is not yet known. DSH 0.2 fills the directory's `current` with
+    // the catalog default, so only the durable projection's `next` tells a
+    // chosen model apart; DSH 0.1 keeps reading `current` as before.
+    function sessionOwnSelection(sessions, directory) {
+      var projected = directory?.projected
+      if (sessions?.list?.getSnapshot?.()?.current || typeof projected?.getSnapshot !== 'function') {
+        return directory.store?.getSnapshot?.()?.current ?? null
+      }
+      var view = projected.getSnapshot()
+      return view === undefined ? undefined : (view?.next ?? null)
+    }
+
     async function synchronizeCurrentSessionModel(
       sessions,
       modelDirectories,
@@ -2870,6 +2892,7 @@ window.__ModuleLoader__.load({
       mainProvider,
       retry,
       respectExisting,
+      targetSessionId,
     ) {
       if (typeof mainModel !== 'string' || mainModel.trim() === '') return false
       var provider =
@@ -2879,7 +2902,7 @@ window.__ModuleLoader__.load({
           ? mainProvider
           : 'modlens-tokensapi'
       var model = mainModel.trim()
-      var sessionId = sessions?.list?.getSnapshot?.()?.current
+      var sessionId = targetSessionId || sessions?.list?.getSnapshot?.()?.current
       if (!sessionId || typeof modelDirectories?.directoryFor !== 'function') return false
       // Addressed subagent sessions intentionally do not expose model selection.
       if (typeof sessions?.subagentAddress === 'function' && sessions.subagentAddress(sessionId)) {
@@ -2916,13 +2939,19 @@ window.__ModuleLoader__.load({
       // session navigation, preserve any existing manual or restored choice;
       // the managed model is only the default for sessions without a choice.
       if (respectExisting === true) {
-        var existingSelection = directory.store?.getSnapshot?.()?.current
+        var existingSelection = sessionOwnSelection(sessions, directory)
+        for (attempt = 0; existingSelection === undefined && attempt + 1 < attempts; attempt += 1) {
+          if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+          existingSelection = sessionOwnSelection(sessions, directory)
+        }
+        // A Session whose history never loaded may still hold a choice.
+        if (existingSelection === undefined) return false
         if (existingSelection && typeof existingSelection.model === 'string' && existingSelection.model !== '') {
           return false
         }
       }
       var selectionVisible = () => {
-        var snapshot = directory.store?.getSnapshot?.()
+        var snapshot = hostViewOf(directory)
         if (!snapshot || snapshot.current?.provider !== provider || snapshot.current?.model !== model) return false
         return (
           Array.isArray(snapshot.groups) &&
@@ -2940,7 +2969,13 @@ window.__ModuleLoader__.load({
         for (attempt = 0; attempt < attempts; attempt += 1) {
           try {
             var loaded = await directory.load()
-            var groups = Array.isArray(loaded?.groups) ? loaded.groups : directory.store?.getSnapshot?.()?.groups
+            // With the presentation installed, the store shows one merged list;
+            // ask what the Host itself published. Otherwise load() answers it.
+            var groups = managedHostViews.has(directory)
+              ? hostViewOf(directory)?.groups
+              : Array.isArray(loaded?.groups)
+                ? loaded.groups
+                : directory.store?.getSnapshot?.()?.groups
             available =
               Array.isArray(groups) &&
               groups.some(
@@ -2988,17 +3023,36 @@ window.__ModuleLoader__.load({
             var initialSelection = activeSelectionFromStatus(body)
             var desiredMainModel = initialSelection.model
             var desiredMainProvider = initialSelection.provider
-            var managedModelCatalog = Array.isArray(body.models) ? body.models : []
             var desiredSelectionEnabled = body.authenticated === true
             var lastActivationKey = ''
-            var projectedDirectories = new WeakMap()
-            var projectedDirectoryEntries = new Set()
-            var projectionStops = []
-            var synchronizeModelCatalog = (models) => {
-              if (!Array.isArray(models)) return
-              managedModelCatalog = models
-              for (var entry of projectedDirectoryEntries) entry.apply()
+            var managedSelections = new WeakMap()
+            var displayRefreshers = new Set()
+            var refreshDisplays = () => {
+              for (var refresh of displayRefreshers) refresh()
             }
+            var projectionStops = []
+            // DSH 0.1 reports the selected Session as the list's `current`. DSH 0.2
+            // removed it; the composer instead asks the resolver for the Session
+            // it renders, which the directoryFor hook below records.
+            var composerSessionId = null
+            var currentSessionId = () => scope.sessions?.list?.getSnapshot?.()?.current || composerSessionId
+            var noteComposerSession = (sessionId) => {
+              if (!sessionId || sessionId === composerSessionId) return
+              if (typeof scope.sessions?.subagentAddress === 'function' && scope.sessions.subagentAddress(sessionId))
+                return
+              composerSessionId = sessionId
+              // DSH 0.1 already activates on Session list changes.
+              if (scope.sessions?.list?.getSnapshot?.()?.current) return
+              Promise.resolve()
+                .then(() => activateDesiredSelection(true))
+                .catch((error) => {
+                  console.error(`[tokens-model-manager] session model activation skipped: ${error}`)
+                })
+            }
+            // The settings section reports catalog refreshes through this callback.
+            // The Host owns the catalog the composer renders, so there is nothing
+            // left to mirror here; the contract stays so the section keeps working.
+            var synchronizeModelCatalog = () => {}
             var ensureManagedCatalogProjection = (directory) => {
               var store = directory?.store
               if (
@@ -3009,11 +3063,7 @@ window.__ModuleLoader__.load({
               ) {
                 return
               }
-              var installed = projectedDirectories.get(directory)
-              if (installed) {
-                installed.apply()
-                return
-              }
+              if (managedSelections.has(directory)) return
               var originalSelect = directory.select
               var providerFamily = (provider) => {
                 if (provider === 'tokensapi' || provider === 'modlens-tokensapi') return 'tokensapi'
@@ -3043,7 +3093,10 @@ window.__ModuleLoader__.load({
                 if (selectedModel === desiredMainModel && selectedProvider === desiredMainProvider) {
                   return originalSelect.call(directory, selection)
                 }
-                var previousSelection = directory.store?.getSnapshot?.()?.current
+                var previousSelection = hostViewOf(directory)?.current
+                // Show the pick at once; the Host confirms it a moment later.
+                optimisticSelection = selection
+                applyDisplay()
                 try {
                   var response = await managerFetch('/tokens/model-manager', {
                     method: 'POST',
@@ -3061,20 +3114,20 @@ window.__ModuleLoader__.load({
                   desiredMainModel = active.model
                   desiredMainProvider = active.provider
                   synchronizeModelCatalog(body.models)
-                  // The public menu contains every selectable managed model,
-                  // including models outside the currently active provider
-                  // protocol. Reconfigure the Host first, then reload and
-                  // select the resolved native/bridge route. This prevents a
-                  // Claude/GPT choice from being applied through the previous
-                  // model's adapter even for one transient selection.
+                  // The Host route now speaks this model's protocol. Reload so
+                  // the composer reads the switched route, then select through
+                  // it; every managed model is advertised, so the Host accepts
+                  // the id whichever protocol it belongs to.
                   if (typeof directory.load === 'function') await directory.load()
                   var result = await selectDirectory(
                     directory,
                     { ...selection, provider: active.provider, model: active.model },
                     true,
                   )
-                  for (var entry of projectedDirectoryEntries) entry.apply()
+                  optimisticSelection = null
+                  refreshDisplays()
                   notifySettingsSelectionChanged()
+                  if (result?.ok !== false) followRouteSwitch(active.model, previousSelection)
                   return result
                 } catch (error) {
                   if (
@@ -3088,64 +3141,157 @@ window.__ModuleLoader__.load({
                   } else if (typeof directory.load === 'function') {
                     await directory.load().catch(() => {})
                   }
-                  throw error
+                  optimisticSelection = null
+                  applyDisplay()
+                  // The composer renders a RemoteResult failure as a toast but
+                  // attaches no catch, so throwing here would fail silently —
+                  // which is exactly how "this model needs an image handling
+                  // mode" used to disappear.
+                  return managedSelectionFailure(error)
                 }
               }
+              // On DSH 0.2 the route write finishes after select() has resolved.
+              // When it fails, the Host rolls back and model calls report why;
+              // the composer must not keep showing the model that was undone.
+              var followRouteSwitch = (model, previous) => {
+                managerFetch('/tokens/model-manager', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ action: 'awaitMainModel' }),
+                })
+                  .then((response) => response.json())
+                  .then(async (body) => {
+                    var failure = body?.failure
+                    if (!failure || failure.model !== model) return
+                    console.error(`[tokens-model-manager] switching to ${model} failed: ${failure.message}`)
+                    var status = await managerFetch('/tokens/model-manager', { cache: 'no-store' }).then((response) =>
+                      response.json(),
+                    )
+                    var restored = activeSelectionFromStatus(status)
+                    if (restored.model && restored.provider) {
+                      desiredMainModel = restored.model
+                      desiredMainProvider = restored.provider
+                    }
+                    if (
+                      previous &&
+                      typeof previous.model === 'string' &&
+                      previous.model &&
+                      typeof previous.provider === 'string' &&
+                      previous.provider
+                    ) {
+                      await selectDirectory(directory, previous, true)
+                    }
+                    refreshDisplays()
+                    notifySettingsSelectionChanged()
+                  })
+                  .catch(() => {
+                    // An older Host has no awaitMainModel action; nothing to follow.
+                  })
+              }
               directory.select = selectFromConversation
+              managedSelections.set(directory, originalSelect)
+              projectionStops.push(() => {
+                if (directory.select === selectFromConversation) directory.select = originalSelect
+                managedSelections.delete(directory)
+              })
+              // The composer store carries a presentation of the Host state:
+              // - one list under a fixed id, so a native/vision route flip does
+              //   not rebuild it;
+              // - the Host's own catalog refreshes (loading) and in-flight
+              //   selections (pending) are not shown, so nothing spins or
+              //   blinks; a refreshed catalog replaces the list only when its
+              //   content changed, and an unchanged one reuses the same arrays.
+              // The Host state itself stays readable through hostViewOf().
               var applying = false
-              var sourceSnapshot = null
-              var projectedGroups = null
-              var applyProjection = () => {
+              var optimisticSelection = null
+              var host = { groups: null, failures: null, current: null }
+              var shown = null
+              var applyDisplay = () => {
                 if (applying) return
                 var snapshot = store.getSnapshot()
-                // Projection is presentation-only: retain the full last Host
-                // catalog so changing native/bridge does not lose the hidden
-                // group before the next catalog reload. A Host replacement
-                // supplies a new groups array and replaces this cache.
-                if (!sourceSnapshot || snapshot.groups !== projectedGroups) {
-                  sourceSnapshot = { groups: snapshot.groups, failures: snapshot.failures }
+                // Anything that is not our own last presentation came from the Host.
+                if (!shown || snapshot.groups !== shown.groups) host.groups = snapshot.groups
+                if (!shown || snapshot.failures !== shown.failures) host.failures = snapshot.failures
+                if (!shown || snapshot.current !== shown.current) host.current = snapshot.current
+                var hostBusy = snapshot.status === 'loading' || snapshot.status === 'idle'
+                var groups = shown?.groups
+                var failures = shown?.failures
+                if (!shown || !hostBusy) {
+                  var next = managedDisplayCatalog(host, desiredMainProvider)
+                  var nextGroups = Array.isArray(next.groups) ? next.groups : []
+                  var nextFailures = Array.isArray(next.failures) ? next.failures : []
+                  groups = shown && sameDisplayCatalog(shown.groups, nextGroups) ? shown.groups : nextGroups
+                  failures = shown && sameDisplayCatalog(shown.failures, nextFailures) ? shown.failures : nextFailures
                 }
-                var projection = managedCatalogProjection(
-                  sourceSnapshot,
-                  desiredMainModel,
-                  desiredMainProvider,
-                  managedModelCatalog,
-                )
-                var currentGroups = Array.isArray(snapshot?.groups) ? snapshot.groups : []
-                var currentFailures = Array.isArray(snapshot?.failures) ? snapshot.failures : []
+                var wanted = optimisticSelection ?? snapshot.pending ?? host.current ?? shown?.current ?? null
+                var current = wanted ? { ...wanted, provider: displayProviderOf(wanted.provider) } : null
+                if (shown?.current && sameSelection(shown.current, current)) current = shown.current
+                var hasList = Array.isArray(groups) && groups.length > 0
+                var status = snapshot.status === 'error' || !hasList ? snapshot.status : 'ready'
                 if (
-                  sameManagedCatalog(currentGroups, projection.groups) &&
-                  sameManagedCatalog(currentFailures, projection.failures)
+                  snapshot.groups === groups &&
+                  snapshot.failures === failures &&
+                  snapshot.current === current &&
+                  snapshot.status === status &&
+                  snapshot.pending == null
                 ) {
+                  shown = { groups, failures, current }
                   return
                 }
                 applying = true
                 try {
                   store.update((state) => {
-                    state.groups = projection.groups
-                    state.failures = projection.failures
+                    state.groups = groups
+                    state.failures = failures
+                    state.current = current
+                    state.status = status
+                    state.pending = null
                   })
-                  projectedGroups = store.getSnapshot().groups
+                  var after = store.getSnapshot()
+                  shown = { groups: after.groups, failures: after.failures, current: after.current }
                 } finally {
                   applying = false
                 }
               }
-              var stop = store.subscribe(applyProjection)
-              projectedDirectories.set(directory, { apply: applyProjection })
-              projectedDirectoryEntries.add({ apply: applyProjection })
-              if (typeof stop === 'function') projectionStops.push(stop)
-              applyProjection()
+              managedHostViews.set(directory, () => {
+                var projected = directory.projected?.getSnapshot?.()
+                return {
+                  groups: host.groups,
+                  failures: host.failures,
+                  current: projected?.next ?? host.current,
+                }
+              })
+              projectionStops.push(() => managedHostViews.delete(directory))
+              var stopDisplay = store.subscribe.call(store, applyDisplay)
+              if (typeof stopDisplay === 'function') projectionStops.push(stopDisplay)
+              displayRefreshers.add(applyDisplay)
+              projectionStops.push(() => displayRefreshers.delete(applyDisplay))
+              applyDisplay()
+              // The composer resolves a directory once per Session but subscribes
+              // to its store on every render, so a subscription marks the Session
+              // on screen, including one reopened from the inject cache.
+              if (directory.sessionId) {
+                var baseSubscribe = store.subscribe
+                var observedSubscribe = function (listener) {
+                  noteComposerSession(directory.sessionId)
+                  return baseSubscribe.call(this, listener)
+                }
+                store.subscribe = observedSubscribe
+                projectionStops.push(() => {
+                  if (store.subscribe === observedSubscribe) store.subscribe = baseSubscribe
+                })
+              }
             }
             var activateDesiredSelection = (respectExisting) => {
               if (!desiredSelectionEnabled) return Promise.resolve(false)
-              var sessionId = scope.sessions?.list?.getSnapshot?.()?.current
+              var sessionId = currentSessionId()
               if (!sessionId) return Promise.resolve(false)
               var activationKey = `${sessionId}\u0000${desiredMainProvider}\u0000${desiredMainModel}`
               var selectionAlreadyVisible = false
               try {
                 var directory = scope.modelDirectories?.directoryFor?.(sessionId)
                 ensureManagedCatalogProjection(directory)
-                var snapshot = directory?.store?.getSnapshot?.()
+                var snapshot = directory ? hostViewOf(directory) : undefined
                 var provider =
                   desiredMainProvider === 'tokensapi' ||
                   desiredMainProvider === 'modlens-tokens-fallback' ||
@@ -3175,6 +3321,7 @@ window.__ModuleLoader__.load({
                   desiredMainProvider,
                   undefined,
                   respectExisting === true,
+                  sessionId,
                 ),
               )
                 .then((activated) => {
@@ -3200,6 +3347,45 @@ window.__ModuleLoader__.load({
               return activateDesiredSelection()
             }
             var Section = ModelManagerSection(react, synchronizeMainSelection, synchronizeModelCatalog)
+            // Project every directory as the resolver hands it out, and treat the
+            // Session the composer asks for as current. defineProperty lands on the
+            // service instance itself; assigning through the Cordis proxy would
+            // only reach a per-call shadow.
+            var resolver = scope.modelDirectories
+            if (resolver && typeof resolver.directoryFor === 'function') {
+              var baseDirectoryFor = resolver.directoryFor
+              var ownDirectoryFor = Object.getOwnPropertyDescriptor(resolver, 'directoryFor')
+              var managedDirectoryFor = function (sessionId) {
+                var directory = baseDirectoryFor.call(this, sessionId)
+                try {
+                  ensureManagedCatalogProjection(directory)
+                } catch {
+                  // A directory without a projectable store renders unchanged.
+                }
+                noteComposerSession(sessionId)
+                return directory
+              }
+              Object.defineProperty(resolver, 'directoryFor', {
+                value: managedDirectoryFor,
+                configurable: true,
+                writable: true,
+              })
+              projectionStops.push(() => {
+                if (Object.getOwnPropertyDescriptor(resolver, 'directoryFor')?.value !== managedDirectoryFor) return
+                if (ownDirectoryFor) Object.defineProperty(resolver, 'directoryFor', ownDirectoryFor)
+                else delete resolver.directoryFor
+              })
+              // Composers rendered before this plugin loaded resolved their
+              // directories unhooked; project those now. The store update makes
+              // the composer re-render and subscribe, which marks its Session.
+              try {
+                for (var liveDirectory of resolver.live?.directories?.values ?? []) {
+                  ensureManagedCatalogProjection(liveDirectory)
+                }
+              } catch {
+                // Older resolvers keep no enumerable live directories.
+              }
+            }
             // Existing sessions retain their own model selection across Host
             // restarts. Only apply the centrally saved model when a session has
             // no manual or restored selection of its own.
@@ -3208,22 +3394,25 @@ window.__ModuleLoader__.load({
                 console.error(`[tokens-model-manager] saved session model activation skipped: ${error}`)
               })
             }
+            var stopSessionSelectionSync = null
             if (typeof scope.sessions?.list?.subscribe === 'function') {
-              var stopSessionSelectionSync = scope.sessions.list.subscribe(() => {
+              stopSessionSelectionSync = scope.sessions.list.subscribe(() => {
                 Promise.resolve(activateDesiredSelection(true)).catch((error) => {
                   console.error(`[tokens-model-manager] session model activation skipped: ${error}`)
                 })
               })
-              if (typeof ctx.effect === 'function') {
-                ctx.effect(
-                  () => () => {
-                    stopSessionSelectionSync()
-                    for (var stopProjection of projectionStops.splice(0)) stopProjection()
-                    projectedDirectoryEntries.clear()
-                  },
-                  'tokens-model-manager: synchronize selected session model',
-                )
-              }
+            }
+            // Release the resolver hook and the store projections even when the
+            // Session list exposes no subscription, or disabling the plugin would
+            // leave directoryFor and the projected stores patched for good.
+            if (typeof ctx.effect === 'function') {
+              ctx.effect(
+                () => () => {
+                  if (stopSessionSelectionSync) stopSessionSelectionSync()
+                  for (var stopProjection of projectionStops.splice(0)) stopProjection()
+                },
+                'tokens-model-manager: synchronize selected session model',
+              )
             }
             // Mount the settings entry before refreshing the primary catalog,
             // so a stalled primary cannot keep fallback settings inaccessible.
@@ -3303,7 +3492,6 @@ window.__ModuleLoader__.load({
       modelRouteDescription: modelRouteDescription,
       routeControlState: routeControlState,
       activeSelectionFromStatus: activeSelectionFromStatus,
-      managedCatalogProjection: managedCatalogProjection,
       synchronizeCurrentSessionModel: synchronizeCurrentSessionModel,
       singleModelMenuItem: singleModelMenuItem,
       onModelSelectClick: onModelSelectClick,
