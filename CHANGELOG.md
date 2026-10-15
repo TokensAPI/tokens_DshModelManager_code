@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.24 - 2026-10-15
+
+- Keep the model manager's own settings across restarts on DSH 0.2 (TokensCowork 0.6): endpoint, vision model, per-model image handling and protocol, and the backup route. They are declared as volatile Cordis Config fields and saved to the profile with `settings.replace`, so a removed per-model override stays removed. The main model still follows the Host's saved default.
+- Declare that Config only when the Host's schemastery supports `volatile()`. DSH 0.1 (TokensCowork 0.5) has no such support and validates entry configs through any exported Config, so the plugin exports none there and loads exactly as before.
+- Bring settings saved under DSH 0.1 over once from `settings.yaml` or `settings.yaml.imported` in the DSH home, only while the profile holds none of its own; those files are never modified.
+- Restore the backup route as it was left at startup on DSH 0.2 instead of always hiding it, and turn off the Host's generated settings form over these internal fields.
+- Rewrite the LANG-007 runtime check for DSH 0.2: it boots a real profile with the real Loader, config editor and settings service, and switches the UI language through `settings.update`. On DSH 0.1 it keeps its original path. The plugin already followed the UI language on DSH 0.2; the old check could not run there.
+- Development-only dependencies: the published `@deepseek-ai/schemastery` 3.18.4 and 3.18.2 and `yaml` 2.9.0 for tests. No production dependency changes; at runtime the Host's own copies are used.
+- Known issue (unchanged): GPT models over the Responses API fail with `403 Unsupported client, use codex only` from the upstream channel behind TokensAPI.
+
 ## 0.2.23 - 2026-10-13
 
 - Write the TokensAPI route through DSH 0.2 profile settings. DSH 0.2 removed `settings.register`/`get`, and the plugin silently gave up at startup, so on TokensCowork 0.6 no route change ever reached the Host while every write still reported success. Writes now go to the `llm-pi-ai` profile entry with `settings.update`, and the main model is restored from the Host's persisted default.
