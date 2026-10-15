@@ -2,8 +2,10 @@
 // Optional contract integration against an existing Desktop runtime; no app build
 // or live model requests. DSH_RUNTIME_ROOT points at its package directory.
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { __modelManager, apply } from '../dsh/index.js';
@@ -21,41 +23,146 @@ if (process.env.DSH_SESSION_REPLAY === '1') {
         .map((line) => JSON.parse(line));
 }
 
-test('real DSH settings localize cached image failures after language changes', {
-    skip: !process.env.DSH_RUNTIME_ROOT,
-}, async () => {
-    const require = createRequire(resolve(process.env.DSH_RUNTIME_ROOT, 'package.json'));
-    const load = (name) => import(pathToFileURL(require.resolve(name)));
+/**
+ * DSH 0.1 kept the UI language in a settings namespace the plugin read with
+ * settings.get('locale'). That provider still exists there and is used as is.
+ * @returns the host's locale controls and the context the plugin is applied to.
+ */
+async function dsh01LocaleHost(load, z, settingsModule) {
     const { Context } = await load('@deepseek-ai/cordis');
-    const { SettingsProvider } = await load('@deepseek-ai/dsh-settings');
-    const { default: z } = await load('@deepseek-ai/schemastery');
-    class MemorySettings extends SettingsProvider {
+    class MemorySettings extends settingsModule.SettingsProvider {
         async load() {
             return {};
         }
         async persist() {}
     }
-    const ctx = new Context();
-    const settings = new MemorySettings(ctx);
+    const settings = new MemorySettings(new Context());
     settings.register('locale', z.object({ preference: z.string().default('en') }));
-    let handler;
-    let reads = 0;
-    apply(
-        {
-            settings,
-            tools: { register() {} },
-            attachments: {
-                async readImage() {
-                    reads += 1;
-                    return {};
-                },
+    return {
+        plugin: { settings },
+        setLanguage: async (preference) => settings.publish({ locale: { preference } }),
+        language: () => settings.get('locale').preference,
+        close: async () => {},
+    };
+}
+
+/**
+ * DSH 0.2 removed settings.register/get: the UI language is the volatile
+ * `preference` of the `locale` profile entry, changed through settings.update
+ * and read back through settings.describe. This boots a real profile with the
+ * real Loader, config editor and settings service, the same way the upstream
+ * settings tests do. The locale entry mirrors the host Config of
+ * @deepseek-ai/dsh-client-locale, whose host entry is not built in a runtime.
+ * @returns the host's locale controls and the context the plugin is applied to.
+ */
+async function dsh02LocaleHost(require, load, z, settingsModule) {
+    const { boot, initProfile, readProfilePatches } = await load('@deepseek-ai/dsh-app-boot');
+    // The config editor is a dependency of the settings package, not of the CLI.
+    const fromSettings = createRequire(require.resolve('@deepseek-ai/dsh-settings'));
+    const { default: ConfigEditor } = await load('@deepseek-ai/dsh-config-editor', fromSettings);
+    const { default: Timer } = await load('@deepseek-ai/cordis-plugin-timer');
+    const { default: Hmr } = await load('@deepseek-ai/dsh-hmr');
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'modlens-locale-')));
+    const dir = join(home, 'profiles', 'test');
+    initProfile(dir, ['test-bundle']);
+    const bundle = join(dir, 'node_modules', 'test-bundle');
+    mkdirSync(bundle, { recursive: true });
+    writeFileSync(join(home, 'package.json'), '{"name":"test-installation"}\n');
+    writeFileSync(
+        join(bundle, 'package.json'),
+        JSON.stringify({
+            name: 'test-bundle',
+            version: '1.0.0',
+            dsh: { bundle: { patch: 'cordis.patch.yml' } },
+        }),
+    );
+    writeFileSync(
+        join(bundle, 'cordis.patch.yml'),
+        JSON.stringify([
+            {
+                insert: [
+                    { id: 'config-editor', name: 'cordis:editor' },
+                    { id: 'settings', name: 'cordis:settings' },
+                    { id: 'locale', name: 'cordis:locale', config: { preference: 'en' } },
+                ],
             },
-            on(event, callback) {
-                if (event === 'agent/pre-step') handler = callback;
+        ]),
+    );
+    writeFileSync(join(dir, 'cordis.yml'), '[]\n');
+    const profile = {
+        name: 'test',
+        startedBundles: ['test-bundle'],
+        dir,
+        patchPath: join(dir, 'cordis.patch.yml'),
+        installAnchor: join(home, 'package.json'),
+        cwd: home,
+        home,
+        overlays: [],
+        telemetryDisabledEnv: undefined,
+    };
+    const Locale = {
+        Config: z.object({
+            preference: z
+                .string()
+                .pattern(/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/u)
+                .required(false)
+                .volatile(),
+        }),
+        apply: () => {},
+    };
+    const ctx = await boot(
+        'test',
+        join(dir, 'cordis.yml'),
+        readProfilePatches('test', profile),
+        (root) => {
+            root.provide('profileContext', profile);
+            root.provide('appReady', {
+                onReady: (listener) => {
+                    listener();
+                    return () => {};
+                },
+            });
+            Object.assign(root.loader.builtins, {
+                editor: ConfigEditor,
+                settings: settingsModule.default,
+                locale: Locale,
+            });
+        },
+    );
+    await ctx.plugin(Timer);
+    const hmr = ctx.plugin(Hmr, { root: [], ignored: [], debounce: 0 });
+    await hmr.await();
+    await ctx.hmr.runExclusive(async () => {});
+    const { settings } = ctx;
+    return {
+        // The settings service reaches the plugin the way the Host delivers it.
+        plugin: {
+            inject(services, callback) {
+                if (services.length === 1 && services[0] === 'settings') callback({ settings });
             },
         },
-        { autoRead: true, visionProvider: false, settingsCard: false, pasteToPath: false },
-    );
+        setLanguage: (preference) => settings.update('locale', { preference }),
+        language: () => settings.describe().find((row) => row.ns === 'locale')?.value?.preference,
+        close: async () => {
+            await ctx.fiber.dispose();
+            rmSync(home, { recursive: true, force: true });
+        },
+    };
+}
+
+test('real DSH settings localize cached image failures after language changes', {
+    skip: !process.env.DSH_RUNTIME_ROOT,
+}, async () => {
+    const require = createRequire(resolve(process.env.DSH_RUNTIME_ROOT, 'package.json'));
+    const load = (name, from = require) => import(pathToFileURL(from.resolve(name)));
+    const settingsModule = await load('@deepseek-ai/dsh-settings');
+    const { default: z } = await load('@deepseek-ai/schemastery');
+    const host =
+        typeof settingsModule.SettingsProvider === 'function'
+            ? await dsh01LocaleHost(load, z, settingsModule)
+            : await dsh02LocaleHost(require, load, z, settingsModule);
+    let handler;
+    let reads = 0;
     const messages = [
         {
             role: 'user',
@@ -65,15 +172,36 @@ test('real DSH settings localize cached image failures after language changes', 
     const originalError = console.error;
     console.error = () => {};
     try {
+        apply(
+            {
+                ...host.plugin,
+                tools: { register() {} },
+                attachments: {
+                    async readImage() {
+                        reads += 1;
+                        return {};
+                    },
+                },
+                on(event, callback) {
+                    if (event === 'agent/pre-step') handler = callback;
+                },
+            },
+            { autoRead: true, visionProvider: false, settingsCard: false, pasteToPath: false },
+        );
+        // Switching back as well: the message follows the language both ways.
         for (const [preference, message] of [
             [
                 'en',
                 'Image recognition failed. Please retry or switch the vision model in TokensAPI model settings.',
             ],
             ['zh', '图片识别失败，请重试或在 TokensAPI 模型设置中切换视觉模型。'],
+            [
+                'en',
+                'Image recognition failed. Please retry or switch the vision model in TokensAPI model settings.',
+            ],
         ]) {
-            settings.publish({ locale: { preference } });
-            assert.equal(settings.get('locale').preference, preference);
+            await host.setLanguage(preference);
+            assert.equal(host.language(), preference);
             await assert.rejects(
                 handler({}, async () => ({ kind: 'enter', messages })),
                 {
@@ -85,6 +213,7 @@ test('real DSH settings localize cached image failures after language changes', 
         assert.equal(reads, 1);
     } finally {
         console.error = originalError;
+        await host.close();
     }
 });
 
