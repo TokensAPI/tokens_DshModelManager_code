@@ -12,10 +12,11 @@
 // rules keep living in ~/.modlens/config.json, shared with every harness.
 
 import { createHash } from 'node:crypto'
-import { chmodSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { createRequire } from 'node:module'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
@@ -99,7 +100,7 @@ const managerRuntimes = new WeakMap()
  * @param settings - the DSH 0.2 settings service.
  * @returns the get/update/mutate surface the manager calls.
  */
-function profileSettingsAdapter(settings) {
+function profileSettingsAdapter(settings, persistent = false) {
   const own = {}
   const entryValue = (ns) => {
     try {
@@ -113,9 +114,23 @@ function profileSettingsAdapter(settings) {
     update: async (ns, patch) => {
       if (ns === TOKENSAPI.settingsNamespace) {
         Object.assign(own, patch)
+        if (!persistent || typeof settings.replace !== 'function') return
+        // Always the complete settings, through replace: update merges objects,
+        // so a removed per-model override would come back after a restart.
+        // A failed save keeps this run working and is reported, never thrown:
+        // it must not undo a model selection that already took effect.
+        try {
+          await settings.replace(ns, JSON.parse(JSON.stringify(own)))
+        } catch (error) {
+          console.error(`[tokens-model-manager] settings not saved for the next start: ${error}`)
+        }
         return
       }
       await settings.update(ns, patch)
+    },
+    // The complete settings in force at startup, so the first save is whole.
+    seed: (values) => {
+      Object.assign(own, values)
     },
     ...(typeof settings.mutate === 'function' ? { mutate: (ns, ops) => settings.mutate(ns, ops) } : {}),
   }
@@ -186,6 +201,178 @@ export const MEDIA_EXT = {
   'image/gif': '.gif',
   'image/heic': '.heic',
   'image/heif': '.heif',
+}
+
+/** The manager's own settings, persisted per DSH profile on DSH 0.2. */
+const MANAGER_SETTING_KEYS = [
+  'baseURL',
+  'mainModel',
+  'protocolByModel',
+  'visionModeByModel',
+  'visionModel',
+  'fallbackBaseURL',
+  'fallbackModel',
+  'activeChannel',
+]
+
+/**
+ * The Host's schemastery when it can declare volatile Config fields, else null.
+ *
+ * DSH 0.2 keeps plugin settings as volatile fields of the plugin's Cordis
+ * Config. DSH 0.1's schemastery has no `volatile()`, and its Loader passes the
+ * entry config through any exported Config, so a Config there could only change
+ * behaviour. The probe is synchronous (schemastery ships a CommonJS build): no
+ * top-level await, so how a Host loads this module never matters.
+ *
+ * @param load - resolves the schemastery module; injectable for tests.
+ * @returns the schema builder, or null to declare no Config.
+ */
+export function volatileSchemastery(load = () => createRequire(import.meta.url)('@deepseek-ai/schemastery')) {
+  try {
+    const loaded = load()
+    const z = loaded?.default ?? loaded
+    return typeof z?.string === 'function' && typeof z.string().volatile === 'function' ? z : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The plugin Config for a volatile-capable schemastery, or undefined.
+ *
+ * Only the manager's own settings are declared, all volatile. The entry's other
+ * keys (upstream, providerId, settingsCard, ...) are not declared: the Loader
+ * validates non-strictly and keeps them unchanged.
+ *
+ * @param z - schemastery with volatile support, or null.
+ * @returns the Config schema, or undefined to declare none.
+ */
+export function createManagerConfig(z) {
+  if (!z) return undefined
+  return z.object({
+    baseURL: z.string().volatile(),
+    mainModel: z.string().volatile(),
+    protocolByModel: z.dict(z.string()).volatile(),
+    visionModeByModel: z.dict(z.string()).volatile(),
+    visionModel: z.string().volatile(),
+    fallbackBaseURL: z.string().volatile(),
+    fallbackModel: z.string().volatile(),
+    activeChannel: z.string().volatile(),
+  })
+}
+
+// Undefined on DSH 0.1: the Loader then treats the plugin exactly as before.
+export const Config = createManagerConfig(volatileSchemastery())
+
+/**
+ * The manager settings present in a config, as plain values.
+ * @param config - the plugin config; DSH 0.2 delivers volatile references.
+ * @returns the settings that hold a value; empty when none was ever saved.
+ */
+function savedManagerSettings(config) {
+  const saved = {}
+  for (const key of MANAGER_SETTING_KEYS) {
+    const raw = config?.[key]
+    const value = raw !== null && typeof raw === 'object' && typeof raw.get === 'function' ? raw.get() : raw
+    if (value === undefined || value === null) continue
+    // An unset map reads as {}; it holds nothing to restore.
+    if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) continue
+    saved[key] = value
+  }
+  return saved
+}
+
+/** The complete manager settings currently in force, in their stored shape. */
+function managerSettingsSnapshot(runtime) {
+  return {
+    baseURL: runtime.baseURL,
+    mainModel: runtime.mainModel,
+    protocolByModel: { ...runtime.protocolByModel },
+    visionModeByModel: { ...runtime.visionModeByModel },
+    visionModel: runtime.visionModel,
+    fallbackBaseURL: runtime.fallbackBaseURL,
+    fallbackModel: runtime.fallbackModel,
+    activeChannel: runtime.activeChannel,
+  }
+}
+
+/**
+ * Settings a user saved before DSH 0.2, when this profile has none yet.
+ *
+ * DSH 0.1 kept them in the `tokens-model-manager` section of
+ * `<DSH home>/settings.yaml`. DSH 0.2 imports that file once, renaming it to
+ * `settings.yaml.imported`, and leaves any section it could not import there;
+ * a plugin without a volatile Config could not take this section, so it stays.
+ * Both names are read, so the values survive whichever ran first. The files are
+ * never modified.
+ *
+ * @param settings - the DSH 0.2 settings service.
+ * @returns the saved settings and their file, or null.
+ */
+function legacyManagerSettings(settings) {
+  let documentPath = ''
+  try {
+    documentPath = settings.documentPath
+  } catch {
+    return null
+  }
+  if (typeof documentPath !== 'string' || !documentPath) return null
+  // <home>/profiles/<profile>/cordis.patch.yml
+  const profileDir = dirname(documentPath)
+  if (basename(dirname(profileDir)) !== 'profiles') return null
+  const home = dirname(dirname(profileDir))
+  let parse
+  try {
+    parse = createRequire(import.meta.url)('yaml').parse
+  } catch {
+    return null
+  }
+  for (const name of ['settings.yaml', 'settings.yaml.imported']) {
+    const file = join(home, name)
+    if (!existsSync(file)) continue
+    try {
+      const section = parse(readFileSync(file, 'utf8'))?.[TOKENSAPI.settingsNamespace]
+      if (section && typeof section === 'object' && !Array.isArray(section)) {
+        const saved = savedManagerSettings(section)
+        if (Object.keys(saved).length > 0) return { saved, file }
+      }
+    } catch (error) {
+      console.error(`[tokens-model-manager] earlier settings in ${file} ignored: ${error}`)
+    }
+  }
+  return null
+}
+
+/**
+ * Restore the manager runtime from saved settings, falling back per field.
+ * @param runtime - manager runtime.
+ * @param saved - saved settings; missing fields keep their defaults.
+ */
+function restoreManagerSettings(runtime, saved) {
+  try {
+    runtime.baseURL = normalizeManagedBaseURL(saved.baseURL)
+  } catch (error) {
+    runtime.baseURL = TOKENSAPI.baseURL
+    console.error(`[tokens-model-manager] saved endpoint ignored: ${error}`)
+  }
+  runtime.mainModel = normalizeModelId(saved.mainModel, TOKENSAPI.mainModel)
+  runtime.protocolByModel = normalizeProtocolByModel(saved.protocolByModel)
+  runtime.visionModeByModel = normalizeVisionModeByModel(saved.visionModeByModel)
+  runtime.visionModel = normalizeModelId(saved.visionModel, TOKENSAPI.visionModel)
+  try {
+    runtime.fallbackBaseURL = normalizeManagedBaseURL(saved.fallbackBaseURL ?? DEEPSEEK_OFFICIAL.baseURL)
+  } catch (error) {
+    runtime.fallbackBaseURL = DEEPSEEK_OFFICIAL.baseURL
+    console.error(`[tokens-model-manager] saved fallback endpoint ignored: ${error}`)
+  }
+  runtime.fallbackModel = normalizeModelId(saved.fallbackModel, DEEPSEEK_OFFICIAL.mainModel)
+  if (runtime.fallbackModel && !runtime.fallbackModels.some((model) => model.id === runtime.fallbackModel)) {
+    runtime.fallbackModels.push({ id: runtime.fallbackModel, name: runtime.fallbackModel })
+  }
+  runtime.activeChannel = normalizeActiveChannel(saved.activeChannel)
+  if (runtime.activeChannel === 'official' && !runtime.fallbackModel) runtime.activeChannel = 'tokensapi'
+  runtime.mainProvider =
+    runtime.activeChannel === 'official' ? DEEPSEEK_OFFICIAL.providerId : runtime.tokensMainProvider
 }
 
 export function apply(ctx, config = {}) {
@@ -337,16 +524,51 @@ export function apply(ctx, config = {}) {
         // manager never received a settings handle, so every route write was
         // skipped while still reporting success.
         const runtime = managerRuntime(ctx)
-        runtime.settings = profileSettingsAdapter(scope.settings)
+        // With a volatile Config (DSH 0.2) the manager's own settings persist in
+        // the profile; otherwise they live for this run only, as before.
+        const persistent = Config !== undefined
+        runtime.settings = profileSettingsAdapter(scope.settings, persistent)
         runtime.profileSettings = true
+        let saved = persistent ? savedManagerSettings(config) : {}
+        let migratedFrom = ''
+        if (persistent && Object.keys(saved).length === 0) {
+          const legacy = legacyManagerSettings(scope.settings)
+          if (legacy) {
+            saved = legacy.saved
+            migratedFrom = legacy.file
+          }
+        }
+        restoreManagerSettings(runtime, saved)
+        // The Host's persisted default stays authoritative for the main model.
         runtime.mainModel = hostDefaultTokensModel(scope.settings) || runtime.mainModel || TOKENSAPI.mainModel
         runtime.persistedMain = mainRouteSnapshot(runtime)
+        runtime.settings.seed?.(managerSettingsSnapshot(runtime))
+        // Without an explicit owner, configure() would apply the policy to the
+        // settings service's own fiber instead of this plugin.
+        const presentationOwner = ctx.fiber ?? scope.fiber
+        if (persistent && presentationOwner && typeof scope.settings.configure === 'function') {
+          // The settings section below is this plugin's page; a generated form
+          // over the raw fields would offer a second, unguarded editor.
+          try {
+            const stopPresentation = scope.settings.configure({ auto: false }, presentationOwner)
+            if (typeof scope.effect === 'function') {
+              scope.effect(() => stopPresentation, 'tokens-model-manager: settings page policy')
+            }
+          } catch (error) {
+            console.error(`[tokens-model-manager] settings page policy skipped: ${error}`)
+          }
+        }
         Promise.resolve()
           .then(async () => {
+            if (migratedFrom) {
+              await runtime.settings.update(TOKENSAPI.settingsNamespace, managerSettingsSnapshot(runtime))
+              console.error(`[tokens-model-manager] restored earlier settings from ${migratedFrom}`)
+            }
             const models =
               runtime.models.length > 0 ? runtime.models : [{ id: runtime.mainModel, name: runtime.mainModel }]
             await synchronizeMainModel(ctx, runtime.mainModel, models)
-            await hideFallbackModel(ctx)
+            if (runtime.activeChannel === 'official') await synchronizeFallbackModel(ctx)
+            else await hideFallbackModel(ctx)
           })
           .catch((error) => {
             console.error(`[tokens-model-manager] saved model route activation skipped: ${error}`)
@@ -392,30 +614,7 @@ export function apply(ctx, config = {}) {
         const runtime = managerRuntime(ctx)
         runtime.settings = scope.settings
         const saved = scope.settings.get(TOKENSAPI.settingsNamespace) ?? {}
-        try {
-          runtime.baseURL = normalizeManagedBaseURL(saved.baseURL)
-        } catch (error) {
-          runtime.baseURL = TOKENSAPI.baseURL
-          console.error(`[tokens-model-manager] saved endpoint ignored: ${error}`)
-        }
-        runtime.mainModel = normalizeModelId(saved.mainModel, TOKENSAPI.mainModel)
-        runtime.protocolByModel = normalizeProtocolByModel(saved.protocolByModel)
-        runtime.visionModeByModel = normalizeVisionModeByModel(saved.visionModeByModel)
-        runtime.visionModel = normalizeModelId(saved.visionModel, TOKENSAPI.visionModel)
-        try {
-          runtime.fallbackBaseURL = normalizeManagedBaseURL(saved.fallbackBaseURL ?? DEEPSEEK_OFFICIAL.baseURL)
-        } catch (error) {
-          runtime.fallbackBaseURL = DEEPSEEK_OFFICIAL.baseURL
-          console.error(`[tokens-model-manager] saved fallback endpoint ignored: ${error}`)
-        }
-        runtime.fallbackModel = normalizeModelId(saved.fallbackModel, DEEPSEEK_OFFICIAL.mainModel)
-        if (runtime.fallbackModel && !runtime.fallbackModels.some((model) => model.id === runtime.fallbackModel)) {
-          runtime.fallbackModels.push({ id: runtime.fallbackModel, name: runtime.fallbackModel })
-        }
-        runtime.activeChannel = normalizeActiveChannel(saved.activeChannel)
-        if (runtime.activeChannel === 'official' && !runtime.fallbackModel) runtime.activeChannel = 'tokensapi'
-        runtime.mainProvider =
-          runtime.activeChannel === 'official' ? DEEPSEEK_OFFICIAL.providerId : runtime.tokensMainProvider
+        restoreManagerSettings(runtime, saved)
         Promise.resolve()
           .then(async () => {
             // Keep the parked TokensAPI route current even while the fallback
@@ -4182,6 +4381,7 @@ function registerConfigRoute(ctx) {
 // both rather than through the HTTP route.
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
 export const __modelManager = {
+  managerSettingsAdapter: (ctx) => managerRuntime(ctx).settings,
   hiddenManagedModelIds: HIDDEN_MANAGED_MODEL_IDS,
   publicModels,
   managedConversationModels,

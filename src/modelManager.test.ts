@@ -1,11 +1,20 @@
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
+import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-// @ts-expect-error The DSH entry is deliberately dependency-free plain JS.
-import { __modelManager, apply, DEEPSEEK_OFFICIAL, TOKENSAPI } from '../dsh/index.js';
+import {
+    __modelManager,
+    apply,
+    Config,
+    createManagerConfig,
+    DEEPSEEK_OFFICIAL,
+    TOKENSAPI,
+    volatileSchemastery,
+    // @ts-expect-error The DSH entry is deliberately dependency-free plain JS.
+} from '../dsh/index.js';
 import { resolveProviderSettings } from './config.ts';
 
 interface CredentialHarness {
@@ -1598,6 +1607,255 @@ describe('independent fallback route', () => {
             expect(harness.official).toBeUndefined();
         });
     }
+});
+
+describe('manager settings persistence on DSH 0.2', () => {
+    const requireTest = createRequire(import.meta.url);
+    // The schemastery each product line ships: DSH 0.1 (TokensCowork 0.5) and
+    // DSH 0.2 (TokensCowork 0.6). Both are the real published packages.
+    const dsh01 = () => requireTest('schemastery-dsh01');
+    const dsh02 = () => requireTest('@deepseek-ai/schemastery');
+    const ENTRY = {
+        upstream: 'tokensapi',
+        providerId: 'modlens-tokensapi',
+        settingsCard: false,
+        pasteToPath: false,
+    };
+    type Section = Record<string, unknown>;
+
+    /** A DSH 0.2 profile: entries validated through the plugin Config on start. */
+    function dsh02Profile(initial: Record<string, Section> = {}, documentPath = '') {
+        const profile = new Map<string, Section>(
+            Object.entries({
+                'agent-default-model': { provider: TOKENSAPI.providerId, model: 'deepseek-v3.2' },
+                'llm-pi-ai': { providers: {} },
+                ...initial,
+            }),
+        );
+        const replaced: Section[] = [];
+        const settings = {
+            documentPath,
+            describe: () => [...profile].map(([ns, value]) => ({ ns, value })),
+            update: async (ns: string, patch: Section) => {
+                profile.set(ns, { ...(profile.get(ns) ?? {}), ...patch });
+            },
+            replace: async (ns: string, section: Section) => {
+                replaced.push(JSON.parse(JSON.stringify(section)));
+                profile.set(ns, JSON.parse(JSON.stringify(section)));
+            },
+            mutate: async () => {},
+            configure: () => () => {},
+        };
+        // What the Loader hands apply(): the entry config validated by Config.
+        const start = () => {
+            const validated = (
+                Config as { '~standard': { validate: (value: unknown) => { value: Section } } }
+            )['~standard'].validate({
+                ...ENTRY,
+                ...(profile.get(TOKENSAPI.settingsNamespace) ?? {}),
+            }).value;
+            const credential = credentialHarness('tk-persist', true);
+            const ctx = {
+                ...credential.ctx,
+                tools: { register: () => {} },
+                inject: (
+                    services: string[],
+                    callback: (scope: Record<string, unknown>) => void,
+                ) => {
+                    if (services.length === 1 && services[0] === 'settings') callback({ settings });
+                },
+            };
+            apply(ctx, { ...validated, settingsCard: false, pasteToPath: false });
+            return ctx;
+        };
+        return { profile, replaced, settings, start };
+    }
+    const settle = async () => {
+        for (let index = 0; index < 10; index++)
+            await new Promise((resolve) => setTimeout(resolve, 5));
+    };
+
+    it('declares a volatile Config only where the Host schemastery supports it', () => {
+        // DSH 0.1: no volatile(), so no Config; its Loader then behaves as before.
+        expect(volatileSchemastery(dsh01)).toBeNull();
+        expect(createManagerConfig(volatileSchemastery(dsh01))).toBeUndefined();
+        expect(
+            volatileSchemastery(() => {
+                throw new Error('not installed');
+            }),
+        ).toBeNull();
+
+        // DSH 0.2: the eight settings are volatile; the entry's own keys pass
+        // through validation unchanged (the Loader validates non-strictly).
+        const schema = createManagerConfig(volatileSchemastery(dsh02)) as {
+            '~standard': {
+                validate: (value: unknown) => { value: Record<string, { get?: () => unknown }> };
+            };
+        };
+        expect(schema).toBeDefined();
+        const value = schema['~standard'].validate({
+            ...ENTRY,
+            visionModel: 'qwen3.6-35b-a3b',
+            visionModeByModel: { 'kimi-k3': 'native' },
+        }).value;
+        expect(value.upstream).toBe('tokensapi');
+        expect(value.providerId).toBe('modlens-tokensapi');
+        expect(value.settingsCard).toBe(false);
+        expect(value.pasteToPath).toBe(false);
+        expect(value.visionModel.get?.()).toBe('qwen3.6-35b-a3b');
+        expect(value.visionModeByModel.get?.()).toEqual({ 'kimi-k3': 'native' });
+        expect(value.baseURL.get?.()).toBeUndefined();
+        // The module itself picked up the DSH 0.2 package installed for tests.
+        expect(Config).toBeDefined();
+    });
+
+    it('keeps every manager setting across a DSH 0.2 restart', async () => {
+        const run = dsh02Profile();
+        const first = run.start();
+        await settle();
+        const response = managedResponseWithFuture();
+        await __modelManager.setManagedCredential(first, 'tk-persist', response);
+        await __modelManager.setManagedModels(
+            first,
+            {
+                baseURL: 'https://gateway.example/v1',
+                mainModel: FUTURE_MODEL_ID,
+                visionModel: 'qwen3.6-35b-a3b',
+                visionMode: 'native',
+            },
+            response,
+        );
+        await settle();
+        // Saved as the complete settings, through replace.
+        expect(run.profile.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            baseURL: 'https://gateway.example/v1',
+            visionModel: 'qwen3.6-35b-a3b',
+            visionModeByModel: { [FUTURE_MODEL_ID]: 'native' },
+        });
+
+        // A new start reads them back from the profile, not from memory.
+        const second = run.start();
+        await settle();
+        const status = await __modelManager.modelManagerStatus(second, response, {
+            refreshModels: false,
+        });
+        expect(status).toMatchObject({
+            baseURL: 'https://gateway.example/v1',
+            visionModel: 'qwen3.6-35b-a3b',
+        });
+        await expect(
+            __modelManager.resolveManagedMainRoute(second, FUTURE_MODEL_ID),
+        ).resolves.toMatchObject({
+            visionMode: 'native',
+            input: ['text', 'image'],
+        });
+    });
+
+    it('saves a removed per-model override as removed, not merged back', async () => {
+        const run = dsh02Profile();
+        const ctx = run.start();
+        await settle();
+        const settings = __modelManager.managerSettingsAdapter(ctx);
+        await settings.update(TOKENSAPI.settingsNamespace, {
+            visionModeByModel: { a: 'native', b: 'bridge' },
+        });
+        await settings.update(TOKENSAPI.settingsNamespace, { visionModeByModel: { b: 'bridge' } });
+        // A merge would keep "a"; the complete replacement does not.
+        expect(run.profile.get(TOKENSAPI.settingsNamespace)?.visionModeByModel).toEqual({
+            b: 'bridge',
+        });
+        // Every save carries the whole settings, so no field is lost either.
+        expect(Object.keys(run.replaced.at(-1) ?? {}).sort()).toEqual(
+            [
+                'activeChannel',
+                'baseURL',
+                'fallbackBaseURL',
+                'fallbackModel',
+                'mainModel',
+                'protocolByModel',
+                'visionModeByModel',
+                'visionModel',
+            ].sort(),
+        );
+    });
+
+    it('restores the backup route as it was left', async () => {
+        const run = dsh02Profile({
+            [TOKENSAPI.settingsNamespace]: {
+                activeChannel: 'official',
+                fallbackBaseURL: 'https://backup.example/v1',
+                fallbackModel: 'deepseek-chat',
+            },
+        });
+        const ctx = run.start();
+        await settle();
+        const status = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE, {
+            refreshModels: false,
+        });
+        expect(status).toMatchObject({ channel: 'official' });
+        // The backup route is written into the Host again, not hidden.
+        expect(
+            (run.profile.get('llm-pi-ai') as { providers?: Record<string, unknown> }).providers?.[
+                DEEPSEEK_OFFICIAL.upstreamProviderId
+            ],
+        ).toMatchObject({ baseURL: 'https://backup.example/v1' });
+    });
+
+    it('brings earlier settings over once, and never over newer ones', async () => {
+        const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-home-'));
+        try {
+            const documentPath = path.join(home, 'profiles', 'desktop', 'cordis.patch.yml');
+            fs.mkdirSync(path.dirname(documentPath), { recursive: true });
+            const legacy = path.join(home, 'settings.yaml.imported');
+            const legacyText = [
+                'desktop-notifications:',
+                '  enabled: true',
+                'tokens-model-manager:',
+                '  baseURL: https://legacy.example/v1',
+                '  visionModel: qwen3.6-35b-a3b',
+                '  visionModeByModel:',
+                `    ${FUTURE_MODEL_ID}: native`,
+                '  activeChannel: tokensapi',
+                '',
+            ].join('\n');
+            fs.writeFileSync(legacy, legacyText);
+
+            // No saved settings in the profile: the earlier ones come over and
+            // are saved into the profile once.
+            const fresh = dsh02Profile({}, documentPath);
+            const ctx = fresh.start();
+            await settle();
+            const status = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE, {
+                refreshModels: false,
+            });
+            expect(status).toMatchObject({
+                baseURL: 'https://legacy.example/v1',
+                visionModel: 'qwen3.6-35b-a3b',
+            });
+            expect(fresh.replaced).toHaveLength(1);
+            expect(fresh.profile.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+                baseURL: 'https://legacy.example/v1',
+                visionModeByModel: { [FUTURE_MODEL_ID]: 'native' },
+            });
+            // The earlier file is left exactly as it was.
+            expect(fs.readFileSync(legacy, 'utf8')).toBe(legacyText);
+
+            // The profile already has settings: the earlier file is not used.
+            const saved = dsh02Profile(
+                { [TOKENSAPI.settingsNamespace]: { baseURL: 'https://newer.example/v1' } },
+                documentPath,
+            );
+            const savedCtx = saved.start();
+            await settle();
+            const newer = await __modelManager.modelManagerStatus(savedCtx, VALID_RESPONSE, {
+                refreshModels: false,
+            });
+            expect(newer).toMatchObject({ baseURL: 'https://newer.example/v1' });
+            expect(saved.replaced).toHaveLength(0);
+        } finally {
+            fs.rmSync(home, { recursive: true, force: true });
+        }
+    });
 });
 
 describe('TokensAPI editable endpoint', () => {
