@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { __modelManager, apply } from '../dsh/index.js';
+import { __adapter, __modelManager, apply } from '../dsh/index.js';
 
 // Optional private session replay arrives on stdin; never persist or print its
 // messages, paths, tool arguments or credentials. No tool runner is mounted.
@@ -464,12 +464,16 @@ test('real DSH manual, pressure and overflow compaction recover on legacy and na
         });
         return session;
     };
-    // Prove that this history actually exercises the missing-interface bug.
+    // Prove that this history actually exercises the interface the wrapper has
+    // to answer. The wrapper extends the Host's own LlmAdapter now, so the
+    // method lives on its prototype and `delete` cannot hide it — which is the
+    // whole point of T0033. Shadowing the instance hides it for one assertion;
+    // removing the shadow hands the inherited method back.
     const legacy = makeSession('modlens-tokensapi');
-    const price = wrapper.imageRequestPricing;
-    delete wrapper.imageRequestPricing;
+    Object.defineProperty(wrapper, 'imageRequestPricing', { value: undefined, configurable: true });
     assert.throws(() => meter.measure(legacy), /imageRequestPricing is not a function/);
-    wrapper.imageRequestPricing = price;
+    delete wrapper.imageRequestPricing;
+    assert.equal(typeof wrapper.imageRequestPricing, 'function');
     for (const provider of ['modlens-tokensapi', route.provider]) {
         for (const trigger of ['manual', 'pressure', 'context-overflow']) {
             const session = makeSession(provider);
@@ -508,4 +512,108 @@ test('real DSH manual, pressure and overflow compaction recover on legacy and na
         }
     }
     assert.ok(summaryCalls >= 4);
+});
+
+test('real DSH adapter methods the plugin never declares are inherited, not missing', {
+    skip: !process.env.DSH_RUNTIME_ROOT,
+}, async () => {
+    const require = createRequire(resolve(process.env.DSH_RUNTIME_ROOT, 'package.json'));
+    const load = (name) => import(pathToFileURL(require.resolve(name)));
+    const { Context } = await load('@deepseek-ai/cordis');
+    const { LlmRuntime, LlmAdapter } = await load('@deepseek-ai/dsh-llm');
+    const model = 'deepseek-v4-flash';
+    const ctx = new Context();
+    const llm = new LlmRuntime(ctx);
+    class Upstream extends LlmAdapter {
+        providerInfo(provider) {
+            return { id: provider, name: 'TokensAPI' };
+        }
+        async listModels(provider) {
+            return [
+                {
+                    provider,
+                    id: model,
+                    name: 'DeepSeek V4 Flash',
+                    inputModalities: ['text'],
+                },
+            ];
+        }
+        async resolveModel(provider) {
+            return (await this.listModels(provider))[0];
+        }
+        stream() {
+            throw new Error('a contract check must not reach the wire');
+        }
+    }
+    llm.registerAdapter(['tokensapi'], new Upstream());
+    let wrapper;
+    const originalRegister = llm.registerAdapter.bind(llm);
+    llm.registerAdapter = (ids, adapter) => {
+        if (ids.includes('modlens-tokensapi')) wrapper = adapter;
+        return originalRegister(ids, adapter);
+    };
+    apply(
+        { llm, tools: { register() {} }, on() {} },
+        {
+            upstream: 'tokensapi',
+            providerId: 'modlens-tokensapi',
+            settingsCard: false,
+            pasteToPath: false,
+        },
+    );
+    assert.ok(wrapper, 'the managed vision wrapper must register');
+    // The plugin resolves the base from its own module tree, which is the
+    // Host's in an installed Desktop and is not from a source checkout. Both
+    // are legitimate; the next assertions hold for either, and this one pins
+    // which is which so a broken resolver cannot pass as "no Host base here".
+    const resolved = __adapter.hostLlmAdapterBase();
+    assert.equal(
+        __adapter.hostLlmAdapterBase(() => require('@deepseek-ai/dsh-llm')),
+        LlmAdapter,
+        "the resolver must recognize this Host's adapter base",
+    );
+    assert.ok(wrapper instanceof (resolved ?? __adapter.LlmAdapterDefaults));
+    // Every method this Host declares on the base is answerable on the
+    // wrapper, including the ones the plugin never mentions. This is the
+    // assertion that makes the next upstream addition a non-event: prepareCall,
+    // imageRequestPricing and imageRequestTarget each arrived with a base
+    // default, and the duck-typed object answered none of them until it was
+    // patched, the last one as a live TypeError on 0.2.1 (T0026/T0033).
+    const declared = Object.getOwnPropertyNames(LlmAdapter.prototype).filter(
+        (name) => name !== 'constructor',
+    );
+    assert.ok(declared.length > 0);
+    for (const name of declared) {
+        assert.equal(typeof wrapper[name], 'function', `${name} must be callable on the wrapper`);
+    }
+    // ... and answers the inherited ones exactly as a bare subclass does. On
+    // 0.2.0-rc.2 the base declares no imageRequestTarget, so there is nothing
+    // to inherit and nothing changes; `declared` carries that difference.
+    const bare = new (class extends LlmAdapter {})();
+    if (declared.includes('imageRequestTarget')) {
+        const image = { width: 1024, height: 768, bytes: 4096 };
+        assert.deepEqual(
+            wrapper.imageRequestTarget('modlens-tokensapi', model, image),
+            bare.imageRequestTarget('modlens-tokensapi', model, image),
+        );
+    }
+    // prepareCall is inherited now; it must still resolve through the wrapper's
+    // own resolveModel (the bridged twin, not the upstream model) and bind the
+    // one-shot stream to this registration, which is what the restated copy did.
+    const prepared = await wrapper.prepareCall('modlens-tokensapi', model);
+    assert.equal(prepared.model.provider, 'modlens-tokensapi');
+    assert.equal(prepared.model.id, model);
+    assert.ok(prepared.model.inputModalities.includes('image'));
+    assert.equal(typeof prepared.stream, 'function');
+    // Registration-time facts and the shared evidence cache survive the move
+    // from a plain object to an instance.
+    assert.deepEqual(wrapper.providerInfo('modlens-tokensapi'), {
+        id: 'modlens-tokensapi',
+        name: 'TokensAPI (modlens vision)',
+    });
+    assert.ok(wrapper.evidenceCache instanceof Map);
+    assert.deepEqual(
+        (await wrapper.listModels('modlens-tokensapi')).map((entry) => entry.id),
+        [model],
+    );
 });

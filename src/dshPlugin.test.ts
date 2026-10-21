@@ -4895,3 +4895,252 @@ describe('the settings card is dispatchable on rc.7 (#61, #65)', () => {
         expect(registered).toEqual([]);
     });
 });
+
+describe('dsh plugin adapter base (T0033)', () => {
+    /** Apply the plugin on a context whose event bus the case can drive. */
+    async function applyWith(
+        llm: Record<string, unknown> | undefined,
+        config: Record<string, unknown> = {},
+        extra: Record<string, unknown> = {},
+    ) {
+        // @ts-expect-error untyped on purpose
+        const plugin = (await import('../dsh/index.js')) as {
+            apply: (ctx: unknown, config?: Record<string, unknown>) => void;
+            __adapter: {
+                hostLlmAdapterBase: (load?: () => unknown) => unknown;
+                LlmAdapterDefaults: new () => Record<string, CallableFunction>;
+            };
+            __modelManager: {
+                credentialRefreshSettled: (ctx: unknown) => Promise<void>;
+                managedCredentialFingerprint: (key: string) => string;
+                modelManagerStatus: (
+                    ctx: unknown,
+                    request: unknown,
+                    options?: Record<string, unknown>,
+                ) => Promise<{ models: Array<{ id: string }> }>;
+            };
+        };
+        const listeners = new Map<string, Array<(payload?: unknown) => void>>();
+        const ctx = {
+            tools: { register: () => {} },
+            attachments: {},
+            llm,
+            on: (event: string, listener: (payload?: unknown) => void) => {
+                const bucket = listeners.get(event) ?? [];
+                bucket.push(listener);
+                listeners.set(event, bucket);
+            },
+            ...extra,
+        };
+        plugin.apply(ctx as never, config);
+        // Reconciliations run detached from the notification that triggered
+        // them, so a case flushes the loop rather than awaiting a return value.
+        const settle = async () => {
+            for (let turn = 0; turn < 3; turn++) {
+                await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+        };
+        const emit = async (event: string, payload?: unknown) => {
+            for (const listener of listeners.get(event) ?? []) listener(payload);
+            await settle();
+        };
+        await settle();
+        return { plugin, ctx, emit, settle };
+    }
+
+    it('takes the Host adapter base only from a module that actually exposes one', async () => {
+        const { plugin } = await applyWith(undefined, { visionProvider: false });
+        const { hostLlmAdapterBase } = plugin.__adapter;
+        class HostBase {
+            async prepareCall() {
+                return {};
+            }
+        }
+
+        expect(hostLlmAdapterBase(() => ({ LlmAdapter: HostBase }))).toBe(HostBase);
+        // Anything else is a Host this plugin cannot read: a missing export, a
+        // non-class, or a class that is not the adapter contract. Each one must
+        // fall back rather than be registered as a base and fail at call time.
+        expect(hostLlmAdapterBase(() => ({}))).toBeNull();
+        expect(hostLlmAdapterBase(() => ({ LlmAdapter: {} }))).toBeNull();
+        expect(hostLlmAdapterBase(() => ({ LlmAdapter: class {} }))).toBeNull();
+        expect(
+            hostLlmAdapterBase(() => {
+                throw new Error('@deepseek-ai/dsh-llm is not resolvable from here');
+            }),
+        ).toBeNull();
+    });
+
+    it('restates exactly the defaults the wrapper leaves to the base', async () => {
+        const { plugin } = await applyWith(undefined, { visionProvider: false });
+        const defaults = new plugin.__adapter.LlmAdapterDefaults();
+
+        // dsh's own default: the normalized image is what the request carries.
+        expect(
+            defaults.imageRequestTarget('p', 'm', { width: 800, height: 600, bytes: 1024 }),
+        ).toEqual({ width: 800, height: 600, maxBytes: 1024 });
+        // ... and prepareCall resolves once, then binds the stream to the same
+        // adapter instance rather than to the registry.
+        const adapter = Object.assign(defaults, {
+            resolveModel: async (_provider: string, model: string) => ({ id: model }),
+            stream: (options: unknown) => options,
+        });
+        const prepared = (await adapter.prepareCall('p', 'm')) as {
+            model: { id: string };
+            stream: (options: unknown) => unknown;
+        };
+
+        expect(prepared.model).toEqual({ id: 'm' });
+        expect(prepared.stream('request')).toBe('request');
+    });
+
+    it('answers adapter methods the wrapper never declares', async () => {
+        const registered: Array<Record<string, CallableFunction>> = [];
+        const llm = {
+            registerAdapter: (_providers: string[], adapter: Record<string, CallableFunction>) => {
+                registered.push(adapter);
+                return () => {};
+            },
+            listModels: async () => [
+                {
+                    provider: 'deepseek-official',
+                    id: 'deepseek-v4-flash',
+                    name: 'DeepSeek V4 Flash',
+                    inputModalities: ['text'],
+                },
+            ],
+            resolveModelInfo: async (_provider: string, model: string) => ({
+                provider: 'deepseek-official',
+                id: model,
+                name: 'DeepSeek V4 Flash',
+                inputModalities: ['text'],
+            }),
+            providerRetryPolicy: () => undefined,
+            stream: () => (async function* () {})(),
+        };
+        await applyWith(llm);
+        const adapter = registered[0];
+
+        // Inherited, not restated: that is the whole fix. A duck-typed object
+        // had to copy every base default, and the copy it was missing threw
+        // `adapter.imageRequestTarget is not a function` on a real 0.2.1 Host.
+        expect(Object.hasOwn(adapter, 'imageRequestTarget')).toBe(false);
+        expect(Object.hasOwn(adapter, 'prepareCall')).toBe(false);
+        expect(
+            adapter.imageRequestTarget('deepseek-modlens', 'deepseek-v4-flash', {
+                width: 4,
+                height: 5,
+                bytes: 6,
+            }),
+        ).toEqual({ width: 4, height: 5, maxBytes: 6 });
+        const prepared = (await adapter.prepareCall('deepseek-modlens', 'deepseek-v4-flash')) as {
+            model: { provider: string; inputModalities: string[] };
+            stream: CallableFunction;
+        };
+
+        expect(prepared.model.provider).toBe('deepseek-modlens');
+        expect(prepared.model.inputModalities).toContain('image');
+        expect(typeof prepared.stream).toBe('function');
+    });
+
+    it('wraps a discovered route once a stored key makes it answer', async () => {
+        // The sweep wraps a route only when that route advertises models it can
+        // bridge, and since DSH 0.2.1 a route whose key does not resolve
+        // advertises none. `credentials.set` emits no llm/adapters-updated, so
+        // the retry used to wait for a topology change that never came.
+        let keyStored = false;
+        const registered: string[][] = [];
+        const llm = {
+            registerAdapter: (providers: string[]) => {
+                registered.push(providers);
+                return () => {};
+            },
+            listProviders: () => [{ id: 'tokensapi', name: 'TokensAPI' }],
+            listModels: async () =>
+                keyStored
+                    ? [
+                          {
+                              provider: 'tokensapi',
+                              id: 'deepseek-v4-flash',
+                              name: 'DeepSeek V4 Flash',
+                              inputModalities: ['text'],
+                          },
+                      ]
+                    : [],
+            providerRetryPolicy: () => undefined,
+            stream: () => (async function* () {})(),
+        };
+        const { emit } = await applyWith(llm, { discover: ['tokensapi'] });
+
+        expect(registered).toEqual([]);
+
+        keyStored = true;
+        await emit('credentials/reference-updated', 'TOKENSAPI_API_KEY');
+
+        expect(registered).toEqual([['modlens-tokensapi']]);
+    });
+
+    it('reloads the managed catalogue for the managed key, and for nothing else', async () => {
+        const stored = new Map<string, string>();
+        let reads = 0;
+        const catalog = async () => {
+            reads += 1;
+            return {
+                status: 200,
+                json: async () => ({
+                    data: ['deepseek-v4-flash', 'deepseek-v4-pro'].map((id) => ({
+                        id,
+                        input: ['text'],
+                        supported_endpoint_types: ['openai'],
+                    })),
+                }),
+            };
+        };
+        vi.stubGlobal('fetch', catalog);
+        try {
+            const { plugin, ctx, emit } = await applyWith(
+                undefined,
+                { visionProvider: false },
+                {
+                    credentials: {
+                        describe: async (ref: string) => ({
+                            configured: stored.has(ref),
+                            writable: true,
+                        }),
+                        resolve: async (ref: string) =>
+                            stored.has(ref) ? { value: stored.get(ref) } : undefined,
+                        set: async (ref: string, value: string) => {
+                            stored.set(ref, value);
+                        },
+                    },
+                },
+            );
+            // Another plugin's credential is not this plugin's business, and a
+            // refresh per credential write anywhere in the profile would be a
+            // TokensAPI request per write.
+            await emit('credentials/reference-updated', 'UNRELATED_API_KEY');
+            await plugin.__modelManager.credentialRefreshSettled(ctx);
+
+            expect(reads).toBe(0);
+
+            // A verified key that this plugin's settings page did not write:
+            // the sign-in plugin writes the same reference, and so does
+            // `dsh credentials set` from a terminal.
+            stored.set('TOKENSAPI_API_KEY', 'tk-live');
+            stored.set(
+                'TOKENSAPI_API_KEY_VERIFIED_SHA256',
+                plugin.__modelManager.managedCredentialFingerprint('tk-live'),
+            );
+            await emit('credentials/reference-updated', 'TOKENSAPI_API_KEY');
+            await plugin.__modelManager.credentialRefreshSettled(ctx);
+            const status = await plugin.__modelManager.modelManagerStatus(ctx, catalog, {
+                refreshModels: false,
+            });
+
+            expect(reads).toBe(1);
+            expect(status.models.map((model) => model.id)).toContain('deepseek-v4-pro');
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+});

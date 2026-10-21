@@ -184,6 +184,9 @@ function managerRuntime(ctx) {
       routeFailure: null,
       persistedMain: null,
       settingsReady: Promise.resolve(),
+      // The serialized tail of the refreshes a credential change triggers
+      // (see watchManagedCredential); settled when none is pending.
+      credentialRefresh: Promise.resolve(),
       agentDefaultModel: null,
     }
     managerRuntimes.set(ctx, runtime)
@@ -375,6 +378,62 @@ function restoreManagerSettings(runtime, saved) {
     runtime.activeChannel === 'official' ? DEEPSEEK_OFFICIAL.providerId : runtime.tokensMainProvider
 }
 
+/**
+ * Reload the managed catalogue when the TokensAPI key changes under us.
+ *
+ * The plugin's own model lists and the route it writes for them come from one
+ * place: a status read, which fetches the TokensAPI catalogue when it holds
+ * none. Everything that reached that read was a user action on the settings
+ * page, so a key stored by anything else — the sign-in plugin writes the same
+ * reference, and `dsh credentials set` writes it from a terminal — left the
+ * main-model and vision-model lists empty and the Host route advertising only
+ * the bootstrap model, until the page was opened again or Desktop restarted.
+ * On DSH 0.2.1 that gap became the ordinary first-run path, because a route
+ * whose key does not resolve now advertises nothing at all (see
+ * {@link CATALOG_CHANGE_EVENTS}).
+ *
+ * Observing the write covers every writer, including this plugin: its own save
+ * has already loaded the catalogue by the time the key lands, so the refresh
+ * finds nothing to fetch and costs no request. The route write the refresh
+ * performs emits `settings/document-updated`, one of the events the Host's own
+ * model directory refreshes on, so the composer's dropdown fills in without a
+ * restart.
+ *
+ * A key replaced with a different one is a separate case and keeps its current
+ * behaviour: the stored verification marker no longer matches, the status read
+ * reports the route as unauthenticated, and the settings page asks for the key
+ * to be verified again.
+ *
+ * @param ctx - plugin context.
+ * @param request - fetch used for the catalogue read; defaults to the global
+ *   one at the moment of each refresh, so a test can install its own after
+ *   the plugin has been applied.
+ */
+function watchManagedCredential(ctx, request) {
+  // No credential service is no key to react to: a harness that mounts the
+  // tool half alone has nothing to refresh, and reaching for the status read
+  // there would only log a failure per notification.
+  if (typeof ctx.on !== 'function' || typeof ctx.credentials?.describe !== 'function') return
+  const watched = new Set([TOKENSAPI.credentialRef, TOKENSAPI.verificationRef])
+  const runtime = managerRuntime(ctx)
+  ctx.on('credentials/reference-updated', (ref) => {
+    if (!watched.has(ref)) return
+    // Serialized, and never a rejection: a credential write has already
+    // committed when its notification runs, and the Host contains listener
+    // failures rather than failing that write, so a TokensAPI that cannot be
+    // reached must leave the key stored and say so on the settings page (the
+    // status read records the failure there) instead of surfacing here.
+    runtime.credentialRefresh = runtime.credentialRefresh.then(() =>
+      modelManagerStatus(ctx, request ?? globalThis.fetch).then(
+        () => {},
+        (error) => {
+          console.error(`[tokens-model-manager] model refresh after a credential change skipped: ${error}`)
+        },
+      ),
+    )
+  })
+}
+
 export function apply(ctx, config = {}) {
   const managed = managerRuntime(ctx)
   // Every model call passes through the Host's llm/stream waterfall. A call to
@@ -416,6 +475,8 @@ export function apply(ctx, config = {}) {
   if (config.autoRead === true) {
     registerAutoRead(ctx, evidenceCache)
   }
+  // The managed catalogue follows the key, whoever stores it.
+  watchManagedCredential(ctx)
   // The provider ids this plugin registered itself. The takeover verdict has
   // to skip them: our wrapper models are synthetic twins of upstream ones,
   // carrying the upstream id and declaring image input, so a plain text-only
@@ -885,6 +946,46 @@ async function pasteTakeoverVerdict(host, label, ownProviders) {
   return matchedAny
 }
 
+/**
+ * Every Host event after which a provider route can advertise something else.
+ *
+ * `llm/adapters-updated` used to be the whole list, because what a route
+ * advertised was a function of the registry alone. Since DSH 0.2.1 it is also
+ * a function of the stored credentials: the Host's pi-ai adapter resolves a
+ * route's apiKey reference inside `listModels` and answers with an EMPTY
+ * catalog while that reference does not resolve (upstream
+ * `dsh-llm-pi-ai` listModels, `MISSING_CREDENTIAL` -> `[]`), so on DSH 0.2.1
+ * a profile without a key has an empty TokensAPI group — the new normal, not
+ * a failure. `credentials.set` emits no `llm/adapters-updated`, so anything
+ * that reconciled on topology alone kept the answer it computed before the key
+ * existed until an unrelated topology change or a restart (T0033). The Host's
+ * own model directory already refreshes its catalog on all three
+ * (dsh-client-ui-model-selection), which is why the native dropdown recovers
+ * by itself and this plugin's own half did not.
+ */
+const CATALOG_CHANGE_EVENTS = Object.freeze([
+  'llm/adapters-updated',
+  'credentials/reference-updated',
+  'credentials/record-updated',
+])
+
+/**
+ * Run `listener` after every event that can change a route's catalog.
+ *
+ * The listener is called with no arguments: the credential events carry the
+ * reference or record that changed, and a reconciliation that is driven by
+ * what the registry currently says must not start filtering on which key it
+ * was. Every supported Host emits all three, DSH 0.1.5 included; a context
+ * with no event bus gets no subscription at all, exactly as before.
+ *
+ * @param bus - the Host context, or any handle carrying `on`.
+ * @param listener - called once per event, with no arguments.
+ */
+function onCatalogChange(bus, listener) {
+  if (typeof bus?.on !== 'function') return
+  for (const event of CATALOG_CHANGE_EVENTS) bus.on(event, () => listener())
+}
+
 // Verdicts are stable for the lifetime of a model route but the inventory can
 // grow (llm-pi-ai mounts after settings load), so cache briefly, not forever.
 const PASTE_VERDICT_TTL_MS = 15_000
@@ -911,12 +1012,10 @@ function registerPasteRoute(ctx, host, ownProviders, config = {}) {
   // exists, and without the counter it was written back into the just-
   // emptied cache and served for a full TTL.
   let topologyEpoch = 0
-  if (typeof host.on === 'function') {
-    host.on('llm/adapters-updated', () => {
-      topologyEpoch += 1
-      verdicts.clear()
-    })
-  }
+  onCatalogChange(host, () => {
+    topologyEpoch += 1
+    verdicts.clear()
+  })
   ctx.webServer.register({
     name: 'modlens-paste',
     kind: 'exact',
@@ -1113,6 +1212,59 @@ function managedVisionMode(info, preferredMode = '') {
   return managedModelCapability(info, preferredMode).visionMode
 }
 
+/**
+ * The Host's own `LlmAdapter`: the base class every adapter it registers extends.
+ *
+ * dsh keeps adding methods to the adapter contract with a base-class default,
+ * and a duck-typed plain object inherits none of them — it has to restate each
+ * one or the Host ends up calling a method that is not there. That has now
+ * happened three times (`prepareCall`, then `imageRequestPricing`, then
+ * 0.2.1's `imageRequestTarget`, whose absence made image routing on
+ * `modlens-tokensapi` throw `adapter.imageRequestTarget is not a function` on a
+ * real 0.2.1 Host). Extending the Host's base ends the pattern: whatever
+ * upstream adds next arrives with the default it shipped it with.
+ *
+ * Resolved from the Host's module tree at runtime rather than imported, the
+ * same stance {@link volatileSchemastery} takes: a static import would pin this
+ * plugin to one harness version, and the copy that must answer is the Host's
+ * own. `require` of the Host's ESM build settles synchronously on the Node
+ * versions every supported Desktop ships, so registration order is unchanged.
+ *
+ * @param load - resolves the Host's llm module; injectable for tests.
+ * @returns the base class, or null when the Host exposes none.
+ */
+function hostLlmAdapterBase(load = () => createRequire(import.meta.url)('@deepseek-ai/dsh-llm')) {
+  try {
+    const base = load()?.LlmAdapter
+    return typeof base === 'function' && typeof base.prototype?.prepareCall === 'function' ? base : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The defaults the wrapper inherits when the Host's base cannot be resolved.
+ *
+ * It restates the two methods of today's contract the wrapper does not
+ * implement itself, so a Host whose llm package is not resolvable from here is
+ * never worse off than it was with the duck-typed object. Only today's: that a
+ * local copy cannot know what upstream adds next is precisely why the Host's
+ * own base is preferred.
+ */
+class LlmAdapterDefaults {
+  /** dsh's default: the normalized image is what the request carries. */
+  imageRequestTarget(_provider, _model, image) {
+    return { width: image.width, height: image.height, maxBytes: image.bytes }
+  }
+  /** dsh's default: resolve once, then bind the one-shot stream to this adapter. */
+  async prepareCall(provider, model, signal) {
+    return {
+      model: await this.resolveModel(provider, model, signal),
+      stream: (options) => this.stream(options),
+    }
+  }
+}
+
 function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
   // Generic routes expose only models that actually need the bridge. The
   // managed TokensAPI wrapper also keeps native models resolvable for saved
@@ -1131,6 +1283,8 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
   if (typeof ctx.llm?.registerAdapter !== 'function' || typeof ctx.llm?.stream !== 'function') {
     return
   }
+  // Resolved once for every wrapper this call registers, not once per wrapper.
+  const AdapterBase = hostLlmAdapterBase() ?? LlmAdapterDefaults
 
   // dsh snapshots providerInfo and providerRetryPolicy at registration time.
   // Keep the state and registration handle for each wrapper so an upstream
@@ -1151,14 +1305,23 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
       return { ...info, provider: providerId, inputModalities }
     }
     try {
-      const registration = ctx.llm.registerAdapter([providerId], {
-        // Duck-typing LlmAdapter: providerInfo/providerRetryPolicy are
-        // base-class defaults a plain object must supply itself (their
-        // absence is exactly the silent registration failure this catch
-        // used to swallow).
+      // One class per wrapper, because every method below closes over this
+      // wrapper's own upstream, id and resolved-model state. What it does NOT
+      // declare, it inherits: `imageRequestTarget`, `prepareCall`, and
+      // whatever dsh adds to the contract next (see hostLlmAdapterBase).
+      class VisionWrapper extends AdapterBase {
+        constructor(cache) {
+          super()
+          // Shared with every other wrapper and with the auto-read path;
+          // cachedEvidence reads it off whichever adapter it is handed.
+          this.evidenceCache = cache
+        }
+        // An override, not a restatement: the synthetic route carries its own
+        // display name, and the empty name the base default would produce is
+        // rejected by registerAdapter.
         providerInfo(provider) {
           return { id: provider, name: state.displayName }
-        },
+        }
         providerRetryPolicy() {
           // dsh captures this synchronously when the wrapper route registers.
           // Returning the base default here gives the synthetic route a retry
@@ -1173,7 +1336,7 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
           const policy = ctx.llm.providerRetryPolicy(upstream)
           state.retryPolicyKey = policyKey(policy)
           return policy
-        },
+        }
         async listModels(_provider, signal) {
           const models = await ctx.llm.listModels(upstream, signal)
           return models.filter(shouldExpose).map((model) => {
@@ -1184,7 +1347,7 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
               name: managedTokensApiRoute ? (model.name ?? model.id) : `${model.name ?? model.id} (modlens vision)`,
             }
           })
-        },
+        }
         async resolveModel(_provider, model, signal) {
           const info = await ctx.llm.resolveModelInfo(upstream, model, signal)
           if (!shouldExpose(info)) {
@@ -1214,7 +1377,7 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
           modelInfos.set(model, info)
           visionModes.set(model, managedTokensApiRoute ? managedMode(info) : 'bridge')
           return { ...withVision(info), id: model }
-        },
+        }
         imageRequestPricing(_provider, model) {
           // DSH defaults to undefined: token-meter then uses its neutral estimate.
           // Bridged images become variable OCR text, not upstream visual tokens.
@@ -1224,17 +1387,7 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
             return ctx.llm.imageRequestPricing?.(upstream, model)
           }
           return undefined
-        },
-        async prepareCall(provider, model, signal) {
-          // dsh d29855f97c added prepareCall to the LlmAdapter contract with a
-          // base-class default. This plain object never extends that base, so
-          // it must restate the default itself: resolve once, then bind the
-          // one-shot stream to this same registration.
-          return {
-            model: await this.resolveModel(provider, model, signal),
-            stream: (options) => this.stream(options),
-          }
-        },
+        }
         stream(options) {
           // Convert at request time, not at log time: the durable session
           // log keeps the real image blocks (so the UI shows the paste
@@ -1273,9 +1426,9 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
             bridgeForwardedRequests.add(forwarded)
             yield* ctx.llm.stream(forwarded)
           })()
-        },
-        evidenceCache,
-      })
+        }
+      }
+      const registration = ctx.llm.registerAdapter([providerId], new VisionWrapper(evidenceCache))
       registrations.set(upstream, { providerId, registration, state })
       // Trusted as ours only on a registration this call actually made. A
       // duplicate below means someone else holds that id, and skipping a
@@ -1456,7 +1609,7 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
       }
     }
     reconcile()
-    if (typeof ctx.on === 'function') ctx.on('llm/adapters-updated', reconcile)
+    onCatalogChange(ctx, reconcile)
     return
   }
 
@@ -1535,11 +1688,13 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
     sweeping = sweeping.then(sweepOnce, sweepOnce)
     return sweeping
   }
-  if (typeof ctx.on === 'function') {
-    ctx.on('llm/adapters-updated', () => {
-      void sweep()
-    })
-  }
+  // A route that advertises nothing yet is skipped and released, so the sweep
+  // has to run again once a stored key makes that same route answer with
+  // models; without the credential events it waited for a topology change that
+  // may never come (T0033).
+  onCatalogChange(ctx, () => {
+    void sweep()
+  })
 }
 
 // The same pasted attachment rides every later step of its session, and the
@@ -4382,6 +4537,9 @@ function registerConfigRoute(ctx) {
 export const __config = { engineSummary, applyEngineSettings, modlensConfigPath }
 export const __modelManager = {
   managerSettingsAdapter: (ctx) => managerRuntime(ctx).settings,
+  // Settled once every refresh a credential change queued has run; the way
+  // __paste.settled exposes the sweeper's tail.
+  credentialRefreshSettled: (ctx) => managerRuntime(ctx).credentialRefresh,
   hiddenManagedModelIds: HIDDEN_MANAGED_MODEL_IDS,
   publicModels,
   managedConversationModels,
@@ -4427,6 +4585,11 @@ export const __modelManager = {
   readImageBlock,
   runManagedVision,
 }
+
+// The adapter base the vision wrapper extends, reachable from the test suite
+// the way __config is: a checkout cannot resolve the Host's llm package from
+// dsh/index.js, so a test says which of the two bases it expects.
+export const __adapter = { hostLlmAdapterBase, LlmAdapterDefaults }
 
 // The paste sweeper, reachable from the test suite the way __config is.
 export const __paste = {
