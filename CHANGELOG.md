@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.25 - 2026-10-21
+
+- Close the conversation model menu as soon as a model is picked, the way it closes without this plugin. Picking a managed model used to hand the Host's own `select()` call the entire TokensAPI route write — a live model-list refresh, the route apply, a profile settings write and a status re-read — and the composer only closes its menu once `select()` resolves, so the menu stayed open for as long as that took (seconds on a slow link) while the trigger already showed the new model. The pick is now confirmed by the Host first, which is what closes the menu, and saved to `/tokens/model-manager` after that, outside the Host's flow.
+- Stop writing the route for a pick the Host refuses: the Host's refusal is returned to the composer untouched, so its own toast reports it exactly as it does upstream, and no model is saved that the session never took.
+- A refused route write still takes the pick back to the previous model, as a failed background route switch already did, and records why in the log. It no longer reaches the composer's toast, because reporting it there would mean holding the menu open again.
+- Add a real-Host regression for the composer seat: `scripts/verify-composer-model-menu.mjs` mounts the staged Host's own `ModelSelect` and model directory over this plugin's projection, and pairs every case with the same case driven straight against the Host, so "the menu behaves as it does upstream" is asserted rather than assumed. Run it with `DSH_RUNTIME_ROOT` per Host line; verified on DSH 0.2.1-rc.2 (TokensCowork 0.7) and 0.2.0-rc.2 (TokensCowork 0.6).
+- No production dependency changes. The DSH 0.1 (TokensCowork 0.5) path is unchanged.
+- Known issue (unchanged): GPT models over the Responses API fail with `403 Unsupported client, use codex only` from the upstream channel behind TokensAPI.
+
 ## 0.2.24 - 2026-10-15
 
 - Keep the model manager's own settings across restarts on DSH 0.2 (TokensCowork 0.6): endpoint, vision model, per-model image handling and protocol, and the backup route. They are declared as volatile Cordis Config fields and saved to the profile with `settings.replace`, so a removed per-model override stays removed. The main model still follows the Host's saved default.
