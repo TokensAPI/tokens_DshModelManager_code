@@ -1492,11 +1492,17 @@ describe('Desktop model-manager settings section', () => {
                 });
             for (let index = 0; index < 30; index++) await Promise.resolve();
 
+            // select() settles on the Host's own result; saving the pick to the
+            // route runs after it, so the route write is read once it has landed.
+            const settle = async () => {
+                for (let index = 0; index < 30; index++) await Promise.resolve();
+            };
             await directory.select({
                 provider: 'modlens-tokensapi',
                 model: 'deepseek-v3.2',
                 reasoningEffort: 'high',
             });
+            await settle();
             const selections = calls.filter(
                 (call) => JSON.parse(call.init?.body || '{}').action === 'selectMainModel',
             );
@@ -1521,6 +1527,7 @@ describe('Desktop model-manager settings section', () => {
             expect(state.groups.map((group) => group.id)).toEqual(['tokensapi']);
             if (native) {
                 await directory.select({ provider: 'tokensapi', model: 'deepseek-v4-flash' });
+                await settle();
                 expect(hostSelections.at(-1)).toEqual({
                     provider: 'modlens-tokensapi',
                     model: 'deepseek-v4-flash',
@@ -1539,7 +1546,7 @@ describe('Desktop model-manager settings section', () => {
         },
     );
 
-    it('shows a cross-protocol model and reconfigures the Host before selecting it', async () => {
+    it('shows a cross-protocol model and reconfigures the Host after settling the pick', async () => {
         let loaded:
             | {
                   factory: (require: () => unknown) => {
@@ -1667,8 +1674,14 @@ describe('Desktop model-manager settings section', () => {
         // The Host's own catalog is what the composer shows.
         expect(state.groups[0]?.models.map((entry) => entry.id)).toEqual(['deepseek-v4-flash']);
         await directory.select({ provider: 'modlens-tokensapi', model: 'claude-opus-5' });
+        // The Host confirms the pick first, which is what closes the composer's
+        // menu; the route write and the reselect through the switched route
+        // follow it instead of holding it open.
+        expect(events).toEqual(['select:modlens-tokensapi/claude-opus-5', 'post:claude-opus-5']);
+        for (let index = 0; index < 30; index++) await Promise.resolve();
 
         expect(events).toEqual([
+            'select:modlens-tokensapi/claude-opus-5',
             'post:claude-opus-5',
             'load:anthropic',
             'select:tokensapi/claude-opus-5',
@@ -2022,9 +2035,11 @@ describe('Desktop model-manager settings section', () => {
             console.error = originalError;
         }
 
-        // The pick itself succeeded immediately; the failed background write then
-        // moved the composer back to the model the Host restored, not silently.
+        // The Host settled the pick first, so the composer's menu had already
+        // closed; the failed background write then moved the composer back to
+        // the model the Host restored, not silently.
         expect(events).toEqual([
+            'select:modlens-tokensapi/claude-opus-5',
             'post:claude-opus-5',
             'load:anthropic',
             'select:tokensapi/claude-opus-5',
@@ -2084,12 +2099,17 @@ describe('Desktop model-manager settings section', () => {
             update: (mutator: (draft: typeof state) => void) => mutator(state),
         };
         const selected: Array<{ provider: string; model: string }> = [];
+        // What the Host's own select resolves with; the wrapper must hand this
+        // back untouched or the composer cannot tell a settled pick from a
+        // refused one (and would keep its menu open on a pick that worked).
+        const hostResult = { ok: true as const, value: undefined };
         const directory = {
             store,
             load: async () => state,
             select: async (selection: { provider: string; model: string }) => {
                 selected.push(selection);
                 state.current = selection;
+                return hostResult;
             },
         };
         loaded
@@ -2110,21 +2130,35 @@ describe('Desktop model-manager settings section', () => {
             });
         for (let index = 0; index < 30; index++) await Promise.resolve();
 
-        // The composer attaches no catch to select(), so a failure has to come
-        // back as a RemoteResult or the user is told nothing at all.
-        await expect(
-            directory.select({ provider: 'modlens-tokensapi', model: 'deepseek-v3.2' }),
-        ).resolves.toMatchObject({
-            ok: false,
-            error: { code: 'save', message: expect.any(String) },
-        });
+        const errors: unknown[] = [];
+        const originalError = console.error;
+        console.error = (...args: unknown[]) => errors.push(args.join(' '));
+        try {
+            // The Host settled the pick, so select() resolves with the Host's
+            // result and the menu closes; the save is still on its way.
+            await expect(
+                directory.select({ provider: 'modlens-tokensapi', model: 'deepseek-v3.2' }),
+            ).resolves.toBe(hostResult);
+            expect(selected).toEqual([{ provider: 'modlens-tokensapi', model: 'deepseek-v3.2' }]);
+            for (let index = 0; index < 30; index++) await Promise.resolve();
+        } finally {
+            console.error = originalError;
+        }
+
+        // The save failed, so the pick the Host had accepted is taken back.
         expect(postCalls).toBe(1);
-        expect(selected).toEqual([{ provider: 'modlens-tokensapi', model: 'deepseek-v4-flash' }]);
+        expect(selected).toEqual([
+            { provider: 'modlens-tokensapi', model: 'deepseek-v3.2' },
+            { provider: 'modlens-tokensapi', model: 'deepseek-v4-flash' },
+        ]);
         // Shown under the one list's fixed id.
         expect(state.current).toEqual({
             provider: 'tokensapi',
             model: 'deepseek-v4-flash',
         });
+        // The composer's toast only reports what the Host refused, so a refused
+        // save has to leave a trace somewhere.
+        expect(errors.join('\n')).toContain('deepseek-v3.2');
     });
 
     it('switches the currently open session after the managed main model is saved', async () => {

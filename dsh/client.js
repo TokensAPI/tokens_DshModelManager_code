@@ -87,23 +87,6 @@ window.__ModuleLoader__.load({
       return error
     }
 
-    /**
-     * Report a managed selection failure the way the composer renders failures.
-     *
-     * The conversation model seat calls select() as
-     * `void select(selection).then(settleSelection)` with no catch, so a
-     * rejected promise shows the user nothing. Returning the Host's own
-     * RemoteResult failure shape puts the localized reason in the toast.
-     *
-     * @param error - the failure raised while persisting the selection.
-     * @returns a RemoteResult failure carrying the localized reason.
-     */
-    function managedSelectionFailure(error) {
-      var code = typeof error?.code === 'string' && error.code ? error.code : 'request'
-      var message = typeof error?.message === 'string' && error.message ? error.message : String(error)
-      return { ok: false, error: { code: code, message: message } }
-    }
-
     function imageFilesOf(event) {
       var items = event.clipboardData?.items
       if (!items) return []
@@ -3094,7 +3077,22 @@ window.__ModuleLoader__.load({
                   return originalSelect.call(directory, selection)
                 }
                 var previousSelection = hostViewOf(directory)?.current
-                // Show the pick at once; the Host confirms it a moment later.
+                // Settle on the Host's own result, at the Host's own timing: the
+                // composer closes its menu only once select() resolves with
+                // `{ ok: true }`, so anything awaited here keeps the menu open.
+                // Saving to /tokens/model-manager waits for TokensAPI to list its
+                // models and for the route write, which is far too long to hold
+                // the menu for; it runs after the Host has settled instead.
+                var result = await selectDirectory(directory, selection, true)
+                if (result?.ok === false) return result
+                saveMainSelection({ ...selection, provider: selectedProvider, model: selectedModel }, previousSelection)
+                return result
+              }
+              // Persist a user's pick outside the composer's select() call. The
+              // Host has already accepted it, so a failure here puts the composer
+              // back the way a failed background route switch does.
+              var saveMainSelection = async (selection, previousSelection) => {
+                // Hold the display on the pick while the catalog reloads under it.
                 optimisticSelection = selection
                 applyDisplay()
                 try {
@@ -3103,8 +3101,8 @@ window.__ModuleLoader__.load({
                     headers: { 'content-type': 'application/json' },
                     body: JSON.stringify({
                       action: 'selectMainModel',
-                      provider: selectedProvider,
-                      model: selectedModel,
+                      provider: selection.provider,
+                      model: selection.model,
                     }),
                   })
                   var body = await response.json().catch(() => ({}))
@@ -3114,22 +3112,23 @@ window.__ModuleLoader__.load({
                   desiredMainModel = active.model
                   desiredMainProvider = active.provider
                   synchronizeModelCatalog(body.models)
-                  // The Host route now speaks this model's protocol. Reload so
-                  // the composer reads the switched route, then select through
-                  // it; every managed model is advertised, so the Host accepts
-                  // the id whichever protocol it belongs to.
+                  // The Host route now speaks this model's protocol. Reload so the
+                  // composer reads the switched route, and select again when the
+                  // server answered with a different route or model than the pick.
                   if (typeof directory.load === 'function') await directory.load()
-                  var result = await selectDirectory(
-                    directory,
-                    { ...selection, provider: active.provider, model: active.model },
-                    true,
-                  )
+                  if (active.model !== selection.model || active.provider !== selection.provider) {
+                    await selectDirectory(
+                      directory,
+                      { ...selection, provider: active.provider, model: active.model },
+                      true,
+                    )
+                  }
                   optimisticSelection = null
                   refreshDisplays()
                   notifySettingsSelectionChanged()
-                  if (result?.ok !== false) followRouteSwitch(active.model, previousSelection)
-                  return result
+                  followRouteSwitch(active.model, previousSelection)
                 } catch (error) {
+                  console.error(`[tokens-model-manager] saving ${selection.model} failed: ${error?.message || error}`)
                   if (
                     previousSelection &&
                     typeof previousSelection.model === 'string' &&
@@ -3143,11 +3142,7 @@ window.__ModuleLoader__.load({
                   }
                   optimisticSelection = null
                   applyDisplay()
-                  // The composer renders a RemoteResult failure as a toast but
-                  // attaches no catch, so throwing here would fail silently —
-                  // which is exactly how "this model needs an image handling
-                  // mode" used to disappear.
-                  return managedSelectionFailure(error)
+                  notifySettingsSelectionChanged()
                 }
               }
               // On DSH 0.2 the route write finishes after select() has resolved.
