@@ -54,6 +54,13 @@ pnpm build
 执行 `pnpm test:cases`（`pnpm test:functional` 为别名）会运行 CSV 中所有已关联用例。
 执行器校验用例映射；失败、跳过、缺失、TODO 或未完成的用例会导致非零退出。
 设置 `DSH_RUNTIME_ROOT` 指向已安装或暂存的 Desktop 运行目录，可执行真实宿主契约用例。
+输入框模型菜单的回归用真实宿主自己的组件跑，每条产品用例都与「直接对着宿主跑同一条用例」成对比较；
+每条宿主线各跑一次（内存紧，一次一个进程）：
+
+```powershell
+$env:DSH_RUNTIME_ROOT = 'C:\path\to\desktop\dsh-plugin-desktop'
+node --test --test-concurrency=1 scripts/verify-composer-model-menu.mjs
+```
 视觉排版、真实安装和付费模型识别质量不属于此 CSV 的自动化范围。
 可选的只读真实目录检查使用 `TOKENSAPI_TEST_API_KEY` 与 `pnpm test:cases -- --live-api`，报告不会保存 Key。
 

@@ -72,6 +72,15 @@ $env:DSH_RUNTIME_ROOT = 'C:\path\to\desktop\dsh-plugin-desktop'
 node test/run-test-cases.mjs
 ```
 
+The conversation model menu is covered against the Host's own composer seat,
+with every product case paired with the same case driven straight against the
+Host. Run it once per supported Host line (one process at a time):
+
+```powershell
+$env:DSH_RUNTIME_ROOT = 'C:\path\to\desktop\dsh-plugin-desktop'
+node --test --test-concurrency=1 scripts/verify-composer-model-menu.mjs
+```
+
 Startup catalog regression `SYNC-010` and session synchronization cases
 `SYNC-011`–`SYNC-014` are P0. Mock-backed cases assert client/model-manager
 behavior, not installation success or visual appearance. Empty mappings and
