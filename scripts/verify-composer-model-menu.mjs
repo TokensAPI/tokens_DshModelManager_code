@@ -21,12 +21,16 @@ import {
     openComposerSeat,
     openDocument,
     registerStoreDepHooks,
+    storeDeps,
 } from './composer-seat-harness.mjs';
 
 const runtimeRoot = process.env.DSH_HOST_ROOT ?? process.env.DSH_RUNTIME_ROOT;
 const CLIENT = fileURLToPath(new URL('../dsh/client.js', import.meta.url));
+const REPO = fileURLToPath(new URL('..', import.meta.url));
 /** The Host package carrying the composer seat under test. */
 const MODEL_SELECTION = '@deepseek-ai/dsh-client-ui-model-selection';
+/** The Host package whose store engine zustand and immer are. */
+const CLIENT_STORE = '@deepseek-ai/dsh-client-store';
 
 /**
  * The DSH line of the staged Host, read from the package carrying the seat.
@@ -48,11 +52,11 @@ function selectionVersion() {
 const selectionLine = selectionVersion();
 // The redirect hooks and the document are process-wide: install them once,
 // before the first case loads the Host's store, and let each case mount into
-// its own container. A store dep that cannot be found skips the file rather
+// its own container. A store dep that is not installed skips the file rather
 // than letting a stand-in store decide what the seat sees.
 const unsupportedLine = selectionLine !== undefined && /^0\.1\./.test(selectionLine);
 const mountable = runtimeRoot !== undefined && !unsupportedLine;
-const missingStoreDeps = mountable ? registerStoreDepHooks(runtimeRoot) : [];
+const missingStoreDeps = mountable ? registerStoreDepHooks() : [];
 if (mountable && missingStoreDeps.length === 0) openDocument(runtimeRoot);
 
 const MODELS = [
@@ -198,9 +202,66 @@ const options = {
             : unsupportedLine
               ? `NOT EXECUTED on DSH ${selectionLine}: the composer seat harness models the 0.2 session face`
               : missingStoreDeps.length > 0
-                ? `NOT EXECUTED: the Host store deps are unreachable: ${missingStoreDeps.join(', ')}`
+                ? `NOT EXECUTED: install this repository's dependencies first; not in node_modules: ${missingStoreDeps.join(', ')}`
                 : false,
 };
+
+/** The major of a version or of a range like `~4.5.7`. */
+function major(value) {
+    return value.match(/(\d+)/u)?.[1];
+}
+
+/**
+ * The store engine is the same on every supported line, so this case only
+ * needs a Host — not a mountable one.
+ */
+const anyHost = {
+    skip: runtimeRoot === undefined ? 'NOT EXECUTED: DSH_HOST_ROOT is not set' : false,
+};
+
+test('the store engine the seat runs on is pinned by this repository', anyHost, async () => {
+    // The seat needs zustand and immer, which a staged Host does not carry.
+    // Taking them from a harness pnpm store made the six cases below depend on
+    // a directory no gate installs: green on a developer machine that had one,
+    // NOT EXECUTED for the whole of v0.7.4's gate (T0051). They are this
+    // repository's own devDependencies now, so this case holds the two
+    // properties that replace that store: they are installed here, and they
+    // are still the Host's own engine.
+    const hostRequire = createRequire(resolve(runtimeRoot, 'package.json'));
+    const declared = hostRequire(`${CLIENT_STORE}/package.json`);
+    const ranges = { ...declared.devDependencies, ...declared.dependencies };
+    for (const { name, manifest, version } of storeDeps()) {
+        assert.ok(
+            version !== undefined,
+            `${name} is not installed; the seat cases cannot run without it`,
+        );
+        // Nothing outside this repository may take part: that is what made the
+        // gate and a developer machine disagree.
+        assert.equal(
+            manifest,
+            resolve(REPO, 'node_modules', name, 'package.json'),
+            `${name} must resolve inside this repository`,
+        );
+        const range = ranges[name];
+        // A Host that stops declaring it is a Host that no longer needs it;
+        // report rather than fail, the way the rest of this file treats Host
+        // additions. Only the major is held: the supported lines already
+        // disagree on the patch (0.2.0-rc.2 ~4.4.7, 0.2.1-rc.2 ~4.5.7) and the
+        // seat cases are what prove the engine behaves.
+        if (range === undefined) {
+            console.log(`  ${CLIENT_STORE} ${declared.version} declares no ${name}`);
+            continue;
+        }
+        console.log(`  ${name} ${version} here, ${range} in ${CLIENT_STORE}`);
+        assert.equal(
+            major(version),
+            major(range),
+            `${name} ${version} is a different major than the Host's ${range}`,
+        );
+    }
+    // And the six cases below really ran rather than reporting a store gap.
+    if (mountable) assert.deepEqual(missingStoreDeps, []);
+});
 
 test('the Host closes its own menu as soon as a pick settles', options, async (t) => {
     const seat = await pureHostSeat(t);

@@ -13,7 +13,7 @@ npm run check:host
 `DSH_RUNTIME_ROOT`（T0047 之前的三个契约文件读这个名字），门禁不需要知道。本地想一次
 跑多个宿主时可以用 `DSH_HOST_ROOTS`（`;` 或 `,` 分隔），这只是本地便利，门禁不传。
 
-**没有 `DSH_HOST_ROOT` 时，29 条用例全部报 `NOT EXECUTED`，退出码 1。** 没跑过的腿不是
+**没有 `DSH_HOST_ROOT` 时，30 条用例全部报 `NOT EXECUTED`，退出码 1。** 没跑过的腿不是
 通过的腿。`npm test` / `npm run test:cases` 也会把它们单列成 `not-executed`，既不算通
 过，也不因此变红——它们归 `check:host` 管。
 
@@ -106,6 +106,7 @@ DSH 0.1.5 没有 `@deepseek-ai/dsh-config-editor`、也没有 `@deepseek-ai/dsh-
 | 目录的 `select(selection)` 结果 `{ok}` | 菜单只在宿主的 `select()` 落定时关闭（T0041） | HOST-030…034 |
 | 目录的 `load()` | 路由切换后重载目录 | HOST-031、HOST-034 |
 | 目录的 `store` 的 `getSnapshot`/`update`/`subscribe` | 受管目录投影挂在宿主 store 上 | HOST-031…034 |
+| 宿主 `dsh-client-store` 的 store 引擎（zustand / immer） | 座位与受管投影跑在宿主真实的 copy-on-write store 上，而不是替身 | HOST-036，并见下方缺口 |
 | `scope.sessions.list.getSnapshot()` / `subscribe()` | 0.1 读 `current`，0.2 由目录解析器回报会话 | HOST-030…034 |
 | `scope.sessions.subagentAddress(id)` | 带地址的子代理会话不暴露模型选择 | HOST-030…034 |
 | `scope.slots.register(def, Component)` / `slots.inject('settings.section', …)` | 设置页的「模型」区 | 见下方缺口 |
@@ -116,10 +117,17 @@ DSH 0.1.5 没有 `@deepseek-ai/dsh-config-editor`、也没有 `@deepseek-ai/dsh-
 |---|---|---|
 | DSH 0.1 线的 composer 座位 | `verify-composer-model-menu.mjs` 的座位夹具按 DSH 0.2 的会话投影面（`next`/`lastUsed`）搭的；0.1 的座位读另一套面 | 整文件在 0.1 宿主上报 `NOT EXECUTED on DSH 0.1.5-rc.2: …`，`check:host` 把带线号理由的未执行单列出来、不计通过。0.1 线上的 composer 行为本页不覆盖 |
 | `settings.section` 插槽声明 | 插槽由宿主 shell 声明，staged 宿主的包里没有可直接挂载的声明链；手写声明等于抄被测对象 | 浏览器侧的插槽注册没有真实宿主用例，上表最后一行即此缺口。座位侧（`modelDirectories`/`sessions`）是真实宿主构件 |
-| `zustand` / `immer` | staged 宿主的渲染层是预构建的，不带这两个包；座位夹具从 harness 的 pnpm store 取 | 取不到时整文件报 `NOT EXECUTED: the Host store deps are unreachable: …`，**没有线号，`check:host` 视为失败**，不会悄悄跳过 |
+| `zustand` / `immer` | staged 宿主的渲染层是预构建的，不带这两个包，所以这两个包由本仓库自己钉住（devDependencies `zustand` 4.5.7、`immer` 10.2.0），座位夹具只从本仓库的 `node_modules` 解析 | HOST-036 守住两件事：两个包都装在本仓库内、解析路径不出本仓库；大版本与宿主 `dsh-client-store` 声明的一致（只判大版本——两条受支持的线本身就不一致：0.2.0-rc.2 声明 `~4.4.7`、0.2.1-rc.2 声明 `~4.5.7`；宿主哪天不再声明则只记录不判红）。没装时整文件报 `NOT EXECUTED: install this repository's dependencies first; not in node_modules: …`，**没有线号，`check:host` 视为失败**，不会悄悄跳过 |
 
 ## 门禁有效性
 
 用例不能是空转。最近一次实测：把包装器转发的 `ctx.llm.providerRetryPolicy` 改成一个宿主
 没有的方法名，在 DSH 0.2.1-rc.2 上只有 HOST-005 变红，其余 28 条仍绿；改回即全绿。
 `CHANGELOG.md` 的 0.2.27 条目记录了这次实测。
+
+HOST-036 同样做过变异验证（0.2.28）：把本仓库 `node_modules/zustand` 改名后，在 harness
+的 pnpm store **仍有一份 zustand 4.4.7** 的情况下，HOST-030…035 报 `NOT EXECUTED`、
+HOST-036 变红（`passed 23, failed 1`）；改回即 30/30。这证明本仓库之外的目录确实不再参与
+解析——这正是 T0051 的根因：之前那份 pnpm store 门禁从不安装，于是本机绿、CI 上那六条
+整轮 `NOT EXECUTED`。反向也测过：把 harness pnpm store 里的 zustand / immer 两个条目临时
+改名，`check:host` 仍是 30/30。

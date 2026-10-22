@@ -15,90 +15,70 @@
 //   - `fetch`, so the plugin's `/tokens/model-manager` route is scripted.
 // DSH_RUNTIME_ROOT points at a staged Desktop package directory, which is also
 // where jsdom, React and React DOM come from — the versions the Host runs.
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire, registerHooks } from 'node:module';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runInThisContext } from 'node:vm';
 
 const MODEL_SELECTION = '@deepseek-ai/dsh-client-ui-model-selection';
+/** This repository's root — the only place the store deps are taken from. */
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * Runtime deps of the Host's client packages that a staged Desktop tree does
  * not install — its renderer ships prebuilt, so zustand and immer (which carry
- * `createSnapshotStore`'s copy-on-write semantics) never land there. They are
- * taken from the harness checkout's pnpm store; without them the suite skips
- * rather than quietly testing a stand-in store.
+ * `createSnapshotStore`'s copy-on-write semantics) never land there.
+ *
+ * This repository therefore pins them as devDependencies and the seat resolves
+ * them from its own `node_modules`. They used to be read out of the harness
+ * checkout's pnpm store, which no gate installs: the six seat cases were green
+ * on a developer machine that happened to have one and NOT EXECUTED in CI
+ * (T0051). Nothing outside this repository takes part any more, so the cases
+ * run wherever the install ran, against the versions HOST-036 holds to the
+ * Host's own range. Only `zustand/vanilla`, `zustand/shallow` and
+ * `zustand/middleware` are loaded, and none of them imports React — the Host's
+ * React stays the only one the seat renders with.
  */
-const STORE_DEPS = ['zustand', 'immer'];
+export const STORE_DEPS = Object.freeze(['zustand', 'immer']);
 
 /**
- * Find a package inside a pnpm store and return a path to resolve from.
- * @param store - the `node_modules/.pnpm` directory to search.
- * @param name - the package name to find.
- * @returns a parent path inside the store, or undefined when it has no copy.
+ * Where a store dep resolves from, and the version that lives there.
+ * @returns one entry per store dep; `version` is undefined when it is missing.
  */
-function pnpmResolutionBase(store, name) {
-    let entries;
-    try {
-        entries = readdirSync(store);
-    } catch {
-        return undefined;
-    }
-    for (const entry of entries) {
-        if (!entry.startsWith(`${name}@`)) continue;
-        const nested = resolve(store, entry, 'node_modules');
-        if (existsSync(resolve(nested, name))) return resolve(nested, 'dsh-harness-resolver.mjs');
-    }
-    return undefined;
+export function storeDeps() {
+    return STORE_DEPS.map((name) => {
+        const manifest = resolve(REPO, 'node_modules', name, 'package.json');
+        return {
+            name,
+            manifest,
+            version: existsSync(manifest)
+                ? JSON.parse(readFileSync(manifest, 'utf-8')).version
+                : undefined,
+        };
+    });
 }
 
 /**
- * pnpm stores to look in, nearest first: a staged tree that kept its harness
- * install, then the harness checkout next to the product's `.build`. DSH_PNPM_STORE
- * overrides both when neither applies.
- * @param runtimeRoot - the staged Desktop package directory.
- * @returns candidate `.pnpm` directories.
+ * Let the Host's ESM client packages resolve the deps the staged tree omits,
+ * out of this repository's own install.
+ * @returns the names that are not installed; empty when the hooks are live.
  */
-function pnpmStores(runtimeRoot) {
-    const override = process.env.DSH_PNPM_STORE;
-    return [
-        ...(override === undefined ? [] : [override]),
-        resolve(runtimeRoot, '..', 'deepseek-harness', 'node_modules', '.pnpm'),
-        resolve(
-            runtimeRoot,
-            '..',
-            '..',
-            '..',
-            'desktop',
-            'deepseek-harness',
-            'node_modules',
-            '.pnpm',
-        ),
-    ];
-}
-
-/**
- * Let the Host's ESM client packages resolve the deps the staged tree omits.
- * @param runtimeRoot - the staged Desktop package directory.
- * @returns the names that could not be resolved; empty when the hooks are live.
- */
-export function registerStoreDepHooks(runtimeRoot) {
-    const stores = pnpmStores(runtimeRoot);
-    const bases = new Map();
-    const missing = [];
-    for (const name of STORE_DEPS) {
-        const base = stores.map((store) => pnpmResolutionBase(store, name)).find(Boolean);
-        if (base === undefined) missing.push(name);
-        else bases.set(name, pathToFileURL(base).href);
-    }
+export function registerStoreDepHooks() {
+    const installed = storeDeps().filter((dep) => dep.version !== undefined);
+    const missing = storeDeps()
+        .filter((dep) => dep.version === undefined)
+        .map((dep) => dep.name);
     if (missing.length > 0) return missing;
+    // Resolve as if from a file at the repository root, so `zustand/shallow`
+    // and friends come out of `<repo>/node_modules` whatever the importer is.
+    const base = pathToFileURL(resolve(REPO, 'dsh-harness-resolver.mjs')).href;
+    const names = new Set(installed.map((dep) => dep.name));
     registerHooks({
         resolve(specifier, context, next) {
-            const base = bases.get(specifier.split('/')[0]);
-            return base === undefined
-                ? next(specifier, context)
-                : next(specifier, { ...context, parentURL: base });
+            return names.has(specifier.split('/')[0])
+                ? next(specifier, { ...context, parentURL: base })
+                : next(specifier, context);
         },
     });
     return missing;
