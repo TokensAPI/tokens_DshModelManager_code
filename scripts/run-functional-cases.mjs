@@ -103,6 +103,21 @@ function manualOnly(testCase) {
     return /macOS (?:x64|arm64)|Apple Silicon|Intel/u.test(environment);
 }
 
+/**
+ * Whether a case can only run against a staged Host.
+ *
+ * Such a case is owned by `npm run check:host`, which is the upgrade gate's
+ * entry point and fails when one of them does not run. In the ordinary suite,
+ * where no Host is configured, it is reported as `not-executed` and listed
+ * separately instead of counting as a pass OR dragging `npm test` red — the
+ * run simply did not cover it.
+ * @param testCase - one CSV case.
+ * @returns true when the case names DSH_HOST_ROOT in its prerequisites.
+ */
+function hostContractCase(testCase) {
+    return /DSH_HOST_ROOT/u.test(testCase.前置条件);
+}
+
 export function evaluateCases(cases, statuses) {
     return cases.map((testCase) => {
         const referenceResults = testCase.references.map((reference) => {
@@ -113,11 +128,18 @@ export function evaluateCases(cases, statuses) {
         const blocked =
             referenceResults.length === 0 ||
             referenceResults.some(({ status }) => status !== 'passed');
+        const notExecuted =
+            hostContractCase(testCase) &&
+            referenceResults.length > 0 &&
+            referenceResults.every(({ status }) => status === 'skip' || status === 'skipped');
         let result;
         let next;
         if (failed) {
             result = 'failed';
             next = 'developer';
+        } else if (notExecuted) {
+            result = 'not-executed';
+            next = 'agent';
         } else if (testCase.自动化状态 === '已自动化') {
             result = blocked ? 'blocked' : 'passed';
             next = blocked ? 'developer' : 'none';
@@ -276,7 +298,10 @@ export async function main(argv = process.argv.slice(2)) {
     const files = [
         ...new Set(cases.flatMap((testCase) => testCase.references.map(({ file }) => file))),
     ];
-    const nodeContractFiles = files.filter((file) => file === 'scripts/verify-adapter-pricing.mjs');
+    // The real-Host contract files run under node:test, not vitest. Detected by
+    // location rather than listed one by one, so a contract file added for the
+    // next upstream upgrade is picked up without touching this runner.
+    const nodeContractFiles = files.filter((file) => /^scripts\/verify-.*\.mjs$/u.test(file));
     const vitestFiles = files.filter((file) => !nodeContractFiles.includes(file));
     const vitest = runVitest(vitestFiles);
     const nodeContracts = runNodeContractTests(nodeContractFiles);
@@ -316,13 +341,36 @@ export async function main(argv = process.argv.slice(2)) {
     };
     fs.mkdirSync(path.dirname(options.report), { recursive: true });
     fs.writeFileSync(options.report, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-    const incomplete = results.filter(({ result }) => result !== 'passed');
-    if (incomplete.length === 0) console.log(`All ${results.length} functional cases passed.`);
-    else {
+    // Real-Host cases are listed on their own and never silently counted as
+    // passes. They are also not a failure here: `npm run check:host` is the
+    // command that owns them, and it fails when one does not run.
+    const notExecuted = results.filter(({ result }) => result === 'not-executed');
+    const incomplete = results.filter(
+        ({ result }) => result !== 'passed' && result !== 'not-executed',
+    );
+    if (notExecuted.length > 0) {
+        console.error(
+            `NOT EXECUTED — ${notExecuted.length} real-Host contract cases need DSH_HOST_ROOT; run \`npm run check:host\`:`,
+        );
+        for (const item of notExecuted) console.error(`- ${item.id}: ${item.title}`);
+    }
+    if (incomplete.length === 0) {
+        console.log(`All ${results.length - notExecuted.length} runnable functional cases passed.`);
+    } else {
         console.error('Failed or incomplete functional cases:');
         for (const item of incomplete) console.error(`- ${item.id}: ${item.result} (${item.next})`);
     }
-    const nodeFailed = nodeContracts.runs.some(({ exitCode }) => exitCode !== 0);
+    // A contract file whose cases were all NOT EXECUTED exits non-zero by
+    // design, so its exit code is only fatal here when it actually ran a case.
+    const nodeFailed = nodeContracts.runs.some(
+        ({ file, exitCode }) =>
+            exitCode !== 0 &&
+            results.some(
+                (item) =>
+                    item.result === 'failed' &&
+                    item.references.some((reference) => reference.file === file),
+            ),
+    );
     if (incomplete.length > 0 || vitest.exitCode !== 0 || nodeFailed || liveApi.status === 'failed')
         process.exitCode = 1;
     return report;

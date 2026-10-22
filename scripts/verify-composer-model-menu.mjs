@@ -23,14 +23,37 @@ import {
     registerStoreDepHooks,
 } from './composer-seat-harness.mjs';
 
-const runtimeRoot = process.env.DSH_RUNTIME_ROOT;
+const runtimeRoot = process.env.DSH_HOST_ROOT ?? process.env.DSH_RUNTIME_ROOT;
 const CLIENT = fileURLToPath(new URL('../dsh/client.js', import.meta.url));
+/** The Host package carrying the composer seat under test. */
+const MODEL_SELECTION = '@deepseek-ai/dsh-client-ui-model-selection';
+
+/**
+ * The DSH line of the staged Host, read from the package carrying the seat.
+ * @returns the version, or undefined without a Host.
+ */
+function selectionVersion() {
+    if (runtimeRoot === undefined) return undefined;
+    return createRequire(resolve(runtimeRoot, 'package.json'))(`${MODEL_SELECTION}/package.json`)
+        .version;
+}
+
+// The seat's session face changed shape with DSH 0.2: the composer reads the
+// durable selection off a session projection (`next`/`lastUsed`), which is what
+// this harness stands up. A 0.1 Host ships the earlier seat and reads a
+// different face, so these cases are NOT EXECUTED there rather than red — the
+// contract they defend (T0041's "the menu closes on the Host's own result") is
+// a 0.2 contract. The 0.1 line's composer behaviour is not covered here, and
+// `docs/host-interfaces.md` records that gap.
+const selectionLine = selectionVersion();
 // The redirect hooks and the document are process-wide: install them once,
 // before the first case loads the Host's store, and let each case mount into
 // its own container. A store dep that cannot be found skips the file rather
 // than letting a stand-in store decide what the seat sees.
-const missingStoreDeps = runtimeRoot === undefined ? [] : registerStoreDepHooks(runtimeRoot);
-if (runtimeRoot !== undefined && missingStoreDeps.length === 0) openDocument(runtimeRoot);
+const unsupportedLine = selectionLine !== undefined && /^0\.1\./.test(selectionLine);
+const mountable = runtimeRoot !== undefined && !unsupportedLine;
+const missingStoreDeps = mountable ? registerStoreDepHooks(runtimeRoot) : [];
+if (mountable && missingStoreDeps.length === 0) openDocument(runtimeRoot);
 
 const MODELS = [
     { id: 'kimi-k3', name: 'kimi-k3', protocols: ['openai'], visionMode: 'native' },
@@ -171,10 +194,12 @@ function held() {
 const options = {
     skip:
         runtimeRoot === undefined
-            ? 'DSH_RUNTIME_ROOT is not set'
-            : missingStoreDeps.length > 0
-              ? `the Host store deps are unreachable: ${missingStoreDeps.join(', ')}`
-              : false,
+            ? 'NOT EXECUTED: DSH_HOST_ROOT is not set'
+            : unsupportedLine
+              ? `NOT EXECUTED on DSH ${selectionLine}: the composer seat harness models the 0.2 session face`
+              : missingStoreDeps.length > 0
+                ? `NOT EXECUTED: the Host store deps are unreachable: ${missingStoreDeps.join(', ')}`
+                : false,
 };
 
 test('the Host closes its own menu as soon as a pick settles', options, async (t) => {
@@ -261,8 +286,15 @@ test('a failed route write puts the composer back on the previous model', option
 });
 
 test('the staged Host is the one under test', options, async () => {
+    // Reported, not pinned to a version pattern: which lines the product
+    // supports is the product's business, and a new one must not turn this
+    // file red. What is asserted is that the seat came from the staged Host.
     const hostRequire = createRequire(resolve(runtimeRoot, 'package.json'));
-    const manifest = hostRequire('@deepseek-ai/dsh-client-ui-model-selection/package.json');
+    const manifest = hostRequire(`${MODEL_SELECTION}/package.json`);
+    const where = hostRequire.resolve(`${MODEL_SELECTION}/package.json`);
     console.log(`  ui-model-selection ${manifest.version} from ${runtimeRoot}`);
-    assert.match(manifest.version, /^0\.2\./);
+    assert.ok(
+        where.startsWith(resolve(runtimeRoot)),
+        'the seat under test must come from DSH_HOST_ROOT',
+    );
 });

@@ -1,7 +1,9 @@
-// Run with: node --test --test-concurrency=1 scripts/verify-credential-catalog-refresh.mjs
-// DSH_RUNTIME_ROOT points at a staged Desktop package directory; without it the
-// whole file skips. Run it once per supported Host line (0.2.1-rc.2 and
-// 0.2.0-rc.2) — the cases are the same, the Host artifact is not.
+// Part of `npm run check:host`; also runnable directly with
+// node --test --test-concurrency=1 scripts/verify-credential-catalog-refresh.mjs
+// DSH_HOST_ROOT points at a staged Host's `dsh-plugin-desktop` directory;
+// without it every case reports NOT EXECUTED and check:host exits non-zero.
+// Run it once per supported Host line — the cases are the same, the Host
+// artifact is not.
 //
 // What a provider route advertises stopped being a function of the adapter
 // registry alone. Since DSH 0.2.1 the Host's pi-ai adapter resolves the route's
@@ -27,6 +29,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { __modelManager, apply } from '../dsh/index.js';
+import { hostRoot, withoutHost } from './host-contract-harness.mjs';
 
 const MAIN_MODEL = 'deepseek-v4-flash';
 // Only a TokensAPI catalog read can produce this one: the plugin's public
@@ -95,7 +98,7 @@ async function until(describe, ready) {
  *   read counters.
  */
 async function managedHost(t, config) {
-    const require = createRequire(resolve(process.env.DSH_RUNTIME_ROOT, 'package.json'));
+    const require = createRequire(resolve(hostRoot(), 'package.json'));
     const load = (name) => import(pathToFileURL(require.resolve(name)));
     const { Context } = await load('@deepseek-ai/cordis');
     const { LlmRuntime, LlmAdapter } = await load('@deepseek-ai/dsh-llm');
@@ -163,7 +166,7 @@ function routed(llm, providerId) {
 }
 
 test('real DSH fills the managed group after a key is saved, without a restart', {
-    skip: !process.env.DSH_RUNTIME_ROOT,
+    skip: withoutHost(),
 }, async (t) => {
     const { llm, plugin, request, catalogReads } = await managedHost(t, {
         upstream: 'tokensapi',
@@ -197,7 +200,7 @@ test('real DSH fills the managed group after a key is saved, without a restart',
 });
 
 test('real DSH reloads the managed lists for a key stored outside this plugin', {
-    skip: !process.env.DSH_RUNTIME_ROOT,
+    skip: withoutHost(),
 }, async (t) => {
     const { ctx, plugin, request, catalogReads } = await managedHost(t, {
         upstream: 'tokensapi',
@@ -239,7 +242,7 @@ test('real DSH reloads the managed lists for a key stored outside this plugin', 
 });
 
 test('real DSH wraps a discovered route once its stored key makes it answer', {
-    skip: !process.env.DSH_RUNTIME_ROOT,
+    skip: withoutHost(),
 }, async (t) => {
     // Auto-discovery is the generic ModLens path: it wraps a route only when
     // that route advertises models it can bridge. An empty catalog is therefore

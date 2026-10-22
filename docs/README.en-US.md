@@ -60,26 +60,31 @@ pnpm build
 
 Run the code-driven catalog with `pnpm test:cases` (`pnpm test:functional`
 remains an alias). The runner validates every mapping and exits nonzero for a
-failed, skipped, missing, TODO, or incomplete case. Set `DSH_RUNTIME_ROOT` to
-an installed or staged Desktop runtime to execute the real DSH token-meter and
-compaction compatibility cases. Visual layout, real installation, paid model
-quality, and machine-specific acceptance are deliberately outside this CSV.
+failed, missing, TODO, or incomplete case. Visual layout, real installation,
+paid model quality, and machine-specific acceptance are deliberately outside
+this CSV.
 
-On Windows, run the catalog against an existing runtime (no Desktop build):
+### Real-Host contract cases
 
-```powershell
-$env:DSH_RUNTIME_ROOT = 'C:\path\to\desktop\dsh-plugin-desktop'
-node test/run-test-cases.mjs
-```
-
-The conversation model menu is covered against the Host's own composer seat,
-with every product case paired with the same case driven straight against the
-Host. Run it once per supported Host line (one process at a time):
+Every Host interface this plugin uses has a case that calls it once, for real,
+against a staged Host. One command, one environment variable — `DSH_HOST_ROOT`,
+the staged Host's `dsh-plugin-desktop` directory:
 
 ```powershell
-$env:DSH_RUNTIME_ROOT = 'C:\path\to\desktop\dsh-plugin-desktop'
-node --test --test-concurrency=1 scripts/verify-composer-model-menu.mjs
+$env:DSH_HOST_ROOT = 'C:\path\to\.build\desktop\dsh-plugin-desktop'
+pnpm check:host
 ```
+
+Without `DSH_HOST_ROOT` all 29 cases report `NOT EXECUTED` and the command
+exits nonzero: a leg that proved nothing is not a pass. `pnpm test` and
+`pnpm test:cases` list them separately as not executed — never counted as
+passes, never a reason for the ordinary suite to go red. `DSH_HOST_ROOTS`
+(`;`- or `,`-separated) runs several Hosts in one go, for local use. The
+command runs one child process at a time; these cases boot real Hosts.
+
+`docs/host-interfaces.md` is the interface-by-interface table of what this
+plugin depends on, which case drives it, how real the fixture is, and the
+known gaps.
 
 Startup catalog regression `SYNC-010` and session synchronization cases
 `SYNC-011`–`SYNC-014` are P0. Mock-backed cases assert client/model-manager
@@ -113,7 +118,7 @@ Pasting an image works two ways. **① Just paste.** On a text-only model the pa
 the built vision CLI, so GitHub installation does not run dependency lifecycle
 scripts or need a build allowlist:
 
-Current package identity: `@tokens/dsh-model-manager@0.2.26`.
+Current package identity: `@tokens/dsh-model-manager@0.2.27`.
 
 ```powershell
 npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"

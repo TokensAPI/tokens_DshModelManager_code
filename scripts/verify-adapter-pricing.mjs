@@ -1,6 +1,8 @@
-// Run with node --test scripts/verify-adapter-pricing.mjs against an existing runtime.
-// Optional contract integration against an existing Desktop runtime; no app build
-// or live model requests. DSH_RUNTIME_ROOT points at its package directory.
+// Part of `npm run check:host`; also runnable directly with
+// node --test --test-concurrency=1 scripts/verify-adapter-pricing.mjs
+// Contract cases against a staged Host; no app build and no live model
+// requests. DSH_HOST_ROOT points at the Host's `dsh-plugin-desktop` directory;
+// without it every case reports NOT EXECUTED and check:host exits non-zero.
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -9,6 +11,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { __adapter, __modelManager, apply } from '../dsh/index.js';
+import { hostRoot, withoutHost } from './host-contract-harness.mjs';
 
 // Optional private session replay arrives on stdin; never persist or print its
 // messages, paths, tool arguments or credentials. No tool runner is mounted.
@@ -151,9 +154,9 @@ async function dsh02LocaleHost(require, load, z, settingsModule) {
 }
 
 test('real DSH settings localize cached image failures after language changes', {
-    skip: !process.env.DSH_RUNTIME_ROOT,
+    skip: withoutHost(),
 }, async () => {
-    const require = createRequire(resolve(process.env.DSH_RUNTIME_ROOT, 'package.json'));
+    const require = createRequire(resolve(hostRoot(), 'package.json'));
     const load = (name, from = require) => import(pathToFileURL(from.resolve(name)));
     const settingsModule = await load('@deepseek-ai/dsh-settings');
     const { default: z } = await load('@deepseek-ai/schemastery');
@@ -218,9 +221,9 @@ test('real DSH settings localize cached image failures after language changes', 
 });
 
 test('real DSH token-meter can price text and image histories through the plugin', {
-    skip: !process.env.DSH_RUNTIME_ROOT,
+    skip: withoutHost(),
 }, async () => {
-    const require = createRequire(resolve(process.env.DSH_RUNTIME_ROOT, 'package.json'));
+    const require = createRequire(resolve(hostRoot(), 'package.json'));
     const load = (name) => import(pathToFileURL(require.resolve(name)));
     const { Context } = await load('@deepseek-ai/cordis');
     const { LlmRuntime, LlmAdapter, createUserMessage } = await load('@deepseek-ai/dsh-llm');
@@ -289,9 +292,9 @@ test('real DSH token-meter can price text and image histories through the plugin
 });
 
 test('real DSH manual, pressure and overflow compaction recover on legacy and native routes', {
-    skip: !process.env.DSH_RUNTIME_ROOT,
+    skip: withoutHost(),
 }, async (t) => {
-    const require = createRequire(resolve(process.env.DSH_RUNTIME_ROOT, 'package.json'));
+    const require = createRequire(resolve(hostRoot(), 'package.json'));
     const load = (name) => import(pathToFileURL(require.resolve(name)));
     const { Context } = await load('@deepseek-ai/cordis');
     const { LlmRuntime, LlmAdapter, createUserMessage, createAssistantMessage } =
@@ -515,9 +518,9 @@ test('real DSH manual, pressure and overflow compaction recover on legacy and na
 });
 
 test('real DSH adapter methods the plugin never declares are inherited, not missing', {
-    skip: !process.env.DSH_RUNTIME_ROOT,
+    skip: withoutHost(),
 }, async () => {
-    const require = createRequire(resolve(process.env.DSH_RUNTIME_ROOT, 'package.json'));
+    const require = createRequire(resolve(hostRoot(), 'package.json'));
     const load = (name) => import(pathToFileURL(require.resolve(name)));
     const { Context } = await load('@deepseek-ai/cordis');
     const { LlmRuntime, LlmAdapter } = await load('@deepseek-ai/dsh-llm');

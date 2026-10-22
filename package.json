@@ -1,6 +1,6 @@
 {
     "name": "@tokens/dsh-model-manager",
-    "version": "0.2.26",
+    "version": "0.2.27",
     "description": "TokensAPI managed model and vision provider for DeepSeek Harness Desktop",
     "tokenscowork": {
         "displayName": {
@@ -27,6 +27,7 @@
         "test": "vitest run",
         "test:cases": "node test/run-test-cases.mjs",
         "test:functional": "pnpm test:cases",
+        "check:host": "node scripts/check-host.mjs",
         "coverage": "vitest run --coverage",
         "lint": "biome check src scripts dsh",
         "format": "biome check --write src scripts",

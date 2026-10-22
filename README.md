@@ -52,15 +52,24 @@ pnpm build
 ```
 
 执行 `pnpm test:cases`（`pnpm test:functional` 为别名）会运行 CSV 中所有已关联用例。
-执行器校验用例映射；失败、跳过、缺失、TODO 或未完成的用例会导致非零退出。
-设置 `DSH_RUNTIME_ROOT` 指向已安装或暂存的 Desktop 运行目录，可执行真实宿主契约用例。
-输入框模型菜单的回归用真实宿主自己的组件跑，每条产品用例都与「直接对着宿主跑同一条用例」成对比较；
-每条宿主线各跑一次（内存紧，一次一个进程）：
+执行器校验用例映射；失败、缺失、TODO 或未完成的用例会导致非零退出。
+
+### 真实宿主契约用例
+
+本插件用到的每个宿主接口都有一条对真实宿主真调一次的用例，只有一条命令，只认一个环境变量
+`DSH_HOST_ROOT`（staged 宿主的 `dsh-plugin-desktop` 目录）：
 
 ```powershell
-$env:DSH_RUNTIME_ROOT = 'C:\path\to\desktop\dsh-plugin-desktop'
-node --test --test-concurrency=1 scripts/verify-composer-model-menu.mjs
+$env:DSH_HOST_ROOT = 'C:\path\to\.build\desktop\dsh-plugin-desktop'
+pnpm check:host
 ```
+
+没有 `DSH_HOST_ROOT` 时 29 条用例全部报 `NOT EXECUTED`，退出码非 0 —— 没跑过的腿不算通过。
+`pnpm test` / `pnpm test:cases` 会把它们单列成未执行，不计通过也不因此变红。
+一次跑多个宿主用 `DSH_HOST_ROOTS`（`;` 或 `,` 分隔，仅本地便利）。内存紧，命令内部一次只起一个进程。
+
+接口 ↔ 用例的逐条对照、夹具真实到什么程度、以及已知缺口见
+[`docs/host-interfaces.md`](docs/host-interfaces.md)。
 视觉排版、真实安装和付费模型识别质量不属于此 CSV 的自动化范围。
 可选的只读真实目录检查使用 `TOKENSAPI_TEST_API_KEY` 与 `pnpm test:cases -- --live-api`，报告不会保存 Key。
 
@@ -110,7 +119,7 @@ agy                                                           # 浏览器完成�
 
 **DeepSeek Harness Desktop 用户不走 skill 流程**，本包就是原生 dsh 插件。在 PowerShell 中运行：
 
-当前包标识：`@tokens/dsh-model-manager@0.2.26`。
+当前包标识：`@tokens/dsh-model-manager@0.2.27`。
 
 ```powershell
 npx -y @deepseek-ai/dsh plugin --profile desktop add "github:TokensAPI/tokens_DshModelManager_code#main"
