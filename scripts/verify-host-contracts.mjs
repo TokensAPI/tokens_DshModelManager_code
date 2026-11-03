@@ -747,7 +747,7 @@ test(
         assert.equal(refreshed.status, 200);
         assert.equal(refreshed.body.mainModel, MAIN_MODEL);
         assert.deepEqual(refreshed.body.modelNotice?.changes, [
-            { kind: 'main', from: OFFLINE, to: MAIN_MODEL },
+            { kind: 'main', from: OFFLINE, to: MAIN_MODEL, reason: 'offline' },
         ]);
         // The kernel's default moved with it, onto the direct route: the default
         // reads images itself and needs no bridge.
@@ -789,6 +789,162 @@ test(
         t.diagnostic(
             `default ${OFFLINE} -> ${current.provider}/${current.model}; catalogue reads=${catalogCalls.length}`,
         );
+    },
+);
+
+/**
+ * The catalogue the user's account listed on 2026-11-03, trimmed: TokensAPI
+ * offers every one of these, and only the last three are conversation models.
+ */
+const USER_CATALOG = [
+    'gpt-5.5',
+    'gpt-6-sol',
+    'codex-auto-review',
+    'qwen3-embedding',
+    'qwen3-asr',
+    'startlux-27b',
+    MAIN_MODEL,
+    'deepseek-v4-flash',
+    'qwen3.8-flash-next',
+];
+const NOT_CONVERSATION = ['codex-auto-review', 'qwen3-embedding', 'qwen3-asr', 'startlux-27b'];
+
+/**
+ * Boot the Host on `defaultModel`, serve {@link USER_CATALOG}, and make the
+ * refresh the browser half makes at start-up.
+ *
+ * The key write already starts a catalogue read of its own, and the refresh
+ * can land while that read is still replacing the model (the new id is set
+ * before the save and the notice). So this reads the status until `ready`
+ * says the outcome is final.
+ *
+ * @param ready - `(body, selection) => boolean`, the settled state.
+ */
+async function startOnUserCatalog(t, defaultModel, config, ready) {
+    const host = await liveHost(t, { defaultModel, config });
+    const catalogCalls = [];
+    globalThis.fetch = async (url) => {
+        catalogCalls.push(String(url));
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                data: USER_CATALOG.map((id) => ({ id, supported_endpoint_types: ['openai'] })),
+            }),
+        };
+    };
+    const key = 'synthetic-contract-key';
+    await host.ctx.credentials.set('TOKENSAPI_API_KEY', key);
+    await host.ctx.credentials.set(
+        'TOKENSAPI_API_KEY_VERIFIED_SHA256',
+        host.plugin.__modelManager.managedCredentialFingerprint(key),
+    );
+    await until('the plugin to read the catalogue', () => catalogCalls.length > 0);
+    const currentSelection = async () =>
+        typeof host.ctx.agentDefaultModel?.currentSelection === 'function'
+            ? host.ctx.agentDefaultModel.currentSelection()
+            : host.ctx.settings.describe().find((row) => row?.ns === 'agent-default-model')?.value;
+    const currentRoute = () =>
+        host.line === '0.1'
+            ? undefined
+            : host.ctx.settings
+                  .describe()
+                  .find((row) => row?.ns === 'llm-pi-ai')
+                  ?.value?.providers?.[UPSTREAM]?.models?.map((model) => model.id);
+    let body;
+    let selection;
+    let routeIds;
+    let path = '/tokens/model-manager?refresh=1';
+    await until('the replacement to settle', async () => {
+        const refreshed = await hostRequest(host, path);
+        assert.equal(refreshed.status, 200);
+        path = '/tokens/model-manager';
+        body = refreshed.body;
+        selection = await currentSelection();
+        routeIds = currentRoute();
+        return ready(body, selection, routeIds);
+    });
+    return { host, body, selection, routeIds };
+}
+
+test(
+    'HOST-038 a gpt-* default is moved off after an upgrade, and no excluded model reaches the kernel',
+    options,
+    async (t) => {
+        // T0064 追加 1. A user who had picked gpt-6-sol upgrades: TokensAPI still
+        // lists it, but TokensCowork no longer loads gpt-* (allowGptModels is
+        // off by default), nor Codex, embedding, speech or decision models. The
+        // Host default moves to the product default with a notice that says
+        // "not available here", not "offline", and pi-ai no longer knows the id.
+        const FILTERED = 'gpt-6-sol';
+        // Settled: the notice is out and the Host default has followed.
+        const { host, body, selection, routeIds } = await startOnUserCatalog(
+            t,
+            FILTERED,
+            {},
+            (status, current) => status.modelNotice !== undefined && current?.model === MAIN_MODEL,
+        );
+        assert.equal(body.mainModel, MAIN_MODEL);
+        assert.deepEqual(body.modelNotice?.changes, [
+            { kind: 'main', from: FILTERED, to: MAIN_MODEL, reason: 'filtered' },
+        ]);
+        const offered = body.models.map((model) => model.id);
+        for (const id of ['gpt-5.5', FILTERED, ...NOT_CONVERSATION]) {
+            assert.ok(!offered.includes(id), `the settings list must not offer ${id}`);
+        }
+        assert.equal(selection?.model, MAIN_MODEL);
+        assert.equal(selection?.provider, UPSTREAM);
+        if (routeIds) {
+            assert.deepEqual(
+                [...routeIds].sort(),
+                [MAIN_MODEL, 'deepseek-v4-flash', 'qwen3.8-flash-next'].sort(),
+            );
+        }
+        const signal = new AbortController().signal;
+        await until('pi-ai to serve the replacement', async () => {
+            try {
+                await host.ctx.llm.resolveModelInfo(selection.provider, selection.model, signal);
+                return true;
+            } catch {
+                return false;
+            }
+        });
+        await assert.rejects(
+            () => host.ctx.llm.resolveModelInfo(UPSTREAM, FILTERED, signal),
+            (error) => error?.code === 'UNKNOWN_MODEL',
+        );
+        t.diagnostic(`default ${FILTERED} -> ${selection.provider}/${selection.model}`);
+    },
+);
+
+test(
+    'HOST-039 allowGptModels in the entry config passes the Loader and brings gpt-* back, and only gpt-*',
+    options,
+    async (t) => {
+        // The switch is a plain (non-volatile) field of the plugin's entry
+        // config, so the Host's own Loader validates it against the exported
+        // Config before apply() sees it.
+        // Settled: the catalogue is in. Nothing is replaced, so nothing else moves.
+        const { body, selection, routeIds } = await startOnUserCatalog(
+            t,
+            'gpt-6-sol',
+            { allowGptModels: true },
+            (status, _current, route) =>
+                status.modelsAvailable === true &&
+                status.models?.length > 1 &&
+                (route === undefined || route.includes('gpt-6-sol')),
+        );
+        assert.equal(body.mainModel, 'gpt-6-sol');
+        assert.equal(body.modelNotice, undefined);
+        assert.equal(selection?.model, 'gpt-6-sol');
+        const offered = body.models.map((model) => model.id);
+        assert.ok(offered.includes('gpt-5.5') && offered.includes('gpt-6-sol'));
+        for (const id of NOT_CONVERSATION) {
+            assert.ok(!offered.includes(id), `the switch must not bring back ${id}`);
+            if (routeIds) assert.ok(!routeIds.includes(id), `the route must not carry ${id}`);
+        }
+        if (routeIds) assert.ok(routeIds.includes('gpt-6-sol'));
+        t.diagnostic(`kept ${selection?.provider}/${selection?.model}; offered ${offered.length}`);
     },
 );
 

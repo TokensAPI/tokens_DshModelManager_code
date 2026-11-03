@@ -464,7 +464,17 @@ const API_MODELS = [
     },
 ];
 
-const PUBLIC_API_MODELS = API_MODELS.map((model) => {
+// gpt-* is listed by TokensAPI but kept out by default (allowGptModels: false);
+// the tests that exercise its Responses-only route turn the switch on.
+const PUBLIC_API_MODELS = gptAware(false);
+
+function gptAware(allowGpt: boolean) {
+    return API_MODELS.filter((model) => allowGpt || !model.id.startsWith('gpt-')).map(
+        publicApiModel,
+    );
+}
+
+function publicApiModel(model: (typeof API_MODELS)[number]) {
     const protocols = model.id.startsWith('claude-')
         ? [{ id: 'anthropic-messages', label: 'Anthropic Messages' }]
         : /^(?:gpt-|codex-)/i.test(model.id)
@@ -493,12 +503,14 @@ const PUBLIC_API_MODELS = API_MODELS.map((model) => {
             : 'bridge',
         visionCapabilitySource: 'builtin',
     };
-});
+}
 
-const DIRECT_PUBLIC_API_MODELS = PUBLIC_API_MODELS.map((model) => ({
-    ...model,
-    visionMode: model.visionMode === 'bridge' ? 'direct' : model.visionMode,
-}));
+function directPublic(models: ReturnType<typeof gptAware>) {
+    return models.map((model) => ({
+        ...model,
+        visionMode: model.visionMode === 'bridge' ? 'direct' : model.visionMode,
+    }));
+}
 
 const VALID_RESPONSE = async () => ({
     status: 200,
@@ -1120,11 +1132,17 @@ describe('independent fallback route', () => {
                     baseURL: 'https://backup.example/v1',
                     models: expect.arrayContaining([
                         expect.objectContaining({ id: 'deepseek-v3.2', input: ['text'] }),
-                        expect.objectContaining({ id: 'gpt-5.5', input: ['text'] }),
                     ]),
                 },
             },
         });
+        // TokensAPI lists gpt-5.5, but it is kept out by default (allowGptModels).
+        const routeProviders = fallbackUpdate?.patch.providers as
+            | Record<string, { models: Array<{ id: string }> }>
+            | undefined;
+        const routeModels = routeProviders?.[DEEPSEEK_OFFICIAL.upstreamProviderId]?.models ?? [];
+        expect(routeModels.map((model) => model.id)).toContain('deepseek-v3.2');
+        expect(routeModels.map((model) => model.id)).not.toContain('gpt-5.5');
         expect(credential.stored).toBe('tk-primary');
         expect(credential.official).toBe('sk-backup-only');
 
@@ -1186,7 +1204,7 @@ describe('independent fallback route', () => {
                 if (services.length === 1 && services[0] === 'settings') callback({ settings });
             },
         };
-        apply(ctx, { settingsCard: false, pasteToPath: false });
+        apply(ctx, { allowGptModels: true, settingsCard: false, pasteToPath: false });
         // Route writes run in the background, and a Claude route also starts the
         // loopback proxy (real I/O), so let the event loop turn, not just microtasks.
         const settle = async () => {
@@ -1295,7 +1313,7 @@ describe('independent fallback route', () => {
                 if (services.length === 1 && services[0] === 'settings') callback({ settings });
             },
         };
-        apply(ctx, { settingsCard: false, pasteToPath: false });
+        apply(ctx, { allowGptModels: true, settingsCard: false, pasteToPath: false });
         // Route writes run in the background, and a Claude route also starts the
         // loopback proxy (real I/O), so let the event loop turn, not just microtasks.
         const settle = async () => {
@@ -2094,7 +2112,7 @@ describe('TokensAPI model discovery and selection', () => {
                 if (services.includes('settings')) settingsInjection = callback;
             },
         };
-        apply(ctx, { settingsCard: false, pasteToPath: false });
+        apply(ctx, { allowGptModels: true, settingsCard: false, pasteToPath: false });
 
         let completed = false;
         const statusPromise = __modelManager
@@ -3234,6 +3252,8 @@ describe('TokensAPI model discovery and selection', () => {
 
     it('rejects a protocol that the selected model cannot serve', async () => {
         const harness = credentialHarness();
+        // gpt-5.5 is the Responses-only model here; it is listed only with the switch on.
+        __modelManager.allowGptModels(harness.ctx, true);
         await __modelManager.setManagedCredential(
             harness.ctx,
             'tk-invalid-protocol',
@@ -3337,7 +3357,12 @@ describe('TokensAPI model discovery and selection', () => {
                 }
             },
         };
-        apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
+        apply(ctx, {
+            allowGptModels: true,
+            visionProvider: false,
+            settingsCard: false,
+            pasteToPath: false,
+        });
         await Promise.resolve();
         expect(registeredRoutes).not.toContainEqual(
             expect.objectContaining({ name: 'tokens-model-manager-claude-proxy' }),
@@ -3402,11 +3427,13 @@ describe('TokensAPI model discovery and selection', () => {
             'gpt-5.5',
         ]);
         // The conversation catalog now matches the settings selector.
-        expect(status.models).toEqual(DIRECT_PUBLIC_API_MODELS);
+        expect(status.models).toEqual(directPublic(gptAware(true)));
         // Same set as the settings selector; the route only reorders it so the
         // main model leads.
         expect([...(managedModels ?? [])].map((model) => model.id).sort()).toEqual(
-            DIRECT_PUBLIC_API_MODELS.map((model) => model.id).sort(),
+            directPublic(gptAware(true))
+                .map((model) => model.id)
+                .sort(),
         );
         expect(status.baseURL).toBe('https://gateway.example/v1');
         expect(selections.at(-1)).toEqual({
@@ -3477,7 +3504,7 @@ describe('models TokensAPI no longer offers (T0064)', () => {
     type Selection = { provider: string; model: string };
 
     /** A started plugin whose saved choices are `saved`, with a Host default-model service. */
-    function startWith(saved: Saved, official?: string) {
+    function startWith(saved: Saved, official?: string, config: Saved = {}) {
         const credential = credentialHarness('tk-primary', true);
         if (official !== undefined) credential.official = official;
         const selections: Selection[] = [];
@@ -3511,7 +3538,7 @@ describe('models TokensAPI no longer offers (T0064)', () => {
                 }
             },
         };
-        apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
+        apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false, ...config });
         return { ctx, credential, selections, values };
     }
 
@@ -3729,8 +3756,13 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         const { ctx } = startWith({ mainModel: 'retired-model-a', visionModel: 'retired-vision' });
         const status = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE);
         expect(status.modelNotice.changes).toEqual([
-            { kind: 'main', from: 'retired-model-a', to: 'deepseek-v4-flash-vision-exp' },
-            { kind: 'vision', from: 'retired-vision', to: 'qwen3.8-flash-next' },
+            {
+                kind: 'main',
+                from: 'retired-model-a',
+                to: 'deepseek-v4-flash-vision-exp',
+                reason: 'offline',
+            },
+            { kind: 'vision', from: 'retired-vision', to: 'qwen3.8-flash-next', reason: 'offline' },
         ]);
     });
 
@@ -3834,5 +3866,206 @@ describe('models TokensAPI no longer offers (T0064)', () => {
             VALID_RESPONSE,
         );
         expect(saved.modelNotice).toBeUndefined();
+    });
+
+    // ---- 追加 1: models that are not conversation models never load ----
+
+    // One per rule at least; the user's own list (2026-11-03) is in here verbatim.
+    const EXCLUDED: Array<[string, string]> = [
+        ['gpt-5.5', 'gpt'],
+        ['gpt-5.6-sol', 'gpt'],
+        ['gpt-5.6-luna', 'gpt'],
+        ['gpt-5.6-terra', 'gpt'],
+        ['gpt-6-sol', 'gpt'],
+        ['gpt-6-astra', 'gpt'],
+        ['gpt-6.1-sol', 'gpt'],
+        ['GPT-7_Future', 'gpt'],
+        ['openai/gpt-7-future', 'gpt'],
+        ['codex-auto-review', 'codex'],
+        ['acme-codex-mini', 'codex'],
+        ['qwen3-embedding', 'embedding'],
+        ['text-embedding-3-small', 'embedding'],
+        ['nomic-embed-text', 'embedding'],
+        ['bge-reranker-v2-m3', 'embedding'],
+        ['jina-rerank-m0', 'embedding'],
+        ['qwen3-asr', 'speech'],
+        ['whisper-1', 'speech'],
+        ['cosyvoice-tts', 'speech'],
+        ['qwen-audio-turbo', 'speech'],
+        ['azure-speech-2', 'speech'],
+        ['dall-e-3', 'media'],
+        ['acme-image-gen-1', 'media'],
+        ['flux.1-dev', 'media'],
+        ['sora-2', 'media'],
+        ['doubao-seedream-4.0', 'media'],
+        ['doubao-seedance-1.0-pro', 'media'],
+        ['wanx-v1', 'media'],
+        ['kling-v2', 'media'],
+        ['cogview-t2i', 'media'],
+        ['hunyuan-t2v', 'media'],
+        ['omni-moderation-latest', 'moderation'],
+        ['startlux-27b', 'decision'],
+        ['StartLux-9b', 'decision'],
+    ];
+    // Must never be caught: the ticket's list, plus near misses of each rule.
+    const KEPT = [
+        'deepseek-v4-flash-vision-exp',
+        'qwen3.8-flash-next',
+        'qwen3-vl-plus',
+        'kimi-k3',
+        'claude-opus-5-5',
+        'glm-5.3-flashx',
+        'gemma-4-27b-a4b',
+        'nemotron-3.5-lightning-30b-a3b',
+        'ornith1.5-35b-a3b',
+        'deepseek-v3.2',
+        'qwen3.6-35b-a3b',
+        // A rule word inside a longer segment is not that segment.
+        'speechless-llama2-13b',
+        'embedded-coder-7b',
+        'sparkling-chat-8b',
+    ];
+
+    it('names one rule for every excluded kind, and leaves conversation models alone', () => {
+        for (const [id, kind] of EXCLUDED) {
+            expect(__modelManager.excludedModelKind(id), id).toBe(kind);
+        }
+        for (const id of KEPT) expect(__modelManager.excludedModelKind(id), id).toBe('');
+        const kinds = new Set(
+            __modelManager.excludedModelRules.map((rule: { kind: string }) => rule.kind),
+        );
+        expect([...kinds].sort()).toEqual(
+            ['codex', 'decision', 'embedding', 'gpt', 'media', 'moderation', 'speech'].sort(),
+        );
+        // The switch lifts gpt-* only; Codex and the rest stay out.
+        expect(__modelManager.excludedModelKind('gpt-6-sol', { allowGpt: true })).toBe('');
+        expect(__modelManager.excludedModelKind('codex-auto-review', { allowGpt: true })).toBe(
+            'codex',
+        );
+        expect(__modelManager.excludedModelKind('qwen3-embedding', { allowGpt: true })).toBe(
+            'embedding',
+        );
+    });
+
+    it('drops excluded models from both catalogues, and brings gpt-* back only when allowed', async () => {
+        const data = [...EXCLUDED.map(([id]) => chat(id)), ...KEPT.map(chat)];
+        const response = { json: async () => ({ data }) };
+        const ids = (models: Array<{ id: string }>) => models.map((model) => model.id);
+        expect(ids(await __modelManager.parseManagedModels(response))).toEqual(KEPT);
+        expect(ids(await __modelManager.parseFallbackModels(response))).toEqual(KEPT);
+        const gpt = EXCLUDED.filter(([, kind]) => kind === 'gpt').map(([id]) => id);
+        expect(ids(await __modelManager.parseManagedModels(response, { allowGpt: true }))).toEqual([
+            ...gpt,
+            ...KEPT,
+        ]);
+        expect(ids(await __modelManager.parseFallbackModels(response, { allowGpt: true }))).toEqual(
+            [...gpt, ...KEPT],
+        );
+    });
+
+    /** The user's catalogue from 2026-11-03, trimmed: what TokensAPI lists today. */
+    const userCatalog = () =>
+        catalog(
+            [
+                'gpt-5.5',
+                'gpt-6-sol',
+                'gpt-6-astra',
+                'codex-auto-review',
+                'qwen3-embedding',
+                'qwen3-asr',
+                'startlux-27b',
+                'deepseek-v4-flash-vision-exp',
+                'qwen3.8-flash-next',
+                'kimi-k3',
+            ].map(chat),
+        );
+
+    it('moves a user on gpt-6-sol to the default on upgrade, and says it is not offered here', async () => {
+        const { ctx, selections, values } = startWith({ mainModel: 'gpt-6-sol' });
+        const status = await __modelManager.modelManagerStatus(ctx, userCatalog());
+        expect(status).toMatchObject({
+            mainModel: 'deepseek-v4-flash-vision-exp',
+            activeMainModel: 'deepseek-v4-flash-vision-exp',
+            modelNotice: {
+                changes: [
+                    {
+                        kind: 'main',
+                        from: 'gpt-6-sol',
+                        to: 'deepseek-v4-flash-vision-exp',
+                        reason: 'filtered',
+                    },
+                ],
+            },
+        });
+        expect(selections.at(-1)).toEqual({
+            provider: TOKENSAPI.providerId,
+            model: 'deepseek-v4-flash-vision-exp',
+        });
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            mainModel: 'deepseek-v4-flash-vision-exp',
+        });
+        // Neither the settings selector nor the route the composer reads offers them.
+        const offered = ['deepseek-v4-flash-vision-exp', 'qwen3.8-flash-next', 'kimi-k3'];
+        expect(status.models.map((model: { id: string }) => model.id).sort()).toEqual(
+            offered.sort(),
+        );
+        const route = (
+            values.get(TOKENSAPI.llmSettingsNamespace) as {
+                providers: { tokensapi: { models: Array<{ id: string }> } };
+            }
+        ).providers.tokensapi;
+        expect(route.models.map((model) => model.id).sort()).toEqual(offered.sort());
+    });
+
+    it('keeps gpt-6-sol and lists gpt-* when allowGptModels is on', async () => {
+        const { ctx, selections } = startWith({ mainModel: 'gpt-6-sol' }, undefined, {
+            allowGptModels: true,
+        });
+        const status = await __modelManager.modelManagerStatus(ctx, userCatalog());
+        expect(status.mainModel).toBe('gpt-6-sol');
+        expect(status.modelNotice).toBeUndefined();
+        expect(selections.at(-1)?.model).toBe('gpt-6-sol');
+        const listed = status.models.map((model: { id: string }) => model.id);
+        expect(listed).toEqual(expect.arrayContaining(['gpt-5.5', 'gpt-6-sol', 'gpt-6-astra']));
+        // Only gpt-* comes back.
+        for (const id of ['codex-auto-review', 'qwen3-embedding', 'qwen3-asr', 'startlux-27b']) {
+            expect(listed).not.toContain(id);
+        }
+    });
+
+    it('moves a filtered vision model back to the default vision model', async () => {
+        const { ctx } = startWith({ mainModel: 'kimi-k3', visionModel: 'gpt-6-astra' });
+        const status = await __modelManager.modelManagerStatus(ctx, userCatalog());
+        expect(status.mainModel).toBe('kimi-k3');
+        expect(status.visionModel).toBe('qwen3.8-flash-next');
+        expect(status.modelNotice.changes).toEqual([
+            { kind: 'vision', from: 'gpt-6-astra', to: 'qwen3.8-flash-next', reason: 'filtered' },
+        ]);
+    });
+
+    it('moves a filtered fallback model to the first usable one of its catalogue', async () => {
+        const { ctx, selections } = startWith(
+            {
+                fallbackModel: 'gpt-5.5',
+                fallbackBaseURL: 'https://backup.example/v1',
+                activeChannel: 'official',
+            },
+            'sk-fallback',
+        );
+        const fallback = catalog([chat('gpt-5.5'), chat('qwen3-embedding'), chat('deepseek-chat')]);
+        const request = async (url: unknown) =>
+            String(url) === `${TOKENSAPI.baseURL}/models` ? VALID_RESPONSE() : fallback();
+        const status = await __modelManager.modelManagerStatus(ctx, request);
+        expect(status.official).toMatchObject({ mainModel: 'deepseek-chat', modelsChecked: true });
+        expect(status.official.models.map((model: { id: string }) => model.id)).toEqual([
+            'deepseek-chat',
+        ]);
+        expect(status.modelNotice.changes).toEqual([
+            { kind: 'fallback', from: 'gpt-5.5', to: 'deepseek-chat', reason: 'filtered' },
+        ]);
+        expect(selections.at(-1)).toEqual({
+            provider: DEEPSEEK_OFFICIAL.providerId,
+            model: 'deepseek-chat',
+        });
     });
 });

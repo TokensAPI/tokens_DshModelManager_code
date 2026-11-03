@@ -39,6 +39,23 @@ models are handled the same way. The Host's default model is updated with it,
 and a notice ("Model A is no longer available; switched to B.") appears at the
 top of Settings → Models and as a banner at the top of the window. A catalogue
 fetch that fails (network, 5xx, rejected key) never changes a selection.
+
+Catalogue entries that are not conversation models are never loaded; the
+settings dropdowns, the composer, the models handed to the kernel and the vision
+candidates all use the same filtered list. An entry that declares
+`supported_endpoint_types` must include a chat endpoint; then names are matched
+by segment (split at `-`, `_`, `.`, case-insensitive, never as a substring)
+against GPT (`gpt-…`), Codex (`codex…` or a `codex` segment), embedding/rerank,
+speech (`asr`, `tts`, `whisper`, `audio`, `speech`), image/video generation
+(`dall-e`, `image-gen`, `flux`, `sora`, `seedream`, `seedance`, `wanx`, `kling`,
+`t2i`, `t2v`), moderation, and decision models (`startlux…`). The table is
+`EXCLUDED_MODEL_RULES` in `dsh/index.js`. A saved model the filter excludes is
+replaced like an offline one, with the notice "Model A is not available in
+TokensCowork; switched to B." GPT is governed by the `allowGptModels` plugin
+setting (default `false`): set `allowGptModels: true` in the `config` of the
+`tokens-model-manager` entry in the profile's `cordis.patch.yml` and restart; it brings back `gpt-*`
+only.
+
 The user enters only one API key in Settings → Models. DSH's credential service
 stores it; normal status responses and logs never contain the key. The settings
 page reads it only after an explicit Show or Copy action.

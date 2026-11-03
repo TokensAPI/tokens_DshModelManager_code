@@ -37,6 +37,18 @@
 并在“设置 → 模型”顶部和窗口顶部提示「模型 A 已下线，已切换为 B」。列表拉取失败（网络、5xx、Key 无效）
 时不会据此更换任何模型。
 
+TokensAPI 列表里不是对话模型的条目不会加载（设置页下拉、输入框模型菜单、写给内核的模型列表、视觉模型候选
+都用同一份过滤后的列表）。先看接口声明：写了 `supported_endpoint_types` 的只留含对话接口的；再按名字分段
+（`-`、`_`、`.` 分隔，不区分大小写，不做子串匹配）排除：GPT（`gpt-` 开头）、Codex（`codex` 开头或含
+`codex` 段）、向量/重排（`embed`、`embedding`、`rerank`、`reranker`）、语音（`asr`、`tts`、`whisper`、
+`audio`、`speech`）、图像/视频生成（`dall-e`、`image-gen`、`flux`、`sora`、`seedream`、`seedance`、`wanx`、
+`kling`、`t2i`、`t2v`）、审核（`moderation`）、决策模型（`startlux` 开头）。规则集中在 `dsh/index.js` 的
+`EXCLUDED_MODEL_RULES`。已经选中的模型如果被过滤，同样自动换回默认，提示为「模型 A 在 TokensCowork 中不可用，
+已切换为 B」。
+
+GPT 由插件配置 `allowGptModels` 控制，默认 `false`；上游渠道放开 GPT 后，在 profile 的 `cordis.patch.yml`
+里给本插件条目（`id: tokens-model-manager`）的 `config` 加上 `allowGptModels: true` 并重启即可，不用改代码。它只放开 `gpt-*`，其他类别没有开关。
+
 Desktop 启动时采用 fail-closed 全屏门禁：认证状态未知、没有 Key、旧 Key 尚未验证或状态接口失败时，
 聊天主界面不会放行。提交后由插件后端请求 TokensAPI `GET /v1/models` 验证；仅 HTTP 200 才保存
 Key 并进入 Desktop，401/403、网络失败和上游错误均保持锁定。

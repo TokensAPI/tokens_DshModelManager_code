@@ -2779,6 +2779,34 @@ describe('replaced-model notice (T0064)', () => {
         expect(manager.modelNoticeOf({ modelNotice: NOTICE })).toEqual(NOTICE);
     });
 
+    it('words a model the plugin filters out differently from one TokensAPI took offline', () => {
+        const zh = load('zh').definition.factory(() => ({})).__manager;
+        const notice = {
+            id: 'f',
+            changes: [
+                {
+                    kind: 'main',
+                    from: 'gpt-6-sol',
+                    to: 'deepseek-v4-flash-vision-exp',
+                    reason: 'filtered',
+                },
+                { kind: 'vision', from: 'retired-v', to: 'qwen3.8-flash-next', reason: 'offline' },
+                { kind: 'fallback', from: 'gpt-5.5', to: 'deepseek-chat', reason: 'filtered' },
+            ],
+        };
+        // The reason survives the status parse.
+        expect(zh.modelNoticeOf({ modelNotice: notice })).toEqual(notice);
+        expect(zh.modelNoticeLines(zh.managerLabels(), notice)).toEqual([
+            '模型 gpt-6-sol 在 TokensCowork 中不可用，已切换为 deepseek-v4-flash-vision-exp',
+            '视觉模型 retired-v 已下线，已切换为 qwen3.8-flash-next',
+            '备用线路模型 gpt-5.5 在 TokensCowork 中不可用，已切换为 deepseek-chat',
+        ]);
+        const en = load('en').definition.factory(() => ({})).__manager;
+        expect(en.modelNoticeLines(en.managerLabels(), notice)[0]).toBe(
+            'Model gpt-6-sol is not available in TokensCowork; switched to deepseek-v4-flash-vision-exp.',
+        );
+    });
+
     it('shows the notice on the settings page until it is dismissed there', async () => {
         const posts: Array<Record<string, unknown>> = [];
         const fetchMock = vi.fn(async (_url: string, options?: RequestInit) => {

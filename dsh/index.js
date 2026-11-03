@@ -45,7 +45,77 @@ const MANAGED_MODEL_API_LABELS = Object.freeze({
 })
 const RESPONSES_ONLY_MODEL_ID = /(?:^|\/)(?:gpt-|codex-)/i
 const ANTHROPIC_ONLY_MODEL_ID = /(?:^|\/)claude(?:-|$)/i
-const NON_CONVERSATION_MODEL_ID = /(?:^|[-_.])asr(?:$|[-_.])/i
+
+/**
+ * Models that are not conversation models, by name: the one place they are listed.
+ *
+ * A catalogue that declares `supported_endpoint_types` is filtered on that
+ * first (see the parsers); this table catches what the declaration does not.
+ * Names are compared case-insensitively, split into segments at `-`, `_`, `.`
+ * (and a `provider/` prefix is dropped), so `qwen3-vl-plus` never matches a
+ * rule for `vl` and `glm-5.3-flashx` never matches `flux`. A rule is one of:
+ * - `first`: the first segment equals one of these words;
+ * - `firstPrefix`: the first segment starts with one of these words;
+ * - `segment`: any run of segments, first included, equals one of these (`dall-e` is two).
+ *
+ * `gpt` is the only rule a setting can lift (`allowGptModels`); the others
+ * name kinds of model a conversation can never use.
+ */
+const EXCLUDED_MODEL_RULES = Object.freeze([
+  { kind: 'gpt', first: ['gpt'] },
+  { kind: 'codex', firstPrefix: ['codex'], segment: ['codex'] },
+  { kind: 'embedding', segment: ['embed', 'embedding', 'rerank', 'reranker'] },
+  { kind: 'speech', segment: ['asr', 'tts', 'whisper', 'audio', 'speech'] },
+  {
+    kind: 'media',
+    segment: ['dall-e', 'image-gen', 'flux', 'sora', 'seedream', 'seedance', 'wanx', 'kling', 't2i', 't2v'],
+  },
+  { kind: 'moderation', segment: ['moderation'] },
+  { kind: 'decision', firstPrefix: ['startlux'] },
+])
+
+/**
+ * Which exclusion rule a model id falls under, if any.
+ * @param id - model id as the catalogue lists it.
+ * @param options - `allowGpt` lifts the `gpt` rule.
+ * @returns the rule's kind, or '' for a conversation model.
+ */
+function excludedModelKind(id, options = {}) {
+  const name = String(id ?? '')
+    .toLowerCase()
+    .split('/')
+    .pop()
+  const segments = name.split(/[-_.]/).filter(Boolean)
+  if (segments.length === 0) return ''
+  const hasRun = (word, from) => {
+    const run = word.split('-')
+    for (let i = from; i + run.length <= segments.length; i++) {
+      if (run.every((part, j) => segments[i + j] === part)) return true
+    }
+    return false
+  }
+  for (const rule of EXCLUDED_MODEL_RULES) {
+    if (rule.kind === 'gpt' && options.allowGpt === true) continue
+    if (rule.first?.includes(segments[0])) return rule.kind
+    if (rule.firstPrefix?.some((word) => segments[0].startsWith(word))) return rule.kind
+    if (rule.segment?.some((word) => hasRun(word, 0))) return rule.kind
+  }
+  return ''
+}
+
+/**
+ * Whether TokensCowork keeps a model out of every list (pickers, routes, vision candidates).
+ * @param id - model id.
+ * @param options - `allowGpt` lifts the `gpt` rule.
+ */
+function isExcludedModelId(id, options = {}) {
+  return excludedModelKind(id, options) !== ''
+}
+
+/** The catalogue filter options for a runtime: just the GPT switch. */
+function catalogFilter(runtime) {
+  return { allowGpt: runtime?.allowGptModels === true }
+}
 const CLAUDE_PROXY_PATH = '/tokens/model-manager/claude-proxy'
 const CLAUDE_COMPAT_USER_AGENT = 'claude-cli/2.1.0'
 const PROTOCOL_PROBE_TIMEOUT_MS = 20_000
@@ -174,6 +244,8 @@ function managerRuntime(ctx) {
       visionModel: TOKENSAPI.visionModel,
       visionFamilies: DEFAULT_VISION_FAMILIES,
       visionProviderEnabled: true,
+      // Plugin entry config, not a saved setting: lifts the gpt-* exclusion.
+      allowGptModels: false,
       models: [],
       settings: null,
       // DSH 0.2 only: route writes run in one background worker (see
@@ -261,6 +333,9 @@ export function createManagerConfig(z) {
     fallbackBaseURL: z.string().volatile(),
     fallbackModel: z.string().volatile(),
     activeChannel: z.string().volatile(),
+    // Edited in the profile's entry config, never by the settings page: gpt-*
+    // models stay out of every list until this is set to true.
+    allowGptModels: z.boolean().default(false),
   })
 }
 
@@ -464,6 +539,7 @@ export function apply(ctx, config = {}) {
   }
   managed.visionFamilies = Array.isArray(config.families) ? [...config.families] : DEFAULT_VISION_FAMILIES
   managed.visionProviderEnabled = config.visionProvider !== false
+  managed.allowGptModels = config.allowGptModels === true
   // One evidence cache for the whole plugin: every wrapper route and the
   // auto-read path share it, so the same pasted attachment is read once,
   // whichever surface asks first (issue #68; auto-read used to bypass
@@ -3272,18 +3348,20 @@ function publicModels(runtime) {
 /**
  * The first catalogue entry a conversation can use, in catalogue order.
  *
- * The catalogue parsers already drop ASR and pure image/video models; this
- * also skips the explicit hidden list and entries with no DSH transport, the
- * same rules the settings picker and the composer apply.
+ * The catalogue parsers already drop excluded models ({@link EXCLUDED_MODEL_RULES})
+ * and pure image/video ones; this also skips the explicit hidden list and
+ * entries with no DSH transport, the same rules the settings picker and the
+ * composer apply.
  *
  * @param models - a freshly fetched catalogue.
  * @param accept - extra condition (the vision slot wants image input).
+ * @param filter - {@link catalogFilter} of the runtime asking.
  * @returns the model id, or '' when nothing qualifies.
  */
-function firstUsableModel(models, accept = () => true) {
+function firstUsableModel(models, accept = () => true, filter = {}) {
   for (const model of models) {
     const id = normalizeModelId(model?.id, '')
-    if (!id || isHiddenManagedModel(id) || NON_CONVERSATION_MODEL_ID.test(id)) continue
+    if (!id || isHiddenManagedModel(id) || isExcludedModelId(id, filter)) continue
     try {
       if (managedModelApis(model).length === 0) continue
     } catch {
@@ -3299,14 +3377,25 @@ function firstUsableModel(models, accept = () => true) {
  * @param models - a freshly fetched catalogue.
  * @param preferred - the product default for this slot ('' for none).
  * @param accept - extra condition a replacement must meet.
+ * @param filter - {@link catalogFilter} of the runtime asking.
  * @returns the replacement id, or '' when the catalogue offers none.
  */
-function replacementModel(models, preferred, accept = () => true) {
+function replacementModel(models, preferred, accept = () => true, filter = {}) {
   if (preferred) {
     const listed = models.find((model) => model?.id === preferred)
-    if (listed && firstUsableModel([listed], accept)) return preferred
+    if (listed && firstUsableModel([listed], accept, filter)) return preferred
   }
-  return firstUsableModel(models, accept)
+  return firstUsableModel(models, accept, filter)
+}
+
+/**
+ * Why a selection is missing from a filtered catalogue.
+ * @param id - the selected model.
+ * @param filter - {@link catalogFilter} the catalogue was read with.
+ * @returns 'filtered' when TokensCowork's own rules keep it out, else 'offline'.
+ */
+function missingModelReason(id, filter) {
+  return isExcludedModelId(id, filter) ? 'filtered' : 'offline'
 }
 
 /**
@@ -3318,22 +3407,28 @@ function replacementModel(models, preferred, accept = () => true) {
  *
  * @param runtime - manager runtime.
  * @param models - the catalogue TokensAPI just returned.
- * @returns one `{ kind, from, to }` per selection to replace.
+ * @returns one `{ kind, from, to, reason }` per selection to replace.
  */
 function offlineManagedSelections(runtime, models) {
-  const listed = new Set(models.map((model) => model?.id).filter((id) => id && !isHiddenManagedModel(id)))
+  const filter = catalogFilter(runtime)
+  // An excluded model is treated exactly like one TokensAPI dropped: the
+  // catalogue was parsed without it, so it is simply not listed here.
+  const listed = new Set(
+    models.map((model) => model?.id).filter((id) => id && !isHiddenManagedModel(id) && !isExcludedModelId(id, filter)),
+  )
   const changes = []
+  const change = (kind, from, to) => ({ kind, from, to, reason: missingModelReason(from, filter) })
   if (runtime.mainModel && !listed.has(runtime.mainModel)) {
-    const to = replacementModel(models, TOKENSAPI.mainModel)
-    if (to && to !== runtime.mainModel) changes.push({ kind: 'main', from: runtime.mainModel, to })
+    const to = replacementModel(models, TOKENSAPI.mainModel, undefined, filter)
+    if (to && to !== runtime.mainModel) changes.push(change('main', runtime.mainModel, to))
   }
   if (runtime.visionModel && !listed.has(runtime.visionModel)) {
     // The vision slot reads images for a text-only main model, so its stand-in
     // has to accept images; a text model there would answer with nothing.
     const seesImages = (model) =>
       managedModelCapability(model, runtime.visionModeByModel[model.id]).visionMode === 'native'
-    const to = replacementModel(models, TOKENSAPI.visionModel, seesImages)
-    if (to && to !== runtime.visionModel) changes.push({ kind: 'vision', from: runtime.visionModel, to })
+    const to = replacementModel(models, TOKENSAPI.visionModel, seesImages, filter)
+    if (to && to !== runtime.visionModel) changes.push(change('vision', runtime.visionModel, to))
   }
   return changes
 }
@@ -3356,9 +3451,8 @@ function noteReplacedModels(runtime, changes) {
     changes: [...earlier, ...changes].map((change) => ({ ...change })),
   }
   for (const change of changes) {
-    console.error(
-      `[tokens-model-manager] ${change.kind} model ${change.from} is no longer offered; switched to ${change.to}`,
-    )
+    const why = change.reason === 'filtered' ? 'is not offered in TokensCowork' : 'is no longer offered'
+    console.error(`[tokens-model-manager] ${change.kind} model ${change.from} ${why}; switched to ${change.to}`)
   }
 }
 
@@ -3415,9 +3509,10 @@ async function replaceOfflineFallbackModel(ctx, models) {
   const runtime = managerRuntime(ctx)
   runtime.fallbackModels = models
   const current = runtime.fallbackModel
-  if (!current || models.some((model) => model?.id === current)) return []
-  const to = replacementModel(models, DEEPSEEK_OFFICIAL.mainModel)
-  if (!to) return []
+  const filter = catalogFilter(runtime)
+  if (!current || (!isExcludedModelId(current, filter) && models.some((model) => model?.id === current))) return []
+  const to = replacementModel(models, DEEPSEEK_OFFICIAL.mainModel, undefined, filter)
+  if (!to || to === current) return []
   runtime.fallbackModel = to
   if (runtime.settings?.update) {
     await runtime.settings.update(TOKENSAPI.settingsNamespace, { fallbackModel: to })
@@ -3428,7 +3523,7 @@ async function replaceOfflineFallbackModel(ctx, models) {
       await runtime.agentDefaultModel.saveSelection({ provider: DEEPSEEK_OFFICIAL.providerId, model: to })
     }
   }
-  const changes = [{ kind: 'fallback', from: current, to }]
+  const changes = [{ kind: 'fallback', from: current, to, reason: missingModelReason(current, filter) }]
   noteReplacedModels(runtime, changes)
   return changes
 }
@@ -3450,7 +3545,7 @@ async function refreshFallbackCatalog(ctx, request) {
   const baseURL = runtime.fallbackBaseURL
   let models
   try {
-    models = await validateFallbackCredential(apiKey, baseURL, request)
+    models = await validateFallbackCredential(apiKey, baseURL, request, undefined, catalogFilter(runtime))
   } catch (error) {
     console.error(`[tokens-model-manager] fallback model list unavailable, selection kept: ${error?.code ?? 'error'}`)
     return
@@ -3462,7 +3557,12 @@ async function refreshFallbackCatalog(ctx, request) {
   await replaceOfflineFallbackModel(ctx, models)
 }
 
-async function parseManagedModels(response) {
+/**
+ * The TokensAPI catalogue reduced to the conversation models TokensCowork offers.
+ * @param response - the `/models` response.
+ * @param filter - {@link catalogFilter} of the runtime asking.
+ */
+async function parseManagedModels(response, filter = {}) {
   let payload
   try {
     payload = await response.json()
@@ -3479,7 +3579,7 @@ async function parseManagedModels(response) {
   const seen = new Set()
   for (const entry of payload.data) {
     const id = normalizeModelId(entry?.id, '')
-    if (!id || seen.has(id) || NON_CONVERSATION_MODEL_ID.test(id)) continue
+    if (!id || seen.has(id) || isExcludedModelId(id, filter)) continue
     const endpointTypes = normalizeEndpointTypes(entry?.supported_endpoint_types)
     const hasEndpointTypes = Array.isArray(entry?.supported_endpoint_types)
     // A catalog that declares endpoint metadata is authoritative. Keep only
@@ -3803,7 +3903,7 @@ function publicFallbackModels(runtime) {
   return models.map((model) => ({ id: model.id, name: model.name ?? model.id }))
 }
 
-async function parseFallbackModels(response) {
+async function parseFallbackModels(response, filter = {}) {
   let payload
   try {
     payload = await response.json()
@@ -3817,7 +3917,7 @@ async function parseFallbackModels(response) {
   const seen = new Set()
   for (const entry of payload.data) {
     const id = normalizeModelId(entry?.id, '')
-    if (!id || seen.has(id)) continue
+    if (!id || seen.has(id) || isExcludedModelId(id, filter)) continue
     const endpointTypes = normalizeEndpointTypes(entry?.supported_endpoint_types)
     const hasEndpointTypes = Array.isArray(entry?.supported_endpoint_types)
     if (hasEndpointTypes && endpointTypes.length === 0) continue
@@ -3830,8 +3930,9 @@ async function parseFallbackModels(response) {
   return models
 }
 
-async function validateFallbackCredential(apiKey, baseURL, request = globalThis.fetch, signal) {
-  return requestModelCatalog(`${baseURL}/models`, apiKey, '备用线路', parseFallbackModels, request, signal)
+async function validateFallbackCredential(apiKey, baseURL, request = globalThis.fetch, signal, filter = {}) {
+  const parse = (response) => parseFallbackModels(response, filter)
+  return requestModelCatalog(`${baseURL}/models`, apiKey, '备用线路', parse, request, signal)
 }
 
 async function synchronizeFallbackModel(ctx) {
@@ -4034,6 +4135,8 @@ async function modelManagerStatus(ctx, request = globalThis.fetch, { refreshMode
       runtime.models = await validateManagedCredential(
         resolvedCredentialValue(await ctx.credentials.resolve(TOKENSAPI.credentialRef)),
         request,
+        undefined,
+        catalogFilter(runtime),
       )
       const previousVisionModeByModel = runtime.visionModeByModel
       runtime.visionModeByModel = reconcileVisionModeByModel(runtime.models, runtime.visionModeByModel)
@@ -4162,15 +4265,16 @@ class ManagedCredentialError extends Error {
  * Error bodies are never surfaced because gateways sometimes echo request
  * metadata. A successful body is reduced to bounded public model metadata.
  */
-async function validateManagedCredential(apiKey, request = globalThis.fetch, signal) {
-  return requestModelCatalog(`${TOKENSAPI.baseURL}/models`, apiKey, 'TokensAPI', parseManagedModels, request, signal)
+async function validateManagedCredential(apiKey, request = globalThis.fetch, signal, filter = {}) {
+  const parse = (response) => parseManagedModels(response, filter)
+  return requestModelCatalog(`${TOKENSAPI.baseURL}/models`, apiKey, 'TokensAPI', parse, request, signal)
 }
 
 /** Validate first, then persist the key and its non-reversible verification marker. */
 async function setManagedCredential(ctx, value, request = globalThis.fetch) {
   const apiKey = normalizeManagedCredential(value)
-  const models = await validateManagedCredential(apiKey, request)
   const runtime = managerRuntime(ctx)
+  const models = await validateManagedCredential(apiKey, request, undefined, catalogFilter(runtime))
   const previousModels = runtime.models
   const previousVisionModeByModel = runtime.visionModeByModel
   const previousSelection = { mainModel: runtime.mainModel, visionModel: runtime.visionModel }
@@ -4440,7 +4544,7 @@ async function discoverFallback(ctx, value, request = globalThis.fetch) {
   }
   return {
     baseURL,
-    models: await validateFallbackCredential(apiKey, baseURL, request),
+    models: await validateFallbackCredential(apiKey, baseURL, request, undefined, catalogFilter(runtime)),
   }
 }
 
@@ -4464,7 +4568,7 @@ async function configureFallback(ctx, value, request = globalThis.fetch) {
   if (!apiKey) {
     throw new ManagedCredentialError('unauthenticated', '请先填写备用线路 API Key')
   }
-  const models = await validateFallbackCredential(apiKey, baseURL, request)
+  const models = await validateFallbackCredential(apiKey, baseURL, request, undefined, catalogFilter(runtime))
   const fallbackModel = normalizeModelId(value?.mainModel, runtime.fallbackModel)
   if (!models.some((model) => model.id === fallbackModel)) {
     throw new ManagedCredentialError('invalid_model', '所选模型不在备用线路可用列表中')
@@ -4773,7 +4877,13 @@ export const __modelManager = {
   // Settled once every refresh a credential change queued has run; the way
   // __paste.settled exposes the sweeper's tail.
   credentialRefreshSettled: (ctx) => managerRuntime(ctx).credentialRefresh,
+  // What apply() does with `allowGptModels`, for tests that never call apply().
+  allowGptModels: (ctx, value) => {
+    managerRuntime(ctx).allowGptModels = value === true
+  },
   hiddenManagedModelIds: HIDDEN_MANAGED_MODEL_IDS,
+  excludedModelRules: EXCLUDED_MODEL_RULES,
+  excludedModelKind,
   publicModels,
   managedConversationModels,
   anthropicUpstreamRoot,

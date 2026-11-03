@@ -1039,6 +1039,9 @@ window.__ModuleLoader__.load({
         offlineMain: 'Model {from} is no longer available; switched to {to}.',
         offlineVision: 'Vision model {from} is no longer available; switched to {to}.',
         offlineFallback: 'Fallback route model {from} is no longer available; switched to {to}.',
+        filteredMain: 'Model {from} is not available in TokensCowork; switched to {to}.',
+        filteredVision: 'Vision model {from} is not available in TokensCowork; switched to {to}.',
+        filteredFallback: 'Fallback route model {from} is not available in TokensCowork; switched to {to}.',
         offlineDismiss: 'Got it',
       },
       zh: {
@@ -1105,6 +1108,9 @@ window.__ModuleLoader__.load({
         offlineMain: '模型 {from} 已下线，已切换为 {to}',
         offlineVision: '视觉模型 {from} 已下线，已切换为 {to}',
         offlineFallback: '备用线路模型 {from} 已下线，已切换为 {to}',
+        filteredMain: '模型 {from} 在 TokensCowork 中不可用，已切换为 {to}',
+        filteredVision: '视觉模型 {from} 在 TokensCowork 中不可用，已切换为 {to}',
+        filteredFallback: '备用线路模型 {from} 在 TokensCowork 中不可用，已切换为 {to}',
         offlineDismiss: '知道了',
       },
     }
@@ -1115,6 +1121,9 @@ window.__ModuleLoader__.load({
     }
 
     var OFFLINE_NOTICE_KEYS = { main: 'offlineMain', vision: 'offlineVision', fallback: 'offlineFallback' }
+    // A model TokensCowork's own rules keep out (gpt-*, embeddings, ...) is not
+    // "offline": TokensAPI still lists it, so the notice says so differently.
+    var FILTERED_NOTICE_KEYS = { main: 'filteredMain', vision: 'filteredVision', fallback: 'filteredFallback' }
 
     /**
      * The host's record of models it replaced because the catalogue dropped
@@ -1132,11 +1141,15 @@ window.__ModuleLoader__.load({
       return changes.length > 0 ? { id: notice.id, changes: changes } : null
     }
 
-    /** One localized sentence per replaced model, e.g. 「模型 A 已下线，已切换为 B」. */
+    /**
+     * One localized sentence per replaced model, e.g. 「模型 A 已下线，已切换为 B」, or
+     * 「模型 A 在 TokensCowork 中不可用，已切换为 B」 when the plugin's own filter dropped it.
+     */
     function modelNoticeLines(t, notice) {
-      return (notice?.changes ?? []).map((change) =>
-        t[OFFLINE_NOTICE_KEYS[change.kind]].replace('{from}', () => change.from).replace('{to}', () => change.to),
-      )
+      return (notice?.changes ?? []).map((change) => {
+        var keys = change.reason === 'filtered' ? FILTERED_NOTICE_KEYS : OFFLINE_NOTICE_KEYS
+        return t[keys[change.kind]].replace('{from}', () => change.from).replace('{to}', () => change.to)
+      })
     }
 
     // The latest notice seen in any status response, for the app-wide toast.
@@ -3708,6 +3721,7 @@ window.__ModuleLoader__.load({
       managerFetch: managerFetch,
       modelNoticeOf: modelNoticeOf,
       modelNoticeLines: modelNoticeLines,
+      managerLabels: managerLabels,
       modelNoticeFeed: modelNoticeFeed,
       mountModelNoticeToast: mountModelNoticeToast,
     }
