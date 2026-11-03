@@ -27,10 +27,15 @@
 </p>
 
 本插件是面向 DSH Desktop 的 TokensAPI 产品层：隐藏 DSH 官方模型入口和通用提供方编辑器，固定接口
-`https://tokensapi.ai/v1`。主模型默认 `deepseek-v4-flash`，视觉模型默认
-`qwen3.8-flash-next`；验证 API Key 后，两者都可以在“设置 → 模型”从 TokensAPI
+`https://tokensapi.ai/v1`。主模型默认 `deepseek-v4-flash-vision-exp`（原生看图，不经视觉桥接），
+视觉模型默认 `qwen3.8-flash-next`（主模型不能看图时用来读图）；验证 API Key 后，两者都可以在“设置 → 模型”从 TokensAPI
 `GET /v1/models` 返回的实时列表中独立选择。Key 由 DSH 凭据服务保存，不会写入仓库、模型配置、
 常规状态响应或日志；只有用户明确点击“显示”或“复制”时，设置页才会读取它。
+
+所选模型被 TokensAPI 下线时（拿到的最新模型列表里已没有它），插件自动换回默认模型；默认模型也不在
+列表里时换成列表里第一个可用的对话模型。视觉模型与备用线路模型同样处理。换完会同步写回宿主的默认模型，
+并在“设置 → 模型”顶部和窗口顶部提示「模型 A 已下线，已切换为 B」。列表拉取失败（网络、5xx、Key 无效）
+时不会据此更换任何模型。
 
 Desktop 启动时采用 fail-closed 全屏门禁：认证状态未知、没有 Key、旧 Key 尚未验证或状态接口失败时，
 聊天主界面不会放行。提交后由插件后端请求 TokensAPI `GET /v1/models` 验证；仅 HTTP 200 才保存

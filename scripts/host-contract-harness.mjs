@@ -100,7 +100,7 @@ export const ONE_PIXEL_PNG = Buffer.from(
 );
 
 /** The product's own model ids, so a case reads what the shipped patch pins. */
-export const MAIN_MODEL = 'deepseek-v4-flash';
+export const MAIN_MODEL = 'deepseek-v4-flash-vision-exp';
 export const UPSTREAM = 'tokensapi';
 export const MANAGED = 'modlens-tokensapi';
 
@@ -166,7 +166,7 @@ function release() {
 }
 
 /** The profile patch the shipped `cordis.patch.yml` pins, as loader entries. */
-function profileEntries(home, pluginConfig) {
+function profileEntries(home, pluginConfig, defaultModel = MAIN_MODEL) {
     return [
         { id: 'config-editor', name: 'cordis:editor' },
         { id: 'settings', name: 'cordis:settings' },
@@ -206,7 +206,7 @@ function profileEntries(home, pluginConfig) {
                         defaultContextWindow: 262144,
                         models: [
                             {
-                                id: MAIN_MODEL,
+                                id: defaultModel,
                                 name: 'DeepSeek V4 Flash',
                                 contextWindow: 262144,
                                 maxTokens: 32768,
@@ -219,7 +219,7 @@ function profileEntries(home, pluginConfig) {
         {
             id: 'agent-default-model',
             name: 'cordis:agentDefaultModel',
-            config: { provider: MANAGED, model: MAIN_MODEL },
+            config: { provider: MANAGED, model: defaultModel },
         },
         { id: 'tokens-model-manager', name: 'cordis:tokensModelManager', config: pluginConfig },
     ];
@@ -231,7 +231,7 @@ function profileEntries(home, pluginConfig) {
  * @param pluginConfig - the plugin entry config.
  * @returns the booted Host context plus the paths a case needs.
  */
-async function profileHost(t, pluginConfig) {
+async function profileHost(t, pluginConfig, defaultModel = MAIN_MODEL) {
     const require_ = hostRequire();
     const { boot, initProfile, readProfilePatches } = await hostLoad('@deepseek-ai/dsh-app-boot');
     const settingsModule = await hostLoad('@deepseek-ai/dsh-settings');
@@ -275,7 +275,7 @@ async function profileHost(t, pluginConfig) {
     );
     writeFileSync(
         join(bundle, 'cordis.patch.yml'),
-        JSON.stringify([{ insert: profileEntries(home, pluginConfig) }]),
+        JSON.stringify([{ insert: profileEntries(home, pluginConfig, defaultModel) }]),
     );
     writeFileSync(join(dir, 'cordis.yml'), '[]\n');
     const profile = {
@@ -346,7 +346,7 @@ async function profileHost(t, pluginConfig) {
  * @param pluginConfig - the plugin entry config.
  * @returns the Host context plus the paths a case needs.
  */
-async function serviceHost(t, pluginConfig) {
+async function serviceHost(t, pluginConfig, defaultModel = MAIN_MODEL) {
     const { Context } = await hostLoad('@deepseek-ai/cordis');
     const settingsModule = await hostLoad('@deepseek-ai/dsh-settings');
     const { WebServer } = await hostLoad('@deepseek-ai/dsh-host-webserver');
@@ -392,7 +392,7 @@ async function serviceHost(t, pluginConfig) {
     await ctx.plugin(WebServer, { host: '127.0.0.1', port: 0 }).await();
     await ctx.plugin(SystemPrompt, {}).await();
     await ctx.plugin(ToolRuntime, {}).await();
-    await ctx.plugin(AgentDefaultModel, { provider: MANAGED, model: MAIN_MODEL }).await();
+    await ctx.plugin(AgentDefaultModel, { provider: MANAGED, model: defaultModel }).await();
     // The real provider plugin, with the product's own TokensAPI route: the
     // plugin writes this route's settings namespace for real.
     await ctx
@@ -406,7 +406,7 @@ async function serviceHost(t, pluginConfig) {
                     defaultContextWindow: 262144,
                     models: [
                         {
-                            id: MAIN_MODEL,
+                            id: defaultModel,
                             name: 'DeepSeek V4 Flash',
                             contextWindow: 262144,
                             maxTokens: 32768,
@@ -435,11 +435,20 @@ async function serviceHost(t, pluginConfig) {
  * @param options.beforeSettle - runs on the booted context before the wait, for a
  *   case that parks its own upstream adapter (the plugin only registers its
  *   wrapper once the upstream route exists, so it cannot be registered after).
+ * @param options.defaultModel - the model the profile starts on: the Host's
+ *   persisted default and the one model the bootstrap route carries, as a
+ *   restart after an earlier run had saved it.
  * @returns `{ ctx, origin, request, calls, mode, line, home, plugin }`.
  */
 export async function liveHost(
     t,
-    { config = {}, catalog = [MAIN_MODEL], managed = MANAGED, beforeSettle } = {},
+    {
+        config = {},
+        catalog = [MAIN_MODEL],
+        managed = MANAGED,
+        beforeSettle,
+        defaultModel = MAIN_MODEL,
+    } = {},
 ) {
     const { line, version } = hostLine();
     const pluginConfig = {
@@ -460,7 +469,9 @@ export async function liveHost(
         globalThis.fetch = hostFetch;
     });
     const host =
-        line === '0.1' ? await serviceHost(t, pluginConfig) : await profileHost(t, pluginConfig);
+        line === '0.1'
+            ? await serviceHost(t, pluginConfig, defaultModel)
+            : await profileHost(t, pluginConfig, defaultModel);
     const extra = await beforeSettle?.(host.ctx);
     // The plugin's registration, its settings replay and its first route
     // activation all run detached from `apply`. Settle them here so a case

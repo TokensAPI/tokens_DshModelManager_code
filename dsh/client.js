@@ -1036,6 +1036,10 @@ window.__ModuleLoader__.load({
         backTokens: 'Back to TokensAPI',
         fixedValue: 'Fixed',
         officialVision: 'Chat uses {mainModel}. Images continue through the TokensAPI vision model {visionModel}.',
+        offlineMain: 'Model {from} is no longer available; switched to {to}.',
+        offlineVision: 'Vision model {from} is no longer available; switched to {to}.',
+        offlineFallback: 'Fallback route model {from} is no longer available; switched to {to}.',
+        offlineDismiss: 'Got it',
       },
       zh: {
         nav: '模型',
@@ -1098,12 +1102,100 @@ window.__ModuleLoader__.load({
         backTokens: '切回 TokensAPI',
         fixedValue: '固定配置',
         officialVision: '对话由 {mainModel} 处理，图片继续由 TokensAPI 视觉模型 {visionModel} 读取。',
+        offlineMain: '模型 {from} 已下线，已切换为 {to}',
+        offlineVision: '视觉模型 {from} 已下线，已切换为 {to}',
+        offlineFallback: '备用线路模型 {from} 已下线，已切换为 {to}',
+        offlineDismiss: '知道了',
       },
     }
 
     function managerLabels() {
       var lang = (document.documentElement?.lang || globalThis.navigator?.language || 'en').toLowerCase()
       return lang.indexOf('zh') === 0 ? MANAGER_TEXT.zh : MANAGER_TEXT.en
+    }
+
+    var OFFLINE_NOTICE_KEYS = { main: 'offlineMain', vision: 'offlineVision', fallback: 'offlineFallback' }
+
+    /**
+     * The host's record of models it replaced because the catalogue dropped
+     * them, or null when the status carries none (or a malformed one).
+     */
+    function modelNoticeOf(body) {
+      var notice = body?.modelNotice
+      if (!notice || typeof notice.id !== 'string' || !Array.isArray(notice.changes)) return null
+      var changes = notice.changes.filter(
+        (change) =>
+          Object.hasOwn(OFFLINE_NOTICE_KEYS, change?.kind) &&
+          typeof change.from === 'string' &&
+          typeof change.to === 'string',
+      )
+      return changes.length > 0 ? { id: notice.id, changes: changes } : null
+    }
+
+    /** One localized sentence per replaced model, e.g. 「模型 A 已下线，已切换为 B」. */
+    function modelNoticeLines(t, notice) {
+      return (notice?.changes ?? []).map((change) =>
+        t[OFFLINE_NOTICE_KEYS[change.kind]].replace('{from}', () => change.from).replace('{to}', () => change.to),
+      )
+    }
+
+    // The latest notice seen in any status response, for the app-wide toast.
+    // The settings page reads its own status; this feed exists so the notice is
+    // seen even when that page is never opened.
+    var modelNoticeFeed = {
+      notice: null,
+      listeners: new Set(),
+      accept(body) {
+        var notice = modelNoticeOf(body)
+        if (notice?.id === modelNoticeFeed.notice?.id) return
+        if (!notice && !modelNoticeFeed.notice) return
+        modelNoticeFeed.notice = notice
+        for (var listener of [...modelNoticeFeed.listeners]) listener()
+      },
+      subscribe(listener) {
+        modelNoticeFeed.listeners.add(listener)
+        return () => modelNoticeFeed.listeners.delete(listener)
+      },
+    }
+
+    // A notice is toasted once per page session, reload included; the settings
+    // page keeps showing it until the user saves or dismisses it there.
+    function toastedNotice(id, mark) {
+      var key = 'tokens-model-manager:toasted-notice'
+      try {
+        var storage = typeof sessionStorage === 'undefined' ? null : sessionStorage
+        if (mark) storage?.setItem(key, id)
+        return storage?.getItem(key) === id
+      } catch {
+        return false
+      }
+    }
+
+    /**
+     * App-wide toast for a replaced model, mounted in the Host's `shell.overlay`
+     * seat with the Host's own Toast primitive, so it looks like every other
+     * Desktop banner and does not depend on which page is open.
+     */
+    function ModelNoticeToast(react, Toast) {
+      var h = react.createElement
+      return function TokensModelNoticeToast() {
+        var noticePair = react.useState(() => modelNoticeFeed.notice)
+        var shownPair = react.useState('')
+        react.useEffect(() => modelNoticeFeed.subscribe(() => noticePair[1](modelNoticeFeed.notice)), [])
+        var notice = noticePair[0]
+        var visible = notice && shownPair[0] !== notice.id && !toastedNotice(notice.id, false)
+        if (!visible) return null
+        var t = managerLabels()
+        return h(Toast, {
+          key: notice.id,
+          text: modelNoticeLines(t, notice).join(t === MANAGER_TEXT.zh ? '；' : ' '),
+          holdMs: 8000,
+          onDone: () => {
+            toastedNotice(notice.id, true)
+            shownPair[1](notice.id)
+          },
+        })
+      }
     }
 
     /**
@@ -1374,6 +1466,9 @@ window.__ModuleLoader__.load({
           (async () => {
             var response = await fetch(url, { ...options, signal: controller.signal })
             var body = await response.json()
+            // Every full status (GET or the one a POST answers with) says
+            // whether a replaced-model notice is pending; feed the toast.
+            if (response.ok && body?.provider === 'TokensAPI') modelNoticeFeed.accept(body)
             return { ok: response.ok, status: response.status, json: async () => body }
           })(),
         ])
@@ -1558,17 +1653,46 @@ window.__ModuleLoader__.load({
             '/tokens/model-manager?refresh=1',
             { cache: 'no-store' },
             {
-              success: (body) => {
+              success: (body, alive) => {
                 acceptManagedCatalog(body)
                 statePair[1](body)
                 if (body.modelListError)
                   notePair[1](responseError({ code: body.modelListErrorCode, error: body.modelListError }).message)
+                if (modelNoticeOf(body)) {
+                  // This refresh replaced a model the catalogue dropped. The
+                  // drafts still hold the old one; saving them would fail.
+                  mainPair[1](body.mainModel || '')
+                  protocolPair[1](body.api || '')
+                  visionPair[1](body.visionModel || '')
+                  fallbackModelPair[1](body.official?.configured ? body.official?.mainModel || '' : '')
+                  if (body.authenticated === true) {
+                    var selection = activeSelectionFromStatus(body)
+                    return Promise.resolve(synchronizeMainSelection(selection.model, selection.provider)).catch(
+                      (error) => {
+                        if (alive()) notePair[1](`${t.sessionSwitchFailed}${String(error.message || error)}`)
+                      },
+                    )
+                  }
+                }
               },
               error: (error) => notePair[1](String(error.message || error)),
             },
           )
           return () => requests.cancel()
         }, [officialPanelOpen, state?.authenticated])
+
+        var dismissNotice = (notice) => {
+          managerFetch('/tokens/model-manager', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ action: 'dismissModelNotice', id: notice.id }),
+          })
+            .then((response) => response.json().then((body) => ({ response, body })))
+            .then(({ response, body }) => {
+              if (response.ok && body?.provider === 'TokensAPI') statePair[1](body)
+            })
+            .catch((error) => notePair[1](String(error.message || error)))
+        }
 
         // The conversation picker can change the shared main model while this
         // page remains mounted. Reload the status so the settings controls
@@ -1907,6 +2031,55 @@ window.__ModuleLoader__.load({
               },
             },
             actionLabel,
+          )
+        }
+
+        // Shown until the user saves the page or presses "Got it": the toast is
+        // transient, this is where the replacement stays explained.
+        var modelNoticeBanner = () => {
+          var notice = modelNoticeOf(state)
+          if (!notice) return null
+          return h(
+            'div',
+            {
+              role: 'status',
+              'data-tokens-model-notice': notice.id,
+              style: {
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 16,
+                marginBottom: 16,
+                padding: '12px 16px',
+                border: '1px solid var(--dsw-alias-state-warn-primary, #d97706)',
+                borderRadius: 12,
+                background: 'var(--dsw-alias-bg-layer-2)',
+                color: 'var(--dsw-alias-label-primary)',
+                fontSize: 13,
+              },
+            },
+            h(
+              'div',
+              null,
+              modelNoticeLines(t, notice).map((line) => h('div', { key: line }, line)),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                onClick: () => dismissNotice(notice),
+                style: {
+                  flex: 'none',
+                  padding: '6px 12px',
+                  border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+                  borderRadius: 8,
+                  background: 'transparent',
+                  color: 'inherit',
+                  cursor: 'pointer',
+                },
+              },
+              t.offlineDismiss,
+            ),
           )
         }
 
@@ -2353,6 +2526,7 @@ window.__ModuleLoader__.load({
             { style: { margin: '0 0 20px', color: 'var(--dsw-alias-label-secondary, #666)' } },
             officialPanel ? t.officialIntro : t.intro,
           ),
+          modelNoticeBanner(),
           routeStatusCard(),
           !officialPanel && state
             ? h(
@@ -2995,6 +3169,27 @@ window.__ModuleLoader__.load({
       return true
     }
 
+    /**
+     * Mount the replaced-model toast in the Host's frame-wide overlay seat.
+     * Hosts without that seat or without the Toast primitive keep the
+     * settings-page notice only.
+     */
+    function mountModelNoticeToast(scope) {
+      try {
+        var Toast = require('@deepseek-ai/dsh-client-ui-primitives')?.Toast
+        if (typeof Toast !== 'function' || typeof scope.slots?.inject !== 'function') return
+        var Component = ModelNoticeToast(require('react'), Toast)
+        scope.slots.inject('shell.overlay', function* () {
+          yield scope.slots.register(
+            { name: 'shell.overlay', id: 'tokens-model-offline-notice', inject: () => ({}) },
+            Component,
+          )
+        })
+      } catch (error) {
+        console.error(`[tokens-model-manager] model notice toast skipped: ${error}`)
+      }
+    }
+
     function registerManagerSection(ctx) {
       if (typeof ctx.inject !== 'function') return
       ctx.inject(['slots', 'sessions', 'modelDirectories'], (scope) => {
@@ -3411,15 +3606,33 @@ window.__ModuleLoader__.load({
             }
             // Mount the settings entry before refreshing the primary catalog,
             // so a stalled primary cannot keep fallback settings inaccessible.
-            if (body.authenticated === true && body.channel !== 'official' && body.modelsAvailable === false) {
+            // The same refresh checks a configured fallback route's catalogue
+            // once per run, so it also runs while that route is the active one.
+            var primaryUnloaded = body.channel !== 'official' && body.modelsAvailable === false
+            var fallbackUnchecked = body.official?.configured === true && body.official?.modelsChecked === false
+            if (body.authenticated === true && (primaryUnloaded || fallbackUnchecked)) {
               managerFetch('/tokens/model-manager?refresh=1', { cache: 'no-store' })
                 .then((response) => response.json().then((refreshed) => ({ response, refreshed })))
                 .then(({ response, refreshed }) => {
                   if (!response.ok || refreshed?.provider !== 'TokensAPI') return
                   synchronizeModelCatalog(refreshed.models)
+                  // The refresh replaced a model the catalogue dropped: move
+                  // sessions that follow the default onto the replacement.
+                  var refreshedSelection = activeSelectionFromStatus(refreshed)
+                  if (
+                    refreshed.authenticated === true &&
+                    refreshedSelection.model &&
+                    (refreshedSelection.model !== desiredMainModel ||
+                      refreshedSelection.provider !== desiredMainProvider)
+                  ) {
+                    return synchronizeMainSelection(refreshedSelection.model, refreshedSelection.provider)
+                  }
                 })
-                .catch(() => {})
+                .catch((error) => {
+                  console.error(`[tokens-model-manager] catalog refresh after start-up skipped: ${error}`)
+                })
             }
+            mountModelNoticeToast(scope)
             scope.slots.inject('settings.section', function* () {
               yield scope.slots.register(
                 {
@@ -3492,6 +3705,11 @@ window.__ModuleLoader__.load({
       onModelSelectClick: onModelSelectClick,
       installModelMenuStyle: installModelMenuStyle,
       modelMenuStyle: MODEL_MENU_STYLE,
+      managerFetch: managerFetch,
+      modelNoticeOf: modelNoticeOf,
+      modelNoticeLines: modelNoticeLines,
+      modelNoticeFeed: modelNoticeFeed,
+      mountModelNoticeToast: mountModelNoticeToast,
     }
     // Settings integration is optional, so its services are acquired through
     // registerManagerSection instead of making the whole browser plugin wait.

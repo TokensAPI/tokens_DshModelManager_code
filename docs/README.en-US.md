@@ -28,9 +28,17 @@
 
 This package is the TokensAPI product layer for DSH Desktop. It hides the stock
 DSH model-provider editor and fixes `https://tokensapi.ai/v1` as the endpoint.
-Chat defaults to `deepseek-v4-flash` and vision defaults to
-`qwen3.8-flash-next`; after authentication, both can be selected from the live
-TokensAPI `GET /v1/models` catalog under Settings → Models.
+Chat defaults to `deepseek-v4-flash-vision-exp` (it reads images itself, so no
+vision bridge is involved) and vision defaults to `qwen3.8-flash-next` (used to
+read images for a main model that cannot); after authentication, both can be
+selected from the live TokensAPI `GET /v1/models` catalog under Settings → Models.
+When TokensAPI stops offering a selected model — a freshly fetched catalogue no
+longer lists it — the plugin switches back to the default, or to the first
+usable chat model when the default is gone too; the vision and fallback-route
+models are handled the same way. The Host's default model is updated with it,
+and a notice ("Model A is no longer available; switched to B.") appears at the
+top of Settings → Models and as a banner at the top of the window. A catalogue
+fetch that fails (network, 5xx, rejected key) never changes a selection.
 The user enters only one API key in Settings → Models. DSH's credential service
 stores it; normal status responses and logs never contain the key. The settings
 page reads it only after an explicit Show or Copy action.

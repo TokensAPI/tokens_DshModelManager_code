@@ -671,6 +671,128 @@ test(
 );
 
 test(
+    'HOST-037 a main model TokensAPI dropped is replaced after a restart, and the kernel default resolves again',
+    options,
+    async (t) => {
+        // T0064. The profile restarts on a main model TokensAPI no longer
+        // offers: it is still the Host's persisted default and still the one
+        // model the bootstrap route carries. Before 0.2.29 the next catalogue
+        // read wrote a route without it while the Host default stayed on it, so
+        // every message failed in pi-ai with UNKNOWN_MODEL before a request was
+        // even sent. Everything below is the Host's own: its credential
+        // provider and the notification that makes the plugin refresh, its web
+        // server serving the refresh the browser half makes at start-up, its
+        // agentDefaultModel service, its settings entries, and pi-ai's own
+        // model resolution. Only TokensAPI's catalogue is scripted.
+        const OFFLINE = 'retired-contract-model';
+        const host = await liveHost(t, { defaultModel: OFFLINE });
+        const { credentials, llm } = host.ctx;
+        const plugin = host.plugin;
+        const selection = async () => {
+            if (typeof host.ctx.agentDefaultModel?.currentSelection === 'function') {
+                return host.ctx.agentDefaultModel.currentSelection();
+            }
+            return host.ctx.settings.describe().find((row) => row?.ns === 'agent-default-model')
+                ?.value;
+        };
+        assert.equal(
+            (await selection())?.model,
+            OFFLINE,
+            'the profile must start on the offline model',
+        );
+
+        // TokensAPI's catalogue as it publishes it — ids and endpoint types,
+        // no modalities — first unreachable, then without the offline model.
+        let catalogUp = false;
+        const catalogCalls = [];
+        globalThis.fetch = async (url) => {
+            catalogCalls.push(String(url));
+            if (!catalogUp) return { ok: false, status: 503, json: async () => ({}) };
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({
+                    data: [
+                        { id: MAIN_MODEL, supported_endpoint_types: ['openai'] },
+                        { id: 'deepseek-v4-flash', supported_endpoint_types: ['openai'] },
+                        // The vision model is still offered, so only the main one moves.
+                        { id: 'qwen3.8-flash-next', supported_endpoint_types: ['openai'] },
+                    ],
+                }),
+            };
+        };
+
+        // The stored key makes the plugin read the catalogue, and that read fails:
+        // nothing may move on a list that never arrived.
+        const key = 'synthetic-contract-key';
+        await credentials.set('TOKENSAPI_API_KEY', key);
+        await credentials.set(
+            'TOKENSAPI_API_KEY_VERIFIED_SHA256',
+            plugin.__modelManager.managedCredentialFingerprint(key),
+        );
+        await until('the plugin to try the catalogue', () => catalogCalls.length > 0);
+        await plugin.__modelManager.credentialRefreshSettled(host.ctx);
+        const unreachable = await hostRequest(host, '/tokens/model-manager');
+        assert.equal(unreachable.body.mainModel, OFFLINE);
+        assert.equal(unreachable.body.modelNotice, undefined);
+        assert.equal(
+            (await selection())?.model,
+            OFFLINE,
+            'a failed list must not move the default',
+        );
+
+        // TokensAPI answers again: the refresh the browser half makes at start-up.
+        catalogUp = true;
+        const refreshed = await hostRequest(host, '/tokens/model-manager?refresh=1');
+        assert.equal(refreshed.status, 200);
+        assert.equal(refreshed.body.mainModel, MAIN_MODEL);
+        assert.deepEqual(refreshed.body.modelNotice?.changes, [
+            { kind: 'main', from: OFFLINE, to: MAIN_MODEL },
+        ]);
+        // The kernel's default moved with it, onto the direct route: the default
+        // reads images itself and needs no bridge.
+        const current = await selection();
+        assert.equal(current?.model, MAIN_MODEL);
+        assert.equal(current?.provider, UPSTREAM);
+        if (host.line !== '0.1') {
+            const routeIds = host.ctx.settings
+                .describe()
+                .find((row) => row?.ns === 'llm-pi-ai')
+                ?.value?.providers?.[UPSTREAM]?.models?.map((model) => model.id);
+            assert.ok(routeIds?.includes(MAIN_MODEL));
+            assert.ok(
+                !routeIds?.includes(OFFLINE),
+                'the route must no longer carry the offline model',
+            );
+        }
+        // What a message does first: pi-ai resolves the default selection. It
+        // resolves; the offline id is the UNKNOWN_MODEL the user used to hit.
+        const signal = new AbortController().signal;
+        await until('pi-ai to serve the replacement', async () => {
+            try {
+                await llm.resolveModelInfo(current.provider, current.model, signal);
+                return true;
+            } catch {
+                return false;
+            }
+        });
+        const info = await llm.resolveModelInfo(current.provider, current.model, signal);
+        assert.equal(info.id, MAIN_MODEL);
+        assert.ok(
+            info.inputModalities.includes('image'),
+            'the default must be served as image-capable',
+        );
+        await assert.rejects(
+            () => llm.resolveModelInfo(UPSTREAM, OFFLINE, signal),
+            (error) => error?.code === 'UNKNOWN_MODEL',
+        );
+        t.diagnostic(
+            `default ${OFFLINE} -> ${current.provider}/${current.model}; catalogue reads=${catalogCalls.length}`,
+        );
+    },
+);
+
+test(
     'HOST-016 the staged Host identifies itself, so a run can never be attributed to the wrong artifact',
     options,
     async (t) => {

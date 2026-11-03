@@ -2664,3 +2664,240 @@ describe('Desktop model-manager settings section', () => {
         expect(selects).toBe(0);
     });
 });
+
+describe('replaced-model notice (T0064)', () => {
+    type Node = { type: unknown; props: Record<string, unknown> | null; children: unknown[] };
+    const NOTICE = {
+        id: 'n-1',
+        changes: [
+            { kind: 'main', from: 'retired-a', to: 'deepseek-v4-flash-vision-exp' },
+            { kind: 'vision', from: 'retired-v', to: 'qwen3.8-flash-next' },
+        ],
+    };
+
+    function load(
+        lang: string,
+        fetchMock: unknown = async () => ({ ok: true, json: async () => ({}) }),
+    ) {
+        let definition: { factory: CallableFunction } | undefined;
+        const storage = new Map<string, string>();
+        new Function('window', 'document', 'fetch', 'sessionStorage', SOURCE)(
+            {
+                __ModuleLoader__: {
+                    load: (value: { factory: CallableFunction }) => {
+                        definition = value;
+                    },
+                },
+            },
+            { documentElement: { lang } },
+            fetchMock,
+            {
+                getItem: (key: string) => storage.get(key) ?? null,
+                setItem: (key: string, value: string) => storage.set(key, value),
+            },
+        );
+        return { storage, definition: definition as { factory: CallableFunction } };
+    }
+
+    function fakeReact(states: unknown[] = []) {
+        let cursor = 0;
+        const effects: Array<() => unknown> = [];
+        return {
+            reset: () => {
+                cursor = 0;
+            },
+            effects,
+            useState(initial: unknown) {
+                const index = cursor++;
+                if (!(index in states))
+                    states[index] = typeof initial === 'function' ? initial() : initial;
+                return [
+                    states[index],
+                    (value: unknown) => {
+                        states[index] = value;
+                    },
+                ];
+            },
+            useCallback: (fn: unknown) => fn,
+            useEffect: (fn: () => unknown) => {
+                effects.push(fn);
+            },
+            createElement: (type: unknown, props: Node['props'], ...children: unknown[]): Node => ({
+                type,
+                props,
+                children,
+            }),
+        };
+    }
+
+    const texts = (node: unknown): string[] => {
+        if (typeof node === 'string') return [node];
+        if (!node || typeof node !== 'object') return [];
+        if (Array.isArray(node)) return node.flatMap(texts);
+        return texts((node as Node).children);
+    };
+    const findButton = (node: unknown, label: string): Node | undefined => {
+        if (!node || typeof node !== 'object') return undefined;
+        if (Array.isArray(node)) {
+            for (const child of node) {
+                const match = findButton(child, label);
+                if (match) return match;
+            }
+            return undefined;
+        }
+        const element = node as Node;
+        if (element.type === 'button' && element.children.includes(label)) return element;
+        return findButton(element.children, label);
+    };
+
+    it('says which model went offline and what replaced it, in both locales', () => {
+        const labels = {
+            offlineMain: 'M {from} -> {to}',
+            offlineVision: 'V {from} -> {to}',
+            offlineFallback: 'F {from} -> {to}',
+        };
+        const zh = load('zh').definition.factory(() => ({})).__manager;
+        // `$&`-style patterns in an id are inserted literally.
+        expect(
+            zh.modelNoticeLines(labels, {
+                id: 'x',
+                changes: [...NOTICE.changes, { kind: 'fallback', from: 'a$&', to: 'b' }],
+            }),
+        ).toEqual([
+            'M retired-a -> deepseek-v4-flash-vision-exp',
+            'V retired-v -> qwen3.8-flash-next',
+            'F a$& -> b',
+        ]);
+        const manager = load('en').definition.factory(() => ({})).__manager;
+        // A malformed notice is no notice; unknown kinds are dropped.
+        expect(manager.modelNoticeOf({ modelNotice: { id: 1, changes: [] } })).toBeNull();
+        expect(
+            manager.modelNoticeOf({
+                modelNotice: { id: 'x', changes: [{ kind: 'other', from: 'a', to: 'b' }] },
+            }),
+        ).toBeNull();
+        expect(manager.modelNoticeOf({ modelNotice: NOTICE })).toEqual(NOTICE);
+    });
+
+    it('shows the notice on the settings page until it is dismissed there', async () => {
+        const posts: Array<Record<string, unknown>> = [];
+        const fetchMock = vi.fn(async (_url: string, options?: RequestInit) => {
+            if (options?.method === 'POST') posts.push(JSON.parse(String(options.body)));
+            return {
+                ok: true,
+                json: async () => ({
+                    provider: 'TokensAPI',
+                    authenticated: true,
+                    channel: 'tokensapi',
+                }),
+            };
+        });
+        const { definition } = load('zh', fetchMock);
+        const manager = definition.factory(() => ({})).__manager;
+        const state = {
+            provider: 'TokensAPI',
+            authenticated: true,
+            channel: 'tokensapi',
+            mainModel: 'deepseek-v4-flash-vision-exp',
+            visionModel: 'qwen3.8-flash-next',
+            modelsAvailable: true,
+            models: [],
+            official: { configured: false },
+            modelNotice: NOTICE,
+        };
+        const states: unknown[] = [state];
+        const react = fakeReact(states);
+        const section = manager.ModelManagerSection(
+            react,
+            async () => {},
+            () => {},
+        );
+        react.reset();
+        const tree = section();
+        const lines = texts(tree);
+        expect(lines).toContain('模型 retired-a 已下线，已切换为 deepseek-v4-flash-vision-exp');
+        expect(lines).toContain('视觉模型 retired-v 已下线，已切换为 qwen3.8-flash-next');
+
+        const dismiss = findButton(tree, '知道了');
+        expect(dismiss).toBeDefined();
+        (dismiss?.props?.onClick as CallableFunction | undefined)?.();
+        await vi.waitFor(() =>
+            expect(posts).toEqual([{ action: 'dismissModelNotice', id: 'n-1' }]),
+        );
+        // The answer carries no notice, so the banner goes away.
+        await vi.waitFor(() =>
+            expect((states[0] as { modelNotice?: unknown }).modelNotice).toBeUndefined(),
+        );
+        react.reset();
+        expect(texts(section()).some((line) => line.includes('已下线'))).toBe(false);
+    });
+
+    it('toasts a notice once through the Host overlay seat, fed by any status response', async () => {
+        const body = { provider: 'TokensAPI', authenticated: true, modelNotice: NOTICE };
+        const { definition, storage } = load('zh', async () => ({
+            ok: true,
+            json: async () => body,
+        }));
+        const Toast = () => null;
+        const react = fakeReact();
+        const required: string[] = [];
+        const manager = definition.factory((name: string) => {
+            required.push(name);
+            if (name === '@deepseek-ai/dsh-client-ui-primitives') return { Toast };
+            if (name === 'react') return react;
+            return {};
+        }).__manager;
+        const registered: Array<{ meta: Record<string, unknown>; Component: CallableFunction }> =
+            [];
+        const injected: string[] = [];
+        manager.mountModelNoticeToast({
+            slots: {
+                inject: (name: string, body: () => Generator<unknown>) => {
+                    injected.push(name);
+                    for (const _ of body()) {
+                        // Drain the registration generator like the slot host does.
+                    }
+                },
+                register: (meta: Record<string, unknown>, Component: CallableFunction) => {
+                    registered.push({ meta, Component });
+                    return () => {};
+                },
+            },
+        });
+        expect(injected).toEqual(['shell.overlay']);
+        expect(registered[0].meta).toMatchObject({
+            name: 'shell.overlay',
+            id: 'tokens-model-offline-notice',
+        });
+        const Component = registered[0].Component;
+
+        react.reset();
+        expect(Component()).toBeNull();
+        // Mount: the component subscribes to the notice feed.
+        for (const effect of react.effects.splice(0)) effect();
+
+        // Any full status response feeds the toast.
+        await (await manager.managerFetch('/tokens/model-manager')).json();
+        react.reset();
+        const toast = Component() as Node;
+        expect(toast.type).toBe(Toast);
+        expect(toast.props).toMatchObject({
+            text: '模型 retired-a 已下线，已切换为 deepseek-v4-flash-vision-exp；视觉模型 retired-v 已下线，已切换为 qwen3.8-flash-next',
+            holdMs: 8000,
+        });
+
+        // Once it has run its course it is not shown again, reloads included.
+        (toast.props?.onDone as CallableFunction | undefined)?.();
+        expect(storage.get('tokens-model-manager:toasted-notice')).toBe('n-1');
+        react.reset();
+        expect(Component()).toBeNull();
+    });
+
+    it('keeps the settings-page notice only when the Host has no Toast primitive', () => {
+        const { definition } = load('en');
+        const manager = definition.factory(() => ({})).__manager;
+        const inject = vi.fn();
+        manager.mountModelNoticeToast({ slots: { inject, register: vi.fn() } });
+        expect(inject).not.toHaveBeenCalled();
+    });
+});

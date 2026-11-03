@@ -415,6 +415,16 @@ describe('offline fallback and complete catalog deadlines', () => {
 
 const API_MODELS = [
     {
+        // The product default since 0.2.29. Its image support comes from the
+        // plugin's own capability table (the catalogue declares no modalities).
+        id: 'deepseek-v4-flash-vision-exp',
+        name: 'DeepSeek V4 Flash Vision (Experimental)',
+        ownedBy: 'deepseek',
+        endpointTypes: ['openai', 'openai-response', 'anthropic'],
+        contextWindow: 262144,
+        maxTokens: 32768,
+    },
+    {
         id: 'deepseek-v4-flash',
         name: 'DeepSeek V4 Flash',
         ownedBy: 'deepseek',
@@ -473,6 +483,7 @@ const PUBLIC_API_MODELS = API_MODELS.map((model) => {
         api: protocols[0].id,
         protocols,
         visionMode: [
+            'deepseek-v4-flash-vision-exp',
             'qwen3.6-35b-a3b',
             'qwen3.8-flash-next',
             'claude-opus-4-7',
@@ -614,11 +625,13 @@ describe('TokensAPI credential gate: 50 positive cases', () => {
                 writable: true,
                 provider: 'TokensAPI',
                 channel: 'tokensapi',
-                mainModel: 'deepseek-v4-flash',
+                // The default reads images itself, so it takes the direct
+                // route rather than the vision-bridge wrapper.
+                mainModel: 'deepseek-v4-flash-vision-exp',
                 api: 'openai-completions',
-                mainProvider: 'modlens-tokensapi',
-                activeMainModel: 'deepseek-v4-flash',
-                visionMode: 'bridge',
+                mainProvider: 'tokensapi',
+                activeMainModel: 'deepseek-v4-flash-vision-exp',
+                visionMode: 'native',
                 visionModel: 'qwen3.8-flash-next',
                 models: PUBLIC_API_MODELS,
                 modelsAvailable: true,
@@ -632,6 +645,7 @@ describe('TokensAPI credential gate: 50 positive cases', () => {
                     baseURL: 'https://api.deepseek.com',
                     mainModel: '',
                     models: [],
+                    modelsChecked: false,
                 },
             });
             expect(JSON.stringify(status)).not.toContain(testCase.stored);
@@ -781,7 +795,7 @@ describe('independent fallback route', () => {
             __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE),
         ).resolves.toMatchObject({
             channel: 'tokensapi',
-            mainProvider: TOKENSAPI.agentProviderId,
+            mainProvider: TOKENSAPI.providerId,
             official: {
                 baseURL: DEEPSEEK_OFFICIAL.baseURL,
                 mainModel: '',
@@ -887,7 +901,7 @@ describe('independent fallback route', () => {
                 __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE),
             ).resolves.toMatchObject({
                 channel: 'tokensapi',
-                mainProvider: TOKENSAPI.agentProviderId,
+                mainProvider: TOKENSAPI.providerId,
                 official: {
                     baseURL: DEEPSEEK_OFFICIAL.baseURL,
                     mainModel: '',
@@ -905,7 +919,7 @@ describe('independent fallback route', () => {
             __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE),
         ).resolves.toMatchObject({
             channel: 'tokensapi',
-            mainProvider: 'modlens-tokensapi',
+            mainProvider: TOKENSAPI.providerId,
         });
     });
 
@@ -919,7 +933,7 @@ describe('independent fallback route', () => {
             __modelManager.modelManagerStatus(harness.ctx, VALID_RESPONSE),
         ).resolves.toMatchObject({
             channel: 'tokensapi',
-            mainProvider: TOKENSAPI.agentProviderId,
+            mainProvider: TOKENSAPI.providerId,
         });
     });
 
@@ -1428,7 +1442,7 @@ describe('independent fallback route', () => {
             ),
         ).resolves.toMatchObject({
             channel: 'official',
-            mainModel: 'deepseek-v4-flash',
+            mainModel: 'deepseek-v4-flash-vision-exp',
             activeMainModel: 'deepseek-reasoner',
             mainProvider: DEEPSEEK_OFFICIAL.providerId,
             official: { mainModel: 'deepseek-reasoner' },
@@ -1501,7 +1515,17 @@ describe('independent fallback route', () => {
         };
 
         apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
-        const status = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE);
+        // The fallback endpoint still offers the saved model.
+        const request = async (url: unknown) =>
+            String(url) === `${TOKENSAPI.baseURL}/models`
+                ? VALID_RESPONSE()
+                : {
+                      status: 200,
+                      json: async () => ({
+                          data: [{ id: 'deepseek-chat' }, { id: 'deepseek-v4-pro' }],
+                      }),
+                  };
+        const status = await __modelManager.modelManagerStatus(ctx, request);
         await Promise.resolve();
 
         expect(status).toMatchObject({
@@ -3370,6 +3394,7 @@ describe('TokensAPI model discovery and selection', () => {
         // is what made cross-protocol models unselectable.
         expect(managedModels?.map((model) => model.id)).toEqual([
             'deepseek-v3.2',
+            'deepseek-v4-flash-vision-exp',
             'deepseek-v4-flash',
             'qwen3.6-35b-a3b',
             'qwen3.8-flash-next',
@@ -3444,5 +3469,370 @@ describe('TokensAPI model discovery and selection', () => {
             model: 'claude-opus-4-7',
         });
         await __modelManager.closeClaudeProxy(ctx);
+    });
+});
+
+describe('models TokensAPI no longer offers (T0064)', () => {
+    type Saved = Record<string, unknown>;
+    type Selection = { provider: string; model: string };
+
+    /** A started plugin whose saved choices are `saved`, with a Host default-model service. */
+    function startWith(saved: Saved, official?: string) {
+        const credential = credentialHarness('tk-primary', true);
+        if (official !== undefined) credential.official = official;
+        const selections: Selection[] = [];
+        const values = new Map<string, Record<string, unknown>>([
+            [TOKENSAPI.settingsNamespace, { baseURL: TOKENSAPI.baseURL, ...saved }],
+            [TOKENSAPI.llmSettingsNamespace, { providers: {} }],
+        ]);
+        const settings = {
+            register: (namespace: string, _schema: unknown, options?: { base?: Saved }) => {
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Saved) => {
+                values.set(namespace, { ...(values.get(namespace) ?? {}), ...patch });
+            },
+        };
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) callback({ settings });
+                if (services.includes('agentDefaultModel')) {
+                    callback({
+                        agentDefaultModel: {
+                            saveSelection: async (selection: Selection) => {
+                                selections.push(selection);
+                            },
+                        },
+                    });
+                }
+            },
+        };
+        apply(ctx, { visionProvider: false, settingsCard: false, pasteToPath: false });
+        return { ctx, credential, selections, values };
+    }
+
+    /** A TokensAPI catalogue with exactly these entries. */
+    function catalog(entries: Array<Record<string, unknown>>) {
+        return async () => ({ status: 200, json: async () => ({ data: entries }) });
+    }
+    const chat = (id: string) => ({ id, supported_endpoint_types: ['openai'] });
+    const failures: Array<[string, () => Promise<unknown>]> = [
+        ['HTTP 500', async () => ({ status: 500, json: async () => ({}) })],
+        ['HTTP 503', async () => ({ status: 503, json: async () => ({}) })],
+        ['a rejected key', async () => ({ status: 401, json: async () => ({}) })],
+        [
+            'a network failure',
+            async () => {
+                throw Object.assign(new TypeError('fetch failed'), {
+                    cause: { code: 'ECONNRESET' },
+                });
+            },
+        ],
+        ['an unreadable body', async () => ({ status: 200, json: async () => ({ data: 'nope' }) })],
+        ['an empty catalogue', async () => ({ status: 200, json: async () => ({ data: [] }) })],
+    ];
+
+    it('ships deepseek-v4-flash-vision-exp as the default, read natively with known limits', () => {
+        expect(TOKENSAPI.mainModel).toBe('deepseek-v4-flash-vision-exp');
+        expect(TOKENSAPI.visionModel).toBe('qwen3.8-flash-next');
+        expect(__modelManager.managedVisionMode({ id: 'deepseek-v4-flash-vision-exp' })).toBe(
+            'native',
+        );
+        // The text model of the same name keeps the bridge.
+        expect(__modelManager.managedVisionMode({ id: 'deepseek-v4-flash' })).toBe('bridge');
+        expect(
+            __modelManager.managedModelContextWindow({ id: 'deepseek-v4-flash-vision-exp' }),
+        ).toBe(262144);
+        expect(__modelManager.managedModelMaxTokens({ id: 'deepseek-v4-flash-vision-exp' })).toBe(
+            32768,
+        );
+        const patch = fs.readFileSync(path.join(__dirname, '..', 'cordis.patch.yml'), 'utf-8');
+        expect(patch).toContain('model: deepseek-v4-flash-vision-exp');
+        expect(patch).toContain('- id: deepseek-v4-flash-vision-exp');
+        expect(patch).not.toMatch(/model: deepseek-v4-flash\s*$/m);
+    });
+
+    it('routes the default straight to TokensAPI, never through the vision bridge', async () => {
+        const { ctx, selections } = startWith({});
+        const status = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE);
+        expect(status).toMatchObject({
+            mainModel: 'deepseek-v4-flash-vision-exp',
+            mainProvider: TOKENSAPI.providerId,
+            visionMode: 'native',
+        });
+        expect(status.modelNotice).toBeUndefined();
+        expect(selections.at(-1)).toEqual({
+            provider: TOKENSAPI.providerId,
+            model: 'deepseek-v4-flash-vision-exp',
+        });
+    });
+
+    it('replaces an offline main model with the default, saves the Host default and says so', async () => {
+        const { ctx, selections, values } = startWith({ mainModel: 'retired-model-a' });
+        // Start-up re-applies the saved default before any list is known.
+        for (let tick = 0; tick < 5; tick++) await new Promise((resolve) => setTimeout(resolve, 5));
+        const beforeRefresh = selections.length;
+        const status = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE);
+
+        expect(status).toMatchObject({
+            mainModel: 'deepseek-v4-flash-vision-exp',
+            activeMainModel: 'deepseek-v4-flash-vision-exp',
+            mainProvider: TOKENSAPI.providerId,
+            modelNotice: {
+                id: expect.any(String),
+                changes: [
+                    { kind: 'main', from: 'retired-model-a', to: 'deepseek-v4-flash-vision-exp' },
+                ],
+            },
+        });
+        // Host default and the manager's own copy both moved: no dropdown
+        // showing A while the kernel fails on it.
+        expect(selections.at(-1)).toEqual({
+            provider: TOKENSAPI.providerId,
+            model: 'deepseek-v4-flash-vision-exp',
+        });
+        expect(selections.slice(beforeRefresh).map((selection) => selection.model)).not.toContain(
+            'retired-model-a',
+        );
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            mainModel: 'deepseek-v4-flash-vision-exp',
+        });
+        // The route the kernel resolves models from no longer carries A.
+        const route = (
+            values.get(TOKENSAPI.llmSettingsNamespace) as {
+                providers: { tokensapi: { models: Array<{ id: string }> } };
+            }
+        ).providers.tokensapi;
+        expect(route.models[0].id).toBe('deepseek-v4-flash-vision-exp');
+        expect(route.models.map((model) => model.id)).not.toContain('retired-model-a');
+        // The settings selector no longer offers A as if it were current.
+        expect(status.models.map((model: { id: string }) => model.id)).not.toContain(
+            'retired-model-a',
+        );
+    });
+
+    it('falls back to the first usable chat model when the default is gone too', async () => {
+        const { ctx, selections } = startWith({ mainModel: 'retired-model-a' });
+        const status = await __modelManager.modelManagerStatus(
+            ctx,
+            catalog([
+                // Not chat models: an ASR model and an image-only one.
+                chat('whisper-asr'),
+                { id: 'image-maker-2', supported_endpoint_types: ['image-generation'] },
+                chat('glm-5.2'),
+                chat('deepseek-v3.2'),
+            ]),
+        );
+        expect(status).toMatchObject({
+            mainModel: 'glm-5.2',
+            modelNotice: { changes: [{ kind: 'main', from: 'retired-model-a', to: 'glm-5.2' }] },
+        });
+        expect(selections.at(-1)).toMatchObject({ model: 'glm-5.2' });
+    });
+
+    for (const [label, response] of failures) {
+        it(`keeps every selection when the list fetch fails: ${label}`, async () => {
+            const { ctx, selections, values } = startWith(
+                {
+                    mainModel: 'retired-model-a',
+                    visionModel: 'retired-vision',
+                    fallbackModel: 'gone-fallback',
+                },
+                'sk-fallback',
+            );
+            const status = await __modelManager.modelManagerStatus(ctx, response);
+            expect(status.mainModel).toBe('retired-model-a');
+            expect(status.visionModel).toBe('retired-vision');
+            expect(status.official.mainModel).toBe('gone-fallback');
+            expect(status.modelNotice).toBeUndefined();
+            expect(status.modelsAvailable).toBe(false);
+            expect(selections.every((selection) => selection.model === 'retired-model-a')).toBe(
+                true,
+            );
+            expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+                mainModel: 'retired-model-a',
+                visionModel: 'retired-vision',
+                fallbackModel: 'gone-fallback',
+            });
+        });
+    }
+
+    it('keeps the selection when a new key cannot load the list', async () => {
+        const { ctx } = startWith({ mainModel: 'retired-model-a' });
+        await expect(
+            __modelManager.setManagedCredential(ctx, 'tk-replacement', failures[0][1]),
+        ).rejects.toMatchObject({ code: 'upstream' });
+        const status = await __modelManager.modelManagerStatus(ctx, failures[0][1], {
+            refreshModels: false,
+        });
+        expect(status.mainModel).toBe('retired-model-a');
+        expect(status.modelNotice).toBeUndefined();
+    });
+
+    it('replaces an offline model when a new key loads the list', async () => {
+        const { ctx, selections } = startWith({ mainModel: 'retired-model-a' });
+        const status = await __modelManager.setManagedCredential(
+            ctx,
+            'tk-replacement',
+            VALID_RESPONSE,
+        );
+        expect(status).toMatchObject({
+            mainModel: 'deepseek-v4-flash-vision-exp',
+            modelNotice: { changes: [{ kind: 'main', from: 'retired-model-a' }] },
+        });
+        expect(selections.at(-1)).toMatchObject({ model: 'deepseek-v4-flash-vision-exp' });
+    });
+
+    it('keeps a model that is still listed, without a notice', async () => {
+        const { ctx, selections } = startWith({
+            mainModel: 'deepseek-v3.2',
+            visionModel: 'qwen3.6-35b-a3b',
+        });
+        const status = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE);
+        expect(status).toMatchObject({
+            mainModel: 'deepseek-v3.2',
+            visionModel: 'qwen3.6-35b-a3b',
+        });
+        expect(status.modelNotice).toBeUndefined();
+        expect(selections.at(-1)).toMatchObject({ model: 'deepseek-v3.2' });
+    });
+
+    it('replaces an offline vision model with its default, then with the first one that sees images', async () => {
+        const first = startWith({ mainModel: 'deepseek-v3.2', visionModel: 'retired-vision' });
+        const status = await __modelManager.modelManagerStatus(first.ctx, VALID_RESPONSE);
+        expect(status).toMatchObject({
+            mainModel: 'deepseek-v3.2',
+            visionModel: 'qwen3.8-flash-next',
+            modelNotice: {
+                changes: [{ kind: 'vision', from: 'retired-vision', to: 'qwen3.8-flash-next' }],
+            },
+        });
+        expect(first.values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            visionModel: 'qwen3.8-flash-next',
+        });
+
+        // Default gone as well: a text model would read nothing, so the first
+        // listed model that accepts images is taken, not the first listed.
+        const second = startWith({ mainModel: 'deepseek-v3.2', visionModel: 'retired-vision' });
+        const narrowed = await __modelManager.modelManagerStatus(
+            second.ctx,
+            catalog([chat('deepseek-v3.2'), chat('glm-5.2'), chat('kimi-k3')]),
+        );
+        expect(narrowed.visionModel).toBe('kimi-k3');
+    });
+
+    it('reports main and vision replacements in one notice', async () => {
+        const { ctx } = startWith({ mainModel: 'retired-model-a', visionModel: 'retired-vision' });
+        const status = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE);
+        expect(status.modelNotice.changes).toEqual([
+            { kind: 'main', from: 'retired-model-a', to: 'deepseek-v4-flash-vision-exp' },
+            { kind: 'vision', from: 'retired-vision', to: 'qwen3.8-flash-next' },
+        ]);
+    });
+
+    it('replaces an offline fallback model and moves the Host default while that route is active', async () => {
+        const { ctx, selections, values } = startWith(
+            {
+                fallbackModel: 'gone-fallback',
+                fallbackBaseURL: 'https://backup.example/v1',
+                activeChannel: 'official',
+            },
+            'sk-fallback',
+        );
+        const request = async (url: unknown) =>
+            String(url) === `${TOKENSAPI.baseURL}/models` ? VALID_RESPONSE() : FALLBACK_RESPONSE();
+        const status = await __modelManager.modelManagerStatus(ctx, request);
+        expect(status).toMatchObject({
+            channel: 'official',
+            activeMainModel: 'deepseek-chat',
+            official: { mainModel: 'deepseek-chat', modelsChecked: true },
+            modelNotice: {
+                changes: [{ kind: 'fallback', from: 'gone-fallback', to: 'deepseek-chat' }],
+            },
+        });
+        expect(selections.at(-1)).toEqual({
+            provider: DEEPSEEK_OFFICIAL.providerId,
+            model: 'deepseek-chat',
+        });
+        expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
+            fallbackModel: 'deepseek-chat',
+        });
+        expect(values.get(TOKENSAPI.llmSettingsNamespace)).toMatchObject({
+            providers: {
+                [DEEPSEEK_OFFICIAL.upstreamProviderId]: {
+                    models: expect.arrayContaining([
+                        expect.objectContaining({ id: 'deepseek-chat' }),
+                    ]),
+                },
+            },
+        });
+    });
+
+    it('replaces a parked fallback model without touching the active TokensAPI default', async () => {
+        const { ctx, selections } = startWith(
+            { mainModel: 'deepseek-v3.2', fallbackModel: 'gone-fallback' },
+            'sk-fallback',
+        );
+        const request = async (url: unknown) =>
+            String(url) === `${TOKENSAPI.baseURL}/models` ? VALID_RESPONSE() : FALLBACK_RESPONSE();
+        const status = await __modelManager.modelManagerStatus(ctx, request);
+        expect(status).toMatchObject({
+            channel: 'tokensapi',
+            official: { mainModel: 'deepseek-chat' },
+        });
+        expect(selections.at(-1)).toMatchObject({ model: 'deepseek-v3.2' });
+        expect(
+            selections.some((selection) => selection.provider === DEEPSEEK_OFFICIAL.providerId),
+        ).toBe(false);
+    });
+
+    it('keeps the fallback model when only its list fails, and checks again on the next refresh', async () => {
+        const { ctx } = startWith(
+            { fallbackModel: 'gone-fallback', activeChannel: 'official' },
+            'sk-fallback',
+        );
+        let fallbackUp = false;
+        const request = async (url: unknown) =>
+            String(url) === `${TOKENSAPI.baseURL}/models`
+                ? VALID_RESPONSE()
+                : fallbackUp
+                  ? FALLBACK_RESPONSE()
+                  : { status: 503, json: async () => ({}) };
+        const down = await __modelManager.modelManagerStatus(ctx, request);
+        expect(down.official).toMatchObject({ mainModel: 'gone-fallback', modelsChecked: false });
+        expect(down.modelNotice).toBeUndefined();
+        fallbackUp = true;
+        const up = await __modelManager.modelManagerStatus(ctx, request);
+        expect(up.official).toMatchObject({ mainModel: 'deepseek-chat', modelsChecked: true });
+    });
+
+    it('keeps the notice until the user dismisses it or saves the settings page', async () => {
+        const { ctx } = startWith({ mainModel: 'retired-model-a' });
+        const replaced = await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE);
+        const id = replaced.modelNotice.id;
+        // Reads and stale dismissals leave it in place.
+        expect((await __modelManager.modelManagerStatus(ctx, VALID_RESPONSE)).modelNotice?.id).toBe(
+            id,
+        );
+        expect(
+            (await __modelManager.dismissModelNotice(ctx, { id: 'older' }, VALID_RESPONSE))
+                .modelNotice?.id,
+        ).toBe(id);
+        expect(
+            (await __modelManager.dismissModelNotice(ctx, { id }, VALID_RESPONSE)).modelNotice,
+        ).toBeUndefined();
+
+        const again = startWith({ mainModel: 'retired-model-a' });
+        await __modelManager.modelManagerStatus(again.ctx, VALID_RESPONSE);
+        const saved = await __modelManager.setManagedModels(
+            again.ctx,
+            { mainModel: 'deepseek-v3.2', visionModel: 'qwen3.8-flash-next' },
+            VALID_RESPONSE,
+        );
+        expect(saved.modelNotice).toBeUndefined();
     });
 });

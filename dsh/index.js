@@ -61,7 +61,7 @@ export const TOKENSAPI = Object.freeze({
   providerId: 'tokensapi',
   agentProviderId: 'modlens-tokensapi',
   baseURL: 'https://tokensapi.ai/v1',
-  mainModel: 'deepseek-v4-flash',
+  mainModel: 'deepseek-v4-flash-vision-exp',
   visionModel: 'qwen3.8-flash-next',
 })
 
@@ -2880,6 +2880,9 @@ const MAX_ENDPOINT_TYPE_COUNT = 16
 const MAX_MODEL_TOKEN_LIMIT = 16_000_000
 const KNOWN_MODEL_CAPACITIES = Object.freeze({
   'deepseek-v4-flash': Object.freeze({ contextWindow: 262144, maxTokens: 32768 }),
+  // The vision preview of the same model: same family, same price tier on
+  // TokensAPI's public pricing, and the catalogue publishes no limits for it.
+  'deepseek-v4-flash-vision-exp': Object.freeze({ contextWindow: 262144, maxTokens: 32768 }),
 })
 
 function normalizeModelId(value, fallback) {
@@ -3264,6 +3267,199 @@ function publicModels(runtime) {
       visionCapabilitySource: capability.source,
     })
   })
+}
+
+/**
+ * The first catalogue entry a conversation can use, in catalogue order.
+ *
+ * The catalogue parsers already drop ASR and pure image/video models; this
+ * also skips the explicit hidden list and entries with no DSH transport, the
+ * same rules the settings picker and the composer apply.
+ *
+ * @param models - a freshly fetched catalogue.
+ * @param accept - extra condition (the vision slot wants image input).
+ * @returns the model id, or '' when nothing qualifies.
+ */
+function firstUsableModel(models, accept = () => true) {
+  for (const model of models) {
+    const id = normalizeModelId(model?.id, '')
+    if (!id || isHiddenManagedModel(id) || NON_CONVERSATION_MODEL_ID.test(id)) continue
+    try {
+      if (managedModelApis(model).length === 0) continue
+    } catch {
+      continue
+    }
+    if (accept(model)) return id
+  }
+  return ''
+}
+
+/**
+ * What to use instead of a model the catalogue no longer lists.
+ * @param models - a freshly fetched catalogue.
+ * @param preferred - the product default for this slot ('' for none).
+ * @param accept - extra condition a replacement must meet.
+ * @returns the replacement id, or '' when the catalogue offers none.
+ */
+function replacementModel(models, preferred, accept = () => true) {
+  if (preferred) {
+    const listed = models.find((model) => model?.id === preferred)
+    if (listed && firstUsableModel([listed], accept)) return preferred
+  }
+  return firstUsableModel(models, accept)
+}
+
+/**
+ * Which TokensAPI selections a catalogue no longer carries, and their stand-ins.
+ *
+ * Call this only with a catalogue that was fetched successfully: a failed
+ * fetch says nothing about which models exist, and must never move anyone off
+ * the model they chose.
+ *
+ * @param runtime - manager runtime.
+ * @param models - the catalogue TokensAPI just returned.
+ * @returns one `{ kind, from, to }` per selection to replace.
+ */
+function offlineManagedSelections(runtime, models) {
+  const listed = new Set(models.map((model) => model?.id).filter((id) => id && !isHiddenManagedModel(id)))
+  const changes = []
+  if (runtime.mainModel && !listed.has(runtime.mainModel)) {
+    const to = replacementModel(models, TOKENSAPI.mainModel)
+    if (to && to !== runtime.mainModel) changes.push({ kind: 'main', from: runtime.mainModel, to })
+  }
+  if (runtime.visionModel && !listed.has(runtime.visionModel)) {
+    // The vision slot reads images for a text-only main model, so its stand-in
+    // has to accept images; a text model there would answer with nothing.
+    const seesImages = (model) =>
+      managedModelCapability(model, runtime.visionModeByModel[model.id]).visionMode === 'native'
+    const to = replacementModel(models, TOKENSAPI.visionModel, seesImages)
+    if (to && to !== runtime.visionModel) changes.push({ kind: 'vision', from: runtime.visionModel, to })
+  }
+  return changes
+}
+
+/**
+ * Record what was replaced so the settings page and the app-wide toast can say so.
+ * @param runtime - manager runtime.
+ * @param changes - replacements just applied.
+ */
+function noteReplacedModels(runtime, changes) {
+  if (changes.length === 0) return
+  // A later replacement in the same run (say the fallback route after the
+  // main one) adds to the notice instead of hiding the earlier one.
+  const earlier = (runtime.modelNotice?.changes ?? []).filter(
+    (change) => !changes.some((next) => next.kind === change.kind),
+  )
+  runtime.modelNoticeSeq = (runtime.modelNoticeSeq ?? 0) + 1
+  runtime.modelNotice = {
+    id: `${Date.now().toString(36)}-${runtime.modelNoticeSeq}`,
+    changes: [...earlier, ...changes].map((change) => ({ ...change })),
+  }
+  for (const change of changes) {
+    console.error(
+      `[tokens-model-manager] ${change.kind} model ${change.from} is no longer offered; switched to ${change.to}`,
+    )
+  }
+}
+
+/**
+ * Move TokensAPI selections off models a fresh catalogue no longer lists.
+ *
+ * Only the in-memory selection changes here; the caller then writes the route
+ * once (`synchronizeMainModel`), which also saves the Host's default model, so
+ * the kernel and the settings page agree on the replacement.
+ *
+ * @param ctx - plugin context.
+ * @param models - the catalogue TokensAPI just returned.
+ * @returns the replacements, already applied to the runtime.
+ */
+async function replaceOfflineManagedModels(ctx, models) {
+  const runtime = managerRuntime(ctx)
+  const changes = offlineManagedSelections(runtime, models)
+  if (changes.length === 0) return changes
+  const patch = {}
+  for (const change of changes) {
+    if (change.kind === 'main') {
+      runtime.mainModel = change.to
+      patch.mainModel = change.to
+    } else {
+      runtime.visionModel = change.to
+      patch.visionModel = change.to
+    }
+  }
+  if (runtime.settings?.update) {
+    try {
+      await runtime.settings.update(TOKENSAPI.settingsNamespace, patch)
+    } catch (error) {
+      // The route write that follows still saves the Host default; the
+      // manager's own copy is only what the settings page shows first.
+      console.error(`[tokens-model-manager] saving the replacement model skipped: ${error}`)
+    }
+  }
+  noteReplacedModels(runtime, changes)
+  return changes
+}
+
+/**
+ * Move the fallback route off a model its fresh catalogue no longer lists.
+ *
+ * The fallback route has no product default model, so the replacement is the
+ * first usable entry of its catalogue. While the route is active the Host's
+ * default model follows it; while parked only the saved choice changes.
+ *
+ * @param ctx - plugin context.
+ * @param models - the fallback catalogue just fetched for the saved route.
+ * @returns the replacements, already applied and persisted.
+ */
+async function replaceOfflineFallbackModel(ctx, models) {
+  const runtime = managerRuntime(ctx)
+  runtime.fallbackModels = models
+  const current = runtime.fallbackModel
+  if (!current || models.some((model) => model?.id === current)) return []
+  const to = replacementModel(models, DEEPSEEK_OFFICIAL.mainModel)
+  if (!to) return []
+  runtime.fallbackModel = to
+  if (runtime.settings?.update) {
+    await runtime.settings.update(TOKENSAPI.settingsNamespace, { fallbackModel: to })
+  }
+  if (runtime.activeChannel === 'official') {
+    await synchronizeFallbackModel(ctx)
+    if (typeof runtime.agentDefaultModel?.saveSelection === 'function') {
+      await runtime.agentDefaultModel.saveSelection({ provider: DEEPSEEK_OFFICIAL.providerId, model: to })
+    }
+  }
+  const changes = [{ kind: 'fallback', from: current, to }]
+  noteReplacedModels(runtime, changes)
+  return changes
+}
+
+/**
+ * Check the saved fallback route's catalogue once per run.
+ *
+ * Runs with the primary catalogue refresh (start-up, key change). A failed
+ * fetch changes nothing and is retried on the next refresh.
+ *
+ * @param ctx - plugin context.
+ * @param request - fetch used for the catalogue read.
+ */
+async function refreshFallbackCatalog(ctx, request) {
+  const runtime = managerRuntime(ctx)
+  if (runtime.fallbackCatalogChecked || !runtime.fallbackModel) return
+  const apiKey = resolvedCredentialValue(await ctx.credentials.resolve(DEEPSEEK_OFFICIAL.credentialRef)).trim()
+  if (!apiKey) return
+  const baseURL = runtime.fallbackBaseURL
+  let models
+  try {
+    models = await validateFallbackCredential(apiKey, baseURL, request)
+  } catch (error) {
+    console.error(`[tokens-model-manager] fallback model list unavailable, selection kept: ${error?.code ?? 'error'}`)
+    return
+  }
+  // The route was edited while the list was on its way: the list describes
+  // an endpoint the user has since left.
+  if (runtime.fallbackBaseURL !== baseURL) return
+  runtime.fallbackCatalogChecked = true
+  await replaceOfflineFallbackModel(ctx, models)
 }
 
 async function parseManagedModels(response) {
@@ -3841,6 +4037,9 @@ async function modelManagerStatus(ctx, request = globalThis.fetch, { refreshMode
       )
       const previousVisionModeByModel = runtime.visionModeByModel
       runtime.visionModeByModel = reconcileVisionModeByModel(runtime.models, runtime.visionModeByModel)
+      // Reached only with a list TokensAPI actually returned: a failed fetch
+      // throws above and leaves every selection where it was.
+      await replaceOfflineManagedModels(ctx, runtime.models)
       await synchronizeMainModel(ctx, runtime.mainModel, runtime.models)
       if (
         runtime.settings?.update &&
@@ -3857,6 +4056,13 @@ async function modelManagerStatus(ctx, request = globalThis.fetch, { refreshMode
         runtime.rejectedFingerprint = checkedFingerprint
         authenticated = false
       }
+    }
+  }
+  if (authenticated && refreshModels && officialCredential.configured === true) {
+    try {
+      await refreshFallbackCatalog(ctx, request)
+    } catch (error) {
+      console.error(`[tokens-model-manager] fallback model check skipped: ${error}`)
     }
   }
   const officialActive = runtime.activeChannel === 'official'
@@ -3899,7 +4105,9 @@ async function modelManagerStatus(ctx, request = globalThis.fetch, { refreshMode
       baseURL: runtime.fallbackBaseURL,
       mainModel: runtime.fallbackModel,
       models: officialCredential.configured === true ? publicFallbackModels(runtime) : [],
+      modelsChecked: runtime.fallbackCatalogChecked === true,
     },
+    ...(runtime.modelNotice ? { modelNotice: runtime.modelNotice } : {}),
     ...(lastVisionFailure === null ? {} : { visionDiagnostic: lastVisionFailure }),
   }
 }
@@ -3965,9 +4173,12 @@ async function setManagedCredential(ctx, value, request = globalThis.fetch) {
   const runtime = managerRuntime(ctx)
   const previousModels = runtime.models
   const previousVisionModeByModel = runtime.visionModeByModel
+  const previousSelection = { mainModel: runtime.mainModel, visionModel: runtime.visionModel }
+  const previousNotice = runtime.modelNotice
   runtime.models = models
   runtime.visionModeByModel = reconcileVisionModeByModel(models, runtime.visionModeByModel)
   try {
+    await replaceOfflineManagedModels(ctx, models)
     await synchronizeMainModel(ctx, runtime.mainModel, models)
     if (
       runtime.settings?.update &&
@@ -3980,6 +4191,9 @@ async function setManagedCredential(ctx, value, request = globalThis.fetch) {
   } catch (error) {
     runtime.models = previousModels
     runtime.visionModeByModel = previousVisionModeByModel
+    runtime.mainModel = previousSelection.mainModel
+    runtime.visionModel = previousSelection.visionModel
+    runtime.modelNotice = previousNotice
     throw error
   }
   await ctx.credentials.set(TOKENSAPI.credentialRef, apiKey)
@@ -4047,7 +4261,22 @@ async function setManagedModels(ctx, value, request = globalThis.fetch) {
   }
   runtime.mainModel = mainModel
   runtime.visionModel = visionModel
+  // Saving the settings page is the user answering the notice. A composer
+  // pick is not: the client also issues those on its own when a session opens.
+  runtime.modelNotice = null
   return modelManagerStatus(ctx, request)
+}
+
+/**
+ * Drop the "model went offline" notice once the user has acknowledged it.
+ * @param ctx - plugin context.
+ * @param value - `{ id }` of the notice the user saw; a newer one stays.
+ * @returns the status.
+ */
+async function dismissModelNotice(ctx, value, request = globalThis.fetch) {
+  const runtime = managerRuntime(ctx)
+  if (runtime.modelNotice && runtime.modelNotice.id === value?.id) runtime.modelNotice = null
+  return modelManagerStatus(ctx, request, { refreshModels: false })
 }
 
 /**
@@ -4250,6 +4479,8 @@ async function configureFallback(ctx, value, request = globalThis.fetch) {
   runtime.fallbackBaseURL = baseURL
   runtime.fallbackModel = fallbackModel
   runtime.fallbackModels = models
+  // The list was fetched just now and the choice was checked against it.
+  runtime.fallbackCatalogChecked = true
   runtime.activeChannel = 'official'
   runtime.mainProvider = DEEPSEEK_OFFICIAL.providerId
   try {
@@ -4440,6 +4671,8 @@ function registerModelManagerRoute(ctx, host) {
                 }
               : null,
           })
+        } else if (body?.action === 'dismissModelNotice') {
+          send(200, await dismissModelNotice(host, body, request))
         } else if (body?.action === 'selectMainModel') {
           send(200, await selectMainModel(host, body, request))
         } else if (Object.hasOwn(body ?? {}, 'officialApiKey')) {
@@ -4566,6 +4799,8 @@ export const __modelManager = {
   switchToTokensAPI,
   validateFallbackCredential,
   parseFallbackModels,
+  offlineManagedSelections,
+  dismissModelNotice,
   synchronizeFallbackModel,
   hideFallbackModel,
   parseManagedModels,

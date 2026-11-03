@@ -91,7 +91,8 @@ DSH 0.1.5 没有 `@deepseek-ai/dsh-config-editor`、也没有 `@deepseek-ai/dsh-
 | `scope.settings.configure({auto:false}, owner)` | 让设置页别再生成一份无防护的表单 | HOST-014 |
 | `scope.settings.mutate(ns, ops)` | 宿主提供时才转发，可选 | HOST-014（可用性） |
 | `agent-default-model` 条目的 `provider`/`model` | 启动时以宿主持久化的默认模型为准 | HOST-015 |
-| `scope.agentDefaultModel.saveSelection({provider, model})` | 把用户的选择写回宿主默认模型 | HOST-015 |
+| `scope.agentDefaultModel.saveSelection({provider, model})` | 把用户的选择写回宿主默认模型；所选模型被 TokensAPI 下线时，把替换后的模型写回（T0064） | HOST-015、HOST-037 |
+| pi-ai 对宿主默认模型的解析（`resolveModelInfo` → `modelOf`） | 下线模型被换掉后，宿主默认模型能被解析，不再报 `UNKNOWN_MODEL` | HOST-037 |
 | `ctx.inject([...], scope => …)` | 作用域注入：服务不在就不跑闭包（headless 不受影响） | HOST-002、HOST-012、HOST-014 |
 | `ctx.effect` / `scope.effect` / `ctx.fiber` | 给 `configure` 的策略找正确的归属 fiber 并挂 disposer | HOST-014 |
 | 宿主 `TokenMeter` / `BasicCompactionEngine` 对包装线路的计量与压缩 | 包装线路必须能被宿主自己的计量与压缩吃下 | UP-001、UP-002 |
@@ -110,6 +111,7 @@ DSH 0.1.5 没有 `@deepseek-ai/dsh-config-editor`、也没有 `@deepseek-ai/dsh-
 | `scope.sessions.list.getSnapshot()` / `subscribe()` | 0.1 读 `current`，0.2 由目录解析器回报会话 | HOST-030…034 |
 | `scope.sessions.subagentAddress(id)` | 带地址的子代理会话不暴露模型选择 | HOST-030…034 |
 | `scope.slots.register(def, Component)` / `slots.inject('settings.section', …)` | 设置页的「模型」区 | 见下方缺口 |
+| `slots.inject('shell.overlay', …)` + `@deepseek-ai/dsh-client-ui-primitives` 的 `Toast` | 模型下线替换的全局提示（T0064）；宿主没有该座位或 `Toast` 时只保留设置页内提示 | OFF-007（假 React，见下方缺口） |
 
 ## 已知缺口（显式报出，不计通过）
 

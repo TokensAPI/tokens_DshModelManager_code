@@ -34,6 +34,7 @@ const BUILTIN_VISION_MODEL_PATTERNS = Object.freeze([
   "minimax-vl*",
   "minimax-m3*",
   "deepseek-vl*",
+  "deepseek-v4-flash-vision*",
   "deepseek-ocr*",
   "janus*",
   "pixtral*",
