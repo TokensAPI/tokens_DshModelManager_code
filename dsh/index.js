@@ -75,6 +75,16 @@ const EXCLUDED_MODEL_RULES = Object.freeze([
 ])
 
 /**
+ * The order maker groups come in when the catalogue's `created` cannot be
+ * trusted (TokensAPI today: every entry carries the same fixed value), because
+ * version numbers in names cannot be compared across makers. Makers not listed
+ * here follow, alphabetically. Keys are the letter prefixes of model names; a
+ * group named by a meaningful `owned_by` takes the place of its models' prefix.
+ * To change the order, change only this list.
+ */
+const MODEL_VENDOR_ORDER = Object.freeze(['deepseek', 'qwen', 'kimi', 'glm', 'gemma', 'claude'])
+
+/**
  * Which exclusion rule a model id falls under, if any.
  * @param id - model id as the catalogue lists it.
  * @param options - `allowGpt` lifts the `gpt` rule.
@@ -171,14 +181,16 @@ function compareNameVersionsNewestFirst(left, right) {
  * menu, the provider models written for llm-pi-ai, the vision candidates and
  * the "first usable model" a replacement picks.
  *
- * Models are grouped by maker. Groups come newest first, by their newest
- * model, and each group lists its models newest first: take the newest model,
- * then the rest of its maker's, then the newest of what is left, and so on.
+ * Models are grouped by maker, and each group lists its models newest first.
  *
- * - Age is `created` when the whole catalogue gives a believable one (every
- *   entry has a positive number, and they are not all the same). Otherwise
- *   the whole catalogue is compared by the version numbers in the names
- *   instead; the two are never mixed. Ties go alphabetically.
+ * - When the whole catalogue gives a believable `created` (every entry has a
+ *   positive number, and they are not all the same), age is `created` and
+ *   groups come newest first, by their newest model: take the newest model,
+ *   then the rest of its maker's, then the newest of what is left, and so on.
+ * - Otherwise the whole catalogue is compared by the version numbers in the
+ *   names instead (the two are never mixed), and since those mean nothing
+ *   across makers, groups come in the fixed {@link MODEL_VENDOR_ORDER}, other
+ *   makers after it alphabetically. Ties go alphabetically either way.
  * - The maker is `owned_by` when the whole catalogue gives a meaningful one
  *   (every entry has one, none is a gateway placeholder such as `custom` or
  *   `openai`, and there are at least two). Otherwise it is the name's prefix.
@@ -214,7 +226,18 @@ function orderCatalogModels(entries) {
     if (!groups.has(item.vendor)) groups.set(item.vendor, [])
     groups.get(item.vendor).push(item.entry.model)
   }
-  return [...groups.values()].flat()
+  if (byCreated) return [...groups.values()].flat()
+  // A group named by owned_by ('moonshot', 'anthropic') takes its place from
+  // its models' name prefixes ('kimi', 'claude') when its own name is not listed.
+  const rank = ([vendor, models]) => {
+    const places = [vendor, ...models.map((model) => modelVendorFromName(model.id))]
+      .map((name) => MODEL_VENDOR_ORDER.indexOf(name))
+      .filter((index) => index !== -1)
+    return places.length > 0 ? Math.min(...places) : MODEL_VENDOR_ORDER.length
+  }
+  return [...groups.entries()]
+    .sort((left, right) => rank(left) - rank(right) || (left[0] < right[0] ? -1 : left[0] > right[0] ? 1 : 0))
+    .flatMap(([, models]) => models)
 }
 
 /** The list with `id` moved to the front, everything else in its order. */
@@ -4997,6 +5020,7 @@ export const __modelManager = {
   },
   hiddenManagedModelIds: HIDDEN_MANAGED_MODEL_IDS,
   excludedModelRules: EXCLUDED_MODEL_RULES,
+  modelVendorOrder: MODEL_VENDOR_ORDER,
   excludedModelKind,
   orderCatalogModels,
   publicModels,

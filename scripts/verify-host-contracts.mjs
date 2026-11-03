@@ -954,13 +954,14 @@ test(
 );
 
 test(
-    'HOST-040 the kernel route and the settings list carry one order: main model first, then makers newest first',
+    'HOST-040 the kernel route and the settings list carry one order: main model first, then makers in the fixed order',
     options,
     async (t) => {
-        // T0064 追加 2. TokensAPI (new-api) stamps every entry with the same
-        // created (1626777600) and owned_by 'custom', so the plugin orders the
-        // whole catalogue by the versions in the names and groups by name
-        // prefix. The order must reach the Host's llm-pi-ai route as is, with
+        // T0064 追加 2/3. TokensAPI (new-api) stamps every entry with the same
+        // created (1626777600) and owned_by 'custom', so the plugin groups by
+        // name prefix, puts the groups in the fixed maker order (DeepSeek, Qwen,
+        // Kimi, GLM, Gemma, Claude, others) and each group by the versions in
+        // its names. The order must reach the Host's llm-pi-ai route as is, with
         // the saved main model first: the kernel takes the first entry as the
         // default of a new session.
         const MAIN = 'deepseek-v3.2';
@@ -973,7 +974,9 @@ test(
             'qwen3.8-flash-next',
             'deepseek-v4-flash',
             'qwen3-embedding',
+            'gemma-4-27b-a4b',
             'claude-opus-5-5',
+            'glm-5.3',
         ].map((id) => ({
             id,
             object: 'model',
@@ -983,12 +986,14 @@ test(
         }));
         const expected = [
             MAIN,
-            'claude-opus-5-5',
-            'claude-sonnet-4-8',
             'deepseek-v4-flash',
             'qwen3.8-flash-next',
             'qwen3-vl-plus',
             'kimi-k3',
+            'glm-5.3',
+            'gemma-4-27b-a4b',
+            'claude-opus-5-5',
+            'claude-sonnet-4-8',
         ];
         const { body, selection, routeIds } = await startOnUserCatalog(
             t,

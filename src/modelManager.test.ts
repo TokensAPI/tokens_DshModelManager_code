@@ -415,18 +415,6 @@ describe('offline fallback and complete catalog deadlines', () => {
 
 const API_MODELS = [
     {
-        id: 'gpt-5.5',
-        name: 'GPT 5.5',
-        ownedBy: 'openai',
-        endpointTypes: ['openai'],
-    },
-    {
-        id: 'claude-opus-4-7',
-        name: 'Claude Opus 4.7',
-        ownedBy: 'vertex-ai',
-        endpointTypes: ['anthropic', 'openai'],
-    },
-    {
         id: 'deepseek-v4-flash',
         name: 'DeepSeek V4 Flash',
         ownedBy: 'deepseek',
@@ -462,11 +450,25 @@ const API_MODELS = [
         ownedBy: 'qwen',
         endpointTypes: ['openai', 'openai-response'],
     },
+    {
+        id: 'claude-opus-4-7',
+        name: 'Claude Opus 4.7',
+        ownedBy: 'vertex-ai',
+        endpointTypes: ['anthropic', 'openai'],
+    },
+    {
+        id: 'gpt-5.5',
+        name: 'GPT 5.5',
+        ownedBy: 'openai',
+        endpointTypes: ['openai'],
+    },
 ];
 
 // API_MODELS is listed in the plugin's catalogue order (orderCatalogModels):
-// no created dates, and gpt-5.5's 'openai' owner is a placeholder, so names
-// decide. Every list then puts the current main model first.
+// no created dates, and gpt-5.5's 'openai' owner is a placeholder, so makers
+// come in the fixed order (deepseek, qwen, ..., claude, then others such as
+// gpt) and names decide inside each. Every list then puts the current main
+// model first.
 function mainFirst<T extends { id: string }>(models: T[], id: string) {
     const main = models.filter((model) => model.id === id);
     return [...main, ...models.filter((model) => model.id !== id)];
@@ -574,11 +576,12 @@ function managedResponseWithFuture(inputModalities?: string[]) {
     });
 }
 
-// Listed in catalogue order: no dates or version numbers, so alphabetical.
+// Listed in catalogue order: no dates, so the deepseek group comes first
+// (fixed maker order), then 'custom'; no version numbers, so alphabetical inside.
 const FALLBACK_MODELS = [
-    { id: 'custom-multimodal', name: 'Custom Multimodal' },
     { id: 'deepseek-chat', name: 'DeepSeek Chat' },
     { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' },
+    { id: 'custom-multimodal', name: 'Custom Multimodal' },
 ];
 
 const FALLBACK_RESPONSE = async () => ({
@@ -3428,12 +3431,12 @@ describe('TokensAPI model discovery and selection', () => {
         // is what made cross-protocol models unselectable.
         expect(managedModels?.map((model) => model.id)).toEqual([
             'deepseek-v3.2',
-            'gpt-5.5',
-            'claude-opus-4-7',
             'deepseek-v4-flash',
             'deepseek-v4-flash-vision-exp',
             'qwen3.8-flash-next',
             'qwen3.6-35b-a3b',
+            'claude-opus-4-7',
+            'gpt-5.5',
         ]);
         // The settings selector lists the same models in the same order: one
         // catalogue order, the main model first.
@@ -3660,11 +3663,14 @@ describe('models TokensAPI no longer offers (T0064)', () => {
                 chat('deepseek-v3.2'),
             ]),
         );
+        // First in catalogue order: the deepseek group comes before glm (fixed maker order).
         expect(status).toMatchObject({
-            mainModel: 'glm-5.2',
-            modelNotice: { changes: [{ kind: 'main', from: 'retired-model-a', to: 'glm-5.2' }] },
+            mainModel: 'deepseek-v3.2',
+            modelNotice: {
+                changes: [{ kind: 'main', from: 'retired-model-a', to: 'deepseek-v3.2' }],
+            },
         });
-        expect(selections.at(-1)).toMatchObject({ model: 'glm-5.2' });
+        expect(selections.at(-1)).toMatchObject({ model: 'deepseek-v3.2' });
     });
 
     for (const [label, response] of failures) {
@@ -3786,24 +3792,24 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         const status = await __modelManager.modelManagerStatus(ctx, request);
         expect(status).toMatchObject({
             channel: 'official',
-            activeMainModel: 'custom-multimodal',
-            official: { mainModel: 'custom-multimodal', modelsChecked: true },
+            activeMainModel: 'deepseek-chat',
+            official: { mainModel: 'deepseek-chat', modelsChecked: true },
             modelNotice: {
-                changes: [{ kind: 'fallback', from: 'gone-fallback', to: 'custom-multimodal' }],
+                changes: [{ kind: 'fallback', from: 'gone-fallback', to: 'deepseek-chat' }],
             },
         });
         expect(selections.at(-1)).toEqual({
             provider: DEEPSEEK_OFFICIAL.providerId,
-            model: 'custom-multimodal',
+            model: 'deepseek-chat',
         });
         expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
-            fallbackModel: 'custom-multimodal',
+            fallbackModel: 'deepseek-chat',
         });
         expect(values.get(TOKENSAPI.llmSettingsNamespace)).toMatchObject({
             providers: {
                 [DEEPSEEK_OFFICIAL.upstreamProviderId]: {
                     models: expect.arrayContaining([
-                        expect.objectContaining({ id: 'custom-multimodal' }),
+                        expect.objectContaining({ id: 'deepseek-chat' }),
                     ]),
                 },
             },
@@ -3820,7 +3826,7 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         const status = await __modelManager.modelManagerStatus(ctx, request);
         expect(status).toMatchObject({
             channel: 'tokensapi',
-            official: { mainModel: 'custom-multimodal' },
+            official: { mainModel: 'deepseek-chat' },
         });
         expect(selections.at(-1)).toMatchObject({ model: 'deepseek-v3.2' });
         expect(
@@ -3845,7 +3851,7 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         expect(down.modelNotice).toBeUndefined();
         fallbackUp = true;
         const up = await __modelManager.modelManagerStatus(ctx, request);
-        expect(up.official).toMatchObject({ mainModel: 'custom-multimodal', modelsChecked: true });
+        expect(up.official).toMatchObject({ mainModel: 'deepseek-chat', modelsChecked: true });
     });
 
     it('keeps the notice until the user dismisses it or saves the settings page', async () => {
@@ -4104,15 +4110,16 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         'deepseek-v4-flash',
         'deepseek-v3.2',
     ];
-    // The same models ordered by the versions in their names, grouped by prefix.
+    // The same models grouped by name prefix, groups in the fixed maker order
+    // (MODEL_VENDOR_ORDER), each group by the versions in its names.
     const BY_NAME = [
-        'claude-opus-5-5',
-        'claude-sonnet-4-8',
         'deepseek-v4-flash',
         'deepseek-v3.2',
         'qwen3.8-flash-next',
         'qwen3-vl-plus',
         'kimi-k3',
+        'claude-opus-5-5',
+        'claude-sonnet-4-8',
     ];
     const orderOf = async (entries: Array<Record<string, unknown>>, filter = {}) => {
         const response = { json: async () => ({ data: entries }) };
@@ -4138,6 +4145,8 @@ describe('models TokensAPI no longer offers (T0064)', () => {
             owned_by: 'custom',
         }));
         expect(await orderOf(tokensApiShape)).toEqual(BY_NAME);
+        // Meaningful owned_by, no dates: the 'anthropic' and 'moonshot' groups
+        // take the fixed places of their models' prefixes (claude, kimi).
         const noDates = DATED.map(({ created: _created, ...entry }) => entry);
         expect(await orderOf(noDates)).toEqual(BY_NAME);
         // One entry without a usable date sends the whole list to names: never a mix.
@@ -4147,6 +4156,59 @@ describe('models TokensAPI no longer offers (T0064)', () => {
             );
             expect(await orderOf(oneBad), String(bad)).toEqual(BY_NAME);
         }
+    });
+
+    it('puts maker groups in the fixed order when created is not believable, other makers after it alphabetically', async () => {
+        // The TokensAPI shape: created fixed at 1626777600, owned_by 'custom', upstream order mixed.
+        const tokensApi = (ids: string[]) =>
+            ids.map((id) => ({ ...chat(id), created: 1626777600, owned_by: 'custom' }));
+        const catalogue = tokensApi([
+            'claude-opus-5-5',
+            'nemotron-4-ultra',
+            'glm-5.3',
+            'gemma-4-27b-a4b',
+            'qwen3-vl-plus',
+            'deepseek-v3.2',
+            'kimi-k3',
+            'ornith1.5-pro',
+            'glm-4.6',
+            'deepseek-v4-flash',
+            'claude-sonnet-4-8',
+            'qwen3.8-flash-next',
+            'mistral-large-3',
+        ]);
+        const expected = [
+            'deepseek-v4-flash',
+            'deepseek-v3.2',
+            'qwen3.8-flash-next',
+            'qwen3-vl-plus',
+            'kimi-k3',
+            'glm-5.3',
+            'glm-4.6',
+            'gemma-4-27b-a4b',
+            'claude-opus-5-5',
+            'claude-sonnet-4-8',
+            'mistral-large-3',
+            'nemotron-4-ultra',
+            'ornith1.5-pro',
+        ];
+        expect(await orderOf(catalogue)).toEqual(expected);
+        expect(await orderOf([...catalogue].reverse())).toEqual(expected);
+        // A missing maker leaves a gap, not a reshuffle.
+        expect(
+            await orderOf(tokensApi(['claude-opus-5-5', 'gemma-4-27b-a4b', 'deepseek-v4-flash'])),
+        ).toEqual(['deepseek-v4-flash', 'gemma-4-27b-a4b', 'claude-opus-5-5']);
+        // The order lives in one constant next to the exclusion rules.
+        expect(__modelManager.modelVendorOrder).toEqual([
+            'deepseek',
+            'qwen',
+            'kimi',
+            'glm',
+            'gemma',
+            'claude',
+        ]);
+        // Believable created still decides group order by time (SRT-001): qwen first, deepseek last.
+        expect(await orderOf(DATED)).toEqual(BY_CREATED);
     });
 
     it('compares name versions number by number, ignores size segments, and puts unversioned names last', async () => {
@@ -4250,7 +4312,7 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         const request = async (url: unknown) =>
             String(url) === `${TOKENSAPI.baseURL}/models` ? VALID_RESPONSE() : FALLBACK_RESPONSE();
         const status = await __modelManager.modelManagerStatus(ctx, request);
-        const expected = ['deepseek-reasoner', 'custom-multimodal', 'deepseek-chat'];
+        const expected = ['deepseek-reasoner', 'deepseek-chat', 'custom-multimodal'];
         expect(status.official.models.map((model: { id: string }) => model.id)).toEqual(expected);
         // The model is still listed, so nothing was replaced; write the route as a save would.
         await __modelManager.synchronizeFallbackModel(ctx);
