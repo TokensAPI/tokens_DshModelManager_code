@@ -684,6 +684,40 @@ describe('Desktop model-manager settings section', () => {
         ).toEqual({ model: 'deepseek-chat', provider: 'modlens-tokens-fallback' });
     });
 
+    it('offers the vision picker the plugin order with the saved vision model on top (T0064)', () => {
+        let loaded:
+            | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }
+            | undefined;
+        const run = new Function('window', 'document', 'fetch', 'Event', SOURCE);
+        run(
+            { __ModuleLoader__: { load: (definition: typeof loaded) => (loaded = definition) } },
+            {},
+            () => Promise.reject(new Error('unused')),
+            class {},
+        );
+        if (!loaded) throw new Error('client module was not registered');
+        const candidates = loaded.factory(() => ({})).__manager.visionCandidates as (
+            state: Record<string, unknown>,
+        ) => Array<{ id: string }>;
+        // state.models arrives from the plugin already ordered, main model first.
+        const models = ['deepseek-v3.2', 'claude-opus-5-5', 'qwen3.8-flash-next', 'kimi-k3'].map(
+            (id) => ({ id }),
+        );
+        const ids = (state: Record<string, unknown>) => candidates(state).map((model) => model.id);
+        expect(ids({ models, visionModel: 'qwen3.8-flash-next' })).toEqual([
+            'qwen3.8-flash-next',
+            'deepseek-v3.2',
+            'claude-opus-5-5',
+            'kimi-k3',
+        ]);
+        // Unlisted or already first: the plugin order unchanged.
+        expect(ids({ models, visionModel: 'gone' })).toEqual(models.map((model) => model.id));
+        expect(ids({ models, visionModel: 'deepseek-v3.2' })).toEqual(
+            models.map((model) => model.id),
+        );
+        expect(ids({})).toEqual([]);
+    });
+
     it('separates route-page navigation from the explicit route switch action', () => {
         let loaded:
             | { factory: (require: () => unknown) => { __manager: Record<string, unknown> } }

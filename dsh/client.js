@@ -1229,6 +1229,19 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * The vision picker's list: the plugin's model order (main model first),
+     * with the saved vision model moved to the top instead.
+     * @param state - model-manager status.
+     * @returns the models to offer.
+     */
+    function visionCandidates(state) {
+      var models = Array.isArray(state?.models) ? state.models : []
+      var index = models.findIndex((model) => model?.id === state?.visionModel)
+      if (index <= 0) return models
+      return [models[index], ...models.slice(0, index), ...models.slice(index + 1)]
+    }
+
     function selectedModelVisionMode(state, mainModel) {
       var selected = Array.isArray(state?.models) ? state.models.find((model) => model?.id === mainModel) : null
       if (
@@ -2572,7 +2585,9 @@ window.__ModuleLoader__.load({
                   ),
                   protocolRow(),
                   visionHandlingRow(),
-                  draftVisionMode === 'bridge' ? modelRow(t.vision, visionModel, visionPair[1], 'vision') : null,
+                  draftVisionMode === 'bridge'
+                    ? modelRow(t.vision, visionModel, visionPair[1], 'vision', visionCandidates(state))
+                    : null,
                   routeNote(),
                   !state.modelsAvailable
                     ? h(
@@ -3707,6 +3722,7 @@ window.__ModuleLoader__.load({
       createManagerRequests,
       registerAccessGate: registerAccessGate,
       registerManagerSection: registerManagerSection,
+      visionCandidates: visionCandidates,
       selectedModelVisionMode: selectedModelVisionMode,
       selectedModelVisionSource: selectedModelVisionSource,
       selectedModelProtocol: selectedModelProtocol,

@@ -415,14 +415,16 @@ describe('offline fallback and complete catalog deadlines', () => {
 
 const API_MODELS = [
     {
-        // The product default since 0.2.29. Its image support comes from the
-        // plugin's own capability table (the catalogue declares no modalities).
-        id: 'deepseek-v4-flash-vision-exp',
-        name: 'DeepSeek V4 Flash Vision (Experimental)',
-        ownedBy: 'deepseek',
-        endpointTypes: ['openai', 'openai-response', 'anthropic'],
-        contextWindow: 262144,
-        maxTokens: 32768,
+        id: 'gpt-5.5',
+        name: 'GPT 5.5',
+        ownedBy: 'openai',
+        endpointTypes: ['openai'],
+    },
+    {
+        id: 'claude-opus-4-7',
+        name: 'Claude Opus 4.7',
+        ownedBy: 'vertex-ai',
+        endpointTypes: ['anthropic', 'openai'],
     },
     {
         id: 'deepseek-v4-flash',
@@ -433,9 +435,19 @@ const API_MODELS = [
         maxTokens: 32768,
     },
     {
-        id: 'qwen3.6-35b-a3b',
-        name: 'Qwen 3.6 Vision',
-        ownedBy: 'qwen',
+        // The product default since 0.2.29. Its image support comes from the
+        // plugin's own capability table (the catalogue declares no modalities).
+        id: 'deepseek-v4-flash-vision-exp',
+        name: 'DeepSeek V4 Flash Vision (Experimental)',
+        ownedBy: 'deepseek',
+        endpointTypes: ['openai', 'openai-response', 'anthropic'],
+        contextWindow: 262144,
+        maxTokens: 32768,
+    },
+    {
+        id: 'deepseek-v3.2',
+        name: 'DeepSeek V3.2',
+        ownedBy: 'deepseek',
         endpointTypes: ['openai', 'openai-response'],
     },
     {
@@ -445,28 +457,24 @@ const API_MODELS = [
         endpointTypes: ['openai', 'openai-response'],
     },
     {
-        id: 'deepseek-v3.2',
-        name: 'DeepSeek V3.2',
-        ownedBy: 'deepseek',
+        id: 'qwen3.6-35b-a3b',
+        name: 'Qwen 3.6 Vision',
+        ownedBy: 'qwen',
         endpointTypes: ['openai', 'openai-response'],
-    },
-    {
-        id: 'claude-opus-4-7',
-        name: 'Claude Opus 4.7',
-        ownedBy: 'vertex-ai',
-        endpointTypes: ['anthropic', 'openai'],
-    },
-    {
-        id: 'gpt-5.5',
-        name: 'GPT 5.5',
-        ownedBy: 'openai',
-        endpointTypes: ['openai'],
     },
 ];
 
+// API_MODELS is listed in the plugin's catalogue order (orderCatalogModels):
+// no created dates, and gpt-5.5's 'openai' owner is a placeholder, so names
+// decide. Every list then puts the current main model first.
+function mainFirst<T extends { id: string }>(models: T[], id: string) {
+    const main = models.filter((model) => model.id === id);
+    return [...main, ...models.filter((model) => model.id !== id)];
+}
+
 // gpt-* is listed by TokensAPI but kept out by default (allowGptModels: false);
 // the tests that exercise its Responses-only route turn the switch on.
-const PUBLIC_API_MODELS = gptAware(false);
+const PUBLIC_API_MODELS = mainFirst(gptAware(false), 'deepseek-v4-flash-vision-exp');
 
 function gptAware(allowGpt: boolean) {
     return API_MODELS.filter((model) => allowGpt || !model.id.startsWith('gpt-')).map(
@@ -566,10 +574,11 @@ function managedResponseWithFuture(inputModalities?: string[]) {
     });
 }
 
+// Listed in catalogue order: no dates or version numbers, so alphabetical.
 const FALLBACK_MODELS = [
+    { id: 'custom-multimodal', name: 'Custom Multimodal' },
     { id: 'deepseek-chat', name: 'DeepSeek Chat' },
     { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' },
-    { id: 'custom-multimodal', name: 'Custom Multimodal' },
 ];
 
 const FALLBACK_RESPONSE = async () => ({
@@ -3419,21 +3428,18 @@ describe('TokensAPI model discovery and selection', () => {
         // is what made cross-protocol models unselectable.
         expect(managedModels?.map((model) => model.id)).toEqual([
             'deepseek-v3.2',
-            'deepseek-v4-flash-vision-exp',
-            'deepseek-v4-flash',
-            'qwen3.6-35b-a3b',
-            'qwen3.8-flash-next',
-            'claude-opus-4-7',
             'gpt-5.5',
+            'claude-opus-4-7',
+            'deepseek-v4-flash',
+            'deepseek-v4-flash-vision-exp',
+            'qwen3.8-flash-next',
+            'qwen3.6-35b-a3b',
         ]);
-        // The conversation catalog now matches the settings selector.
-        expect(status.models).toEqual(directPublic(gptAware(true)));
-        // Same set as the settings selector; the route only reorders it so the
-        // main model leads.
-        expect([...(managedModels ?? [])].map((model) => model.id).sort()).toEqual(
-            directPublic(gptAware(true))
-                .map((model) => model.id)
-                .sort(),
+        // The settings selector lists the same models in the same order: one
+        // catalogue order, the main model first.
+        expect(status.models).toEqual(mainFirst(directPublic(gptAware(true)), 'deepseek-v3.2'));
+        expect(status.models.map((model: { id: string }) => model.id)).toEqual(
+            managedModels?.map((model) => model.id),
         );
         expect(status.baseURL).toBe('https://gateway.example/v1');
         expect(selections.at(-1)).toEqual({
@@ -3780,24 +3786,24 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         const status = await __modelManager.modelManagerStatus(ctx, request);
         expect(status).toMatchObject({
             channel: 'official',
-            activeMainModel: 'deepseek-chat',
-            official: { mainModel: 'deepseek-chat', modelsChecked: true },
+            activeMainModel: 'custom-multimodal',
+            official: { mainModel: 'custom-multimodal', modelsChecked: true },
             modelNotice: {
-                changes: [{ kind: 'fallback', from: 'gone-fallback', to: 'deepseek-chat' }],
+                changes: [{ kind: 'fallback', from: 'gone-fallback', to: 'custom-multimodal' }],
             },
         });
         expect(selections.at(-1)).toEqual({
             provider: DEEPSEEK_OFFICIAL.providerId,
-            model: 'deepseek-chat',
+            model: 'custom-multimodal',
         });
         expect(values.get(TOKENSAPI.settingsNamespace)).toMatchObject({
-            fallbackModel: 'deepseek-chat',
+            fallbackModel: 'custom-multimodal',
         });
         expect(values.get(TOKENSAPI.llmSettingsNamespace)).toMatchObject({
             providers: {
                 [DEEPSEEK_OFFICIAL.upstreamProviderId]: {
                     models: expect.arrayContaining([
-                        expect.objectContaining({ id: 'deepseek-chat' }),
+                        expect.objectContaining({ id: 'custom-multimodal' }),
                     ]),
                 },
             },
@@ -3814,7 +3820,7 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         const status = await __modelManager.modelManagerStatus(ctx, request);
         expect(status).toMatchObject({
             channel: 'tokensapi',
-            official: { mainModel: 'deepseek-chat' },
+            official: { mainModel: 'custom-multimodal' },
         });
         expect(selections.at(-1)).toMatchObject({ model: 'deepseek-v3.2' });
         expect(
@@ -3839,7 +3845,7 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         expect(down.modelNotice).toBeUndefined();
         fallbackUp = true;
         const up = await __modelManager.modelManagerStatus(ctx, request);
-        expect(up.official).toMatchObject({ mainModel: 'deepseek-chat', modelsChecked: true });
+        expect(up.official).toMatchObject({ mainModel: 'custom-multimodal', modelsChecked: true });
     });
 
     it('keeps the notice until the user dismisses it or saves the settings page', async () => {
@@ -3950,16 +3956,16 @@ describe('models TokensAPI no longer offers (T0064)', () => {
     it('drops excluded models from both catalogues, and brings gpt-* back only when allowed', async () => {
         const data = [...EXCLUDED.map(([id]) => chat(id)), ...KEPT.map(chat)];
         const response = { json: async () => ({ data }) };
-        const ids = (models: Array<{ id: string }>) => models.map((model) => model.id);
-        expect(ids(await __modelManager.parseManagedModels(response))).toEqual(KEPT);
-        expect(ids(await __modelManager.parseFallbackModels(response))).toEqual(KEPT);
+        // Which models survive; their order is the sorting tests' business.
+        const ids = (models: Array<{ id: string }>) => models.map((model) => model.id).sort();
+        expect(ids(await __modelManager.parseManagedModels(response))).toEqual([...KEPT].sort());
+        expect(ids(await __modelManager.parseFallbackModels(response))).toEqual([...KEPT].sort());
         const gpt = EXCLUDED.filter(([, kind]) => kind === 'gpt').map(([id]) => id);
-        expect(ids(await __modelManager.parseManagedModels(response, { allowGpt: true }))).toEqual([
-            ...gpt,
-            ...KEPT,
-        ]);
+        expect(ids(await __modelManager.parseManagedModels(response, { allowGpt: true }))).toEqual(
+            [...gpt, ...KEPT].sort(),
+        );
         expect(ids(await __modelManager.parseFallbackModels(response, { allowGpt: true }))).toEqual(
-            [...gpt, ...KEPT],
+            [...gpt, ...KEPT].sort(),
         );
     });
 
@@ -4067,5 +4073,193 @@ describe('models TokensAPI no longer offers (T0064)', () => {
             provider: DEEPSEEK_OFFICIAL.providerId,
             model: 'deepseek-chat',
         });
+    });
+
+    // ---- one order for every list (追加 2) ----
+
+    /** A catalogue entry with a release time and a maker. */
+    const dated = (id: string, created: unknown, owned_by: unknown) => ({
+        ...chat(id),
+        created,
+        owned_by,
+    });
+    // created and owned_by both believable; created disagrees with the names
+    // (claude-sonnet-4-8 is newer than claude-opus-5-5 here) so the test can
+    // tell which one was used.
+    const DATED = [
+        dated('deepseek-v4-flash', 500, 'deepseek'),
+        dated('qwen3.8-flash-next', 900, 'qwen'),
+        dated('deepseek-v3.2', 300, 'deepseek'),
+        dated('claude-opus-5-5', 700, 'anthropic'),
+        dated('qwen3-vl-plus', 400, 'qwen'),
+        dated('claude-sonnet-4-8', 800, 'anthropic'),
+        dated('kimi-k3', 600, 'moonshot'),
+    ];
+    const BY_CREATED = [
+        'qwen3.8-flash-next',
+        'qwen3-vl-plus',
+        'claude-sonnet-4-8',
+        'claude-opus-5-5',
+        'kimi-k3',
+        'deepseek-v4-flash',
+        'deepseek-v3.2',
+    ];
+    // The same models ordered by the versions in their names, grouped by prefix.
+    const BY_NAME = [
+        'claude-opus-5-5',
+        'claude-sonnet-4-8',
+        'deepseek-v4-flash',
+        'deepseek-v3.2',
+        'qwen3.8-flash-next',
+        'qwen3-vl-plus',
+        'kimi-k3',
+    ];
+    const orderOf = async (entries: Array<Record<string, unknown>>, filter = {}) => {
+        const response = { json: async () => ({ data: entries }) };
+        const managed = await __modelManager.parseManagedModels(response, filter);
+        const fallback = await __modelManager.parseFallbackModels(response, filter);
+        const ids = (models: Array<{ id: string }>) => models.map((model) => model.id);
+        // Both catalogues are put in order by the same function.
+        expect(ids(fallback)).toEqual(ids(managed));
+        return ids(managed);
+    };
+
+    it('groups by maker newest group first, newest first inside, when created is believable', async () => {
+        expect(await orderOf(DATED)).toEqual(BY_CREATED);
+        // Upstream order does not matter.
+        expect(await orderOf([...DATED].reverse())).toEqual(BY_CREATED);
+    });
+
+    it('orders the whole catalogue by name versions when created is missing, identical or not positive', async () => {
+        // TokensAPI (new-api) today: every entry 1626777600, owned_by 'custom'.
+        const tokensApiShape = DATED.map((entry) => ({
+            ...entry,
+            created: 1626777600,
+            owned_by: 'custom',
+        }));
+        expect(await orderOf(tokensApiShape)).toEqual(BY_NAME);
+        const noDates = DATED.map(({ created: _created, ...entry }) => entry);
+        expect(await orderOf(noDates)).toEqual(BY_NAME);
+        // One entry without a usable date sends the whole list to names: never a mix.
+        for (const bad of [undefined, 0, -5, '900', null]) {
+            const oneBad = DATED.map((entry, index) =>
+                index === 1 ? { ...entry, created: bad } : entry,
+            );
+            expect(await orderOf(oneBad), String(bad)).toEqual(BY_NAME);
+        }
+    });
+
+    it('compares name versions number by number, ignores size segments, and puts unversioned names last', async () => {
+        const names = (ids: string[]) => orderOf(ids.map(chat));
+        expect(await names(['deepseek-v3', 'deepseek-chat', 'deepseek-v4'])).toEqual([
+            'deepseek-v4',
+            'deepseek-v3',
+            'deepseek-chat',
+        ]);
+        expect(await names(['claude-sonnet-4-8', 'claude-opus-5-5'])).toEqual([
+            'claude-opus-5-5',
+            'claude-sonnet-4-8',
+        ]);
+        expect(await names(['qwen3.6-35b-a3b', 'qwen3', 'qwen3.8-flash-next'])).toEqual([
+            'qwen3.8-flash-next',
+            'qwen3.6-35b-a3b',
+            'qwen3',
+        ]);
+        // 355b is a size, not a version: glm-5.1 is the newer one.
+        expect(await names(['glm-5-355b', 'glm-5.1-9b'])).toEqual(['glm-5.1-9b', 'glm-5-355b']);
+        // Equal versions, and names with none, go alphabetically.
+        expect(
+            await names([
+                'zeta-chat',
+                'deepseek-v4-flash-vision-exp',
+                'alpha-chat',
+                'deepseek-v4-flash',
+            ]),
+        ).toEqual(['deepseek-v4-flash', 'deepseek-v4-flash-vision-exp', 'alpha-chat', 'zeta-chat']);
+    });
+
+    it('groups by name prefix when owned_by is a placeholder, missing or names one maker only', async () => {
+        // Believable dates, so only the grouping changes. With a meaningful
+        // owned_by, 'acme' keeps its qwen and deepseek models together.
+        const acme = [
+            dated('qwen3.8-flash-next', 900, 'acme'),
+            dated('kimi-k3', 800, 'moonshot'),
+            dated('qwen3-vl-plus', 700, 'acme'),
+            dated('deepseek-v4-flash', 600, 'acme'),
+        ];
+        expect(await orderOf(acme)).toEqual([
+            'qwen3.8-flash-next',
+            'qwen3-vl-plus',
+            'deepseek-v4-flash',
+            'kimi-k3',
+        ]);
+        // By name prefix, deepseek is its own group, after kimi's newer one.
+        const byPrefix = ['qwen3.8-flash-next', 'qwen3-vl-plus', 'kimi-k3', 'deepseek-v4-flash'];
+        for (const owner of ['custom', 'openai', 'system', '', undefined]) {
+            const placeholder = acme.map((entry, index) =>
+                index === 1 ? { ...entry, owned_by: owner } : entry,
+            );
+            expect(await orderOf(placeholder), String(owner)).toEqual(byPrefix);
+        }
+        // One maker for everything is the gateway's name, not the maker's.
+        const gateway = acme.map((entry) => ({ ...entry, owned_by: 'tokensapi' }));
+        expect(await orderOf(gateway)).toEqual(byPrefix);
+    });
+
+    it('sorts after filtering, and gpt-* takes its place in the order when allowed', async () => {
+        const entries = [
+            ...DATED,
+            dated('gpt-6-sol', 1000, 'azure'),
+            dated('qwen3-embedding', 950, 'qwen'),
+            dated('startlux-27b', 990, 'startlux'),
+        ];
+        expect(await orderOf(entries)).toEqual(BY_CREATED);
+        expect(await orderOf(entries, { allowGpt: true })).toEqual(['gpt-6-sol', ...BY_CREATED]);
+    });
+
+    it('lists the main model first and the rest in catalogue order, the same in the selector and the route', async () => {
+        const { ctx, values } = startWith({ mainModel: 'deepseek-v3.2' });
+        const status = await __modelManager.modelManagerStatus(ctx, catalog(DATED));
+        const expected = ['deepseek-v3.2', ...BY_CREATED.filter((id) => id !== 'deepseek-v3.2')];
+        expect(status.mainModel).toBe('deepseek-v3.2');
+        expect(status.models.map((model: { id: string }) => model.id)).toEqual(expected);
+        const route = values.get(TOKENSAPI.llmSettingsNamespace)?.providers as Record<
+            string,
+            { models: Array<{ id: string }> }
+        >;
+        expect(route[TOKENSAPI.providerId].models.map((model) => model.id)).toEqual(expected);
+    });
+
+    it('replaces an offline main model with the first usable model in catalogue order', async () => {
+        // No product default in the list, so the newest model takes over.
+        const { ctx } = startWith({ mainModel: 'retired-model-a' });
+        const status = await __modelManager.modelManagerStatus(ctx, catalog(DATED));
+        expect(status.mainModel).toBe(BY_CREATED[0]);
+        expect(status.models.map((model: { id: string }) => model.id)).toEqual(BY_CREATED);
+    });
+
+    it('lists the saved fallback model first in its picker and its route', async () => {
+        const { ctx, values } = startWith(
+            {
+                fallbackModel: 'deepseek-reasoner',
+                fallbackBaseURL: 'https://backup.example/v1',
+                activeChannel: 'official',
+            },
+            'sk-fallback',
+        );
+        const request = async (url: unknown) =>
+            String(url) === `${TOKENSAPI.baseURL}/models` ? VALID_RESPONSE() : FALLBACK_RESPONSE();
+        const status = await __modelManager.modelManagerStatus(ctx, request);
+        const expected = ['deepseek-reasoner', 'custom-multimodal', 'deepseek-chat'];
+        expect(status.official.models.map((model: { id: string }) => model.id)).toEqual(expected);
+        // The model is still listed, so nothing was replaced; write the route as a save would.
+        await __modelManager.synchronizeFallbackModel(ctx);
+        const route = values.get(TOKENSAPI.llmSettingsNamespace)?.providers as Record<
+            string,
+            { models: Array<{ id: string }> }
+        >;
+        expect(route[DEEPSEEK_OFFICIAL.upstreamProviderId].models.map((model) => model.id)).toEqual(
+            expected,
+        );
     });
 });

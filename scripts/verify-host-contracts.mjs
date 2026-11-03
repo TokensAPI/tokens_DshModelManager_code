@@ -819,8 +819,15 @@ const NOT_CONVERSATION = ['codex-auto-review', 'qwen3-embedding', 'qwen3-asr', '
  * says the outcome is final.
  *
  * @param ready - `(body, selection) => boolean`, the settled state.
+ * @param entries - the `/models` entries to serve; the user's catalogue by default.
  */
-async function startOnUserCatalog(t, defaultModel, config, ready) {
+async function startOnUserCatalog(
+    t,
+    defaultModel,
+    config,
+    ready,
+    entries = USER_CATALOG.map((id) => ({ id, supported_endpoint_types: ['openai'] })),
+) {
     const host = await liveHost(t, { defaultModel, config });
     const catalogCalls = [];
     globalThis.fetch = async (url) => {
@@ -828,9 +835,7 @@ async function startOnUserCatalog(t, defaultModel, config, ready) {
         return {
             ok: true,
             status: 200,
-            json: async () => ({
-                data: USER_CATALOG.map((id) => ({ id, supported_endpoint_types: ['openai'] })),
-            }),
+            json: async () => ({ data: entries }),
         };
     };
     const key = 'synthetic-contract-key';
@@ -945,6 +950,65 @@ test(
         }
         if (routeIds) assert.ok(routeIds.includes('gpt-6-sol'));
         t.diagnostic(`kept ${selection?.provider}/${selection?.model}; offered ${offered.length}`);
+    },
+);
+
+test(
+    'HOST-040 the kernel route and the settings list carry one order: main model first, then makers newest first',
+    options,
+    async (t) => {
+        // T0064 追加 2. TokensAPI (new-api) stamps every entry with the same
+        // created (1626777600) and owned_by 'custom', so the plugin orders the
+        // whole catalogue by the versions in the names and groups by name
+        // prefix. The order must reach the Host's llm-pi-ai route as is, with
+        // the saved main model first: the kernel takes the first entry as the
+        // default of a new session.
+        const MAIN = 'deepseek-v3.2';
+        const shuffled = [
+            'kimi-k3',
+            'qwen3-vl-plus',
+            MAIN,
+            'gpt-6-sol',
+            'claude-sonnet-4-8',
+            'qwen3.8-flash-next',
+            'deepseek-v4-flash',
+            'qwen3-embedding',
+            'claude-opus-5-5',
+        ].map((id) => ({
+            id,
+            object: 'model',
+            created: 1626777600,
+            owned_by: 'custom',
+            supported_endpoint_types: ['openai'],
+        }));
+        const expected = [
+            MAIN,
+            'claude-opus-5-5',
+            'claude-sonnet-4-8',
+            'deepseek-v4-flash',
+            'qwen3.8-flash-next',
+            'qwen3-vl-plus',
+            'kimi-k3',
+        ];
+        const { body, selection, routeIds } = await startOnUserCatalog(
+            t,
+            MAIN,
+            {},
+            (status, _current, route) =>
+                status.modelsAvailable === true &&
+                status.models?.length === expected.length &&
+                (route === undefined || route.length === expected.length),
+            shuffled,
+        );
+        assert.equal(body.mainModel, MAIN);
+        assert.equal(body.modelNotice, undefined);
+        assert.equal(selection?.model, MAIN);
+        assert.deepEqual(
+            body.models.map((model) => model.id),
+            expected,
+        );
+        if (routeIds) assert.deepEqual(routeIds, expected);
+        t.diagnostic(`order ${expected.join(' > ')}`);
     },
 );
 

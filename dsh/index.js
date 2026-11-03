@@ -116,6 +116,113 @@ function isExcludedModelId(id, options = {}) {
 function catalogFilter(runtime) {
   return { allowGpt: runtime?.allowGptModels === true }
 }
+
+/**
+ * `owned_by` values that name the channel or the gateway, not the model's maker.
+ * A catalogue that uses any of them is grouped by name instead.
+ */
+const PLACEHOLDER_MODEL_OWNERS = new Set(['custom', 'openai', 'system', 'unknown', 'default'])
+
+/** A segment that gives a model's size, not its version: `27b`, `a3b`, `1.5t`. */
+const MODEL_SIZE_SEGMENT = /^a?\d+(?:\.\d+)?[bkmt]$/
+
+/** A model id without its `provider/` prefix, lower-cased. */
+function modelBaseName(id) {
+  return String(id ?? '')
+    .toLowerCase()
+    .split('/')
+    .pop()
+}
+
+/**
+ * The maker a model's name gives: the letters its first segment starts with
+ * (`qwen3.8-flash-next` → `qwen`, `kimi-k3` → `kimi`).
+ */
+function modelVendorFromName(id) {
+  const first = modelBaseName(id).split(/[-_.]/)[0] ?? ''
+  return first.match(/^[a-z]+/)?.[0] ?? first
+}
+
+/**
+ * The version numbers a model's name carries, in order, size segments left out:
+ * `claude-opus-5-5` → [5, 5], `gemma-4-27b-a4b` → [4], `qwen3.8-flash-next` → [3, 8].
+ */
+function modelNameVersion(id) {
+  const kept = modelBaseName(id)
+    .split(/[-_]/)
+    .filter((segment) => !MODEL_SIZE_SEGMENT.test(segment))
+  return (kept.join('-').match(/\d+/g) ?? []).map(Number)
+}
+
+/** Newer name first: numbers compared one by one (`3.8` > `3.6` > `3`); a name with none goes last. */
+function compareNameVersionsNewestFirst(left, right) {
+  const a = modelNameVersion(left)
+  const b = modelNameVersion(right)
+  if (a.length === 0 || b.length === 0) return b.length - a.length
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const difference = (b[i] ?? -1) - (a[i] ?? -1)
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
+/**
+ * The one order every model list uses: the settings pickers, the composer
+ * menu, the provider models written for llm-pi-ai, the vision candidates and
+ * the "first usable model" a replacement picks.
+ *
+ * Models are grouped by maker. Groups come newest first, by their newest
+ * model, and each group lists its models newest first: take the newest model,
+ * then the rest of its maker's, then the newest of what is left, and so on.
+ *
+ * - Age is `created` when the whole catalogue gives a believable one (every
+ *   entry has a positive number, and they are not all the same). Otherwise
+ *   the whole catalogue is compared by the version numbers in the names
+ *   instead; the two are never mixed. Ties go alphabetically.
+ * - The maker is `owned_by` when the whole catalogue gives a meaningful one
+ *   (every entry has one, none is a gateway placeholder such as `custom` or
+ *   `openai`, and there are at least two). Otherwise it is the name's prefix.
+ *
+ * The current model is pinned first by the caller, not here ({@link pinModelFirst}).
+ *
+ * @param entries - `{ model, created, ownedBy }` per catalogue entry, `model` carrying the `id`.
+ * @returns the models, in order.
+ */
+function orderCatalogModels(entries) {
+  const times = entries.map((entry) => entry.created)
+  const byCreated =
+    times.length > 0 &&
+    times.every((time) => typeof time === 'number' && Number.isFinite(time) && time > 0) &&
+    new Set(times).size > 1
+  const owners = entries.map((entry) =>
+    String(entry.ownedBy ?? '')
+      .trim()
+      .toLowerCase(),
+  )
+  const byOwner = owners.every((owner) => owner && !PLACEHOLDER_MODEL_OWNERS.has(owner)) && new Set(owners).size > 1
+  const vendor = (entry, index) => (byOwner ? owners[index] : modelVendorFromName(entry.model.id))
+  const indexed = entries.map((entry, index) => ({ entry, vendor: vendor(entry, index) }))
+  indexed.sort((left, right) => {
+    const age = byCreated
+      ? right.entry.created - left.entry.created
+      : compareNameVersionsNewestFirst(left.entry.model.id, right.entry.model.id)
+    if (age !== 0) return age
+    return left.entry.model.id < right.entry.model.id ? -1 : left.entry.model.id > right.entry.model.id ? 1 : 0
+  })
+  const groups = new Map()
+  for (const item of indexed) {
+    if (!groups.has(item.vendor)) groups.set(item.vendor, [])
+    groups.get(item.vendor).push(item.entry.model)
+  }
+  return [...groups.values()].flat()
+}
+
+/** The list with `id` moved to the front, everything else in its order. */
+function pinModelFirst(models, id) {
+  const index = id ? models.findIndex((model) => model?.id === id) : -1
+  if (index <= 0) return models
+  return [models[index], ...models.slice(0, index), ...models.slice(index + 1)]
+}
 const CLAUDE_PROXY_PATH = '/tokens/model-manager/claude-proxy'
 const CLAUDE_COMPAT_USER_AGENT = 'claude-cli/2.1.0'
 const PROTOCOL_PROBE_TIMEOUT_MS = 20_000
@@ -3333,7 +3440,8 @@ function publicModels(runtime) {
     if (!id || isHiddenManagedModel(id)) continue
     if (!models.some((model) => model.id === id)) models.push({ id, name: id })
   }
-  return models.map((model) => {
+  // Catalogue order ({@link orderCatalogModels}), the main model first like the composer's.
+  return pinModelFirst(models, runtime.mainModel).map((model) => {
     const capability = managedModelCapability(model, runtime.visionModeByModel[model.id])
     let visionMode = capability.visionMode
     if (!runtime.visionProviderEnabled && visionMode === 'bridge') visionMode = 'direct'
@@ -3601,19 +3709,23 @@ async function parseManagedModels(response, filter = {}) {
     const contextWindow = managedModelContextWindow({ ...entry, id })
     const maxTokens = managedModelMaxTokens({ ...entry, id })
     models.push({
-      id,
-      name,
-      ...(ownedBy ? { ownedBy } : {}),
-      ...(hasEndpointTypes ? { endpointTypes } : {}),
-      ...(Array.isArray(declaredInput) ? { input } : {}),
-      ...(contextWindow === undefined ? {} : { contextWindow }),
-      ...(maxTokens === undefined ? {} : { maxTokens }),
+      model: {
+        id,
+        name,
+        ...(ownedBy ? { ownedBy } : {}),
+        ...(hasEndpointTypes ? { endpointTypes } : {}),
+        ...(Array.isArray(declaredInput) ? { input } : {}),
+        ...(contextWindow === undefined ? {} : { contextWindow }),
+        ...(maxTokens === undefined ? {} : { maxTokens }),
+      },
+      created: entry?.created,
+      ownedBy,
     })
   }
   if (models.length === 0) {
     throw new ManagedCredentialError('upstream', 'TokensAPI 没有返回可用模型')
   }
-  return models
+  return orderCatalogModels(models)
 }
 
 async function resolveManagedMainRoute(ctx, mainModel) {
@@ -3848,8 +3960,6 @@ async function synchronizeMainModelNow(ctx, mainModel, models) {
     const selected = models.find((model) => model.id === mainModel)
     const contextWindow = managedModelContextWindow(selected ?? { id: mainModel })
     const conversationModels = managedConversationModels(runtime, models, route.api)
-    const mainIndex = conversationModels.findIndex((model) => model.id === mainModel)
-    if (mainIndex > 0) conversationModels.unshift(...conversationModels.splice(mainIndex, 1))
     // DSH reserves its provider User-Agent for product attribution and removes
     // a route's configured value before dispatch. TokensAPI's Claude endpoint
     // requires the Claude CLI identity, so a private plugin-owned loopback
@@ -3864,7 +3974,7 @@ async function synchronizeMainModelNow(ctx, mainModel, models) {
       api: route.api,
       baseURL: providerBaseURL,
       ...(contextWindow === undefined ? {} : { defaultContextWindow: contextWindow }),
-      models: conversationModels,
+      models: pinModelFirst(conversationModels, mainModel),
     }
     let storedRoute
     try {
@@ -3900,7 +4010,7 @@ function publicFallbackModels(runtime) {
   if (runtime.fallbackModel && !models.some((model) => model.id === runtime.fallbackModel)) {
     models.push({ id: runtime.fallbackModel, name: runtime.fallbackModel })
   }
-  return models.map((model) => ({ id: model.id, name: model.name ?? model.id }))
+  return pinModelFirst(models, runtime.fallbackModel).map((model) => ({ id: model.id, name: model.name ?? model.id }))
 }
 
 async function parseFallbackModels(response, filter = {}) {
@@ -3922,12 +4032,16 @@ async function parseFallbackModels(response, filter = {}) {
     const hasEndpointTypes = Array.isArray(entry?.supported_endpoint_types)
     if (hasEndpointTypes && endpointTypes.length === 0) continue
     seen.add(id)
-    models.push({ id, name: normalizeModelId(entry?.name, id) })
+    models.push({
+      model: { id, name: normalizeModelId(entry?.name, id) },
+      created: entry?.created,
+      ownedBy: entry?.owned_by,
+    })
   }
   if (models.length === 0) {
     throw new ManagedCredentialError('upstream', '备用线路没有返回可用模型')
   }
-  return models
+  return orderCatalogModels(models)
 }
 
 async function validateFallbackCredential(apiKey, baseURL, request = globalThis.fetch, signal, filter = {}) {
@@ -3940,7 +4054,7 @@ async function synchronizeFallbackModel(ctx) {
   if (!runtime.fallbackModel) return
   const models =
     runtime.fallbackModels.length > 0
-      ? runtime.fallbackModels
+      ? pinModelFirst(runtime.fallbackModels, runtime.fallbackModel)
       : [{ id: runtime.fallbackModel, name: runtime.fallbackModel }]
   if (runtime.settings?.update) {
     await runtime.settings.update(DEEPSEEK_OFFICIAL.settingsNamespace, {
@@ -4884,6 +4998,7 @@ export const __modelManager = {
   hiddenManagedModelIds: HIDDEN_MANAGED_MODEL_IDS,
   excludedModelRules: EXCLUDED_MODEL_RULES,
   excludedModelKind,
+  orderCatalogModels,
   publicModels,
   managedConversationModels,
   anthropicUpstreamRoot,
