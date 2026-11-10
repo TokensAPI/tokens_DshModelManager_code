@@ -3916,6 +3916,14 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         ['cogview-t2i', 'media'],
         ['hunyuan-t2v', 'media'],
         ['omni-moderation-latest', 'moderation'],
+        ['deepseek-ocr', 'ocr'],
+        ['qwen-vl-ocr-latest', 'ocr'],
+        ['mistral-ocr-latest', 'ocr'],
+        ['dots.ocr', 'ocr'],
+        ['got-ocr2.0', 'ocr'],
+        ['PaddleOCR-VL-0.9B', 'ocr'],
+        ['olmocr-7b', 'ocr'],
+        ['MonkeyOCR-pro-3b', 'ocr'],
         ['startlux-27b', 'decision'],
         ['StartLux-9b', 'decision'],
     ];
@@ -3936,6 +3944,9 @@ describe('models TokensAPI no longer offers (T0064)', () => {
         'speechless-llama2-13b',
         'embedded-coder-7b',
         'sparkling-chat-8b',
+        // ocr only counts at the end of a segment.
+        'ocrevus-chat-7b',
+        'docreader-7b',
     ];
 
     it('names one rule for every excluded kind, and leaves conversation models alone', () => {
@@ -3947,7 +3958,16 @@ describe('models TokensAPI no longer offers (T0064)', () => {
             __modelManager.excludedModelRules.map((rule: { kind: string }) => rule.kind),
         );
         expect([...kinds].sort()).toEqual(
-            ['codex', 'decision', 'embedding', 'gpt', 'media', 'moderation', 'speech'].sort(),
+            [
+                'codex',
+                'decision',
+                'embedding',
+                'gpt',
+                'media',
+                'moderation',
+                'ocr',
+                'speech',
+            ].sort(),
         );
         // The switch lifts gpt-* only; Codex and the rest stay out.
         expect(__modelManager.excludedModelKind('gpt-6-sol', { allowGpt: true })).toBe('');
