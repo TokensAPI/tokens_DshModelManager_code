@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.30 - 2026-11-10
 
 - Keep OCR models out of every list. TokensAPI now lists OCR models as well (`deepseek-ocr` and the like); they transcribe text from an image and cannot hold a conversation, nor answer the structured reading the vision bridge asks for, so they join the exclusion table (`EXCLUDED_MODEL_RULES` in `dsh/index.js`) as an eighth kind, `ocr`, and stay out of the settings pickers, the composer, the `llm-pi-ai` route and the vision candidates. A saved main, vision or fallback model that is an OCR model is replaced and reported like any other filtered model. `allowGptModels` does not lift it.
   - OCR names come in several shapes, so the rule gets a new form, `segmentEnd`: any name segment that, trailing digits dropped, ends with `ocr`. That catches `deepseek-ocr`, `qwen-vl-ocr-latest`, `mistral-ocr-latest`, `dots.ocr`, `got-ocr2.0`, `PaddleOCR-VL-0.9B`, `olmocr-7b` and `MonkeyOCR-pro-3b`, and leaves `ocrevus-chat-7b` and `docreader-7b` alone.
