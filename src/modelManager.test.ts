@@ -2294,6 +2294,89 @@ describe('TokensAPI model discovery and selection', () => {
         });
     });
 
+    // The Host's catalog reads entry.contextWindow first and compaction sizes
+    // its threshold from resolveModelInfo().context.contextWindow, so the
+    // catalogue's context_length must land on both the model entry and the
+    // route default.
+    it('writes the catalog context_length into the route the Host compacts by', async () => {
+        const credential = credentialHarness('tk-context-length', true);
+        const values = new Map<string, Record<string, unknown>>([
+            [
+                TOKENSAPI.settingsNamespace,
+                { mainModel: 'deepseek-v4-flash', visionModel: TOKENSAPI.visionModel },
+            ],
+        ]);
+        const updates: Array<{ namespace: string; patch: Record<string, unknown> }> = [];
+        const settings = {
+            register: (
+                namespace: string,
+                _schema: unknown,
+                options?: { base?: Record<string, unknown> },
+            ) => {
+                if (!values.has(namespace)) values.set(namespace, { ...(options?.base ?? {}) });
+                return { get: () => values.get(namespace) };
+            },
+            get: (namespace: string) => values.get(namespace),
+            update: async (namespace: string, patch: Record<string, unknown>) => {
+                updates.push({ namespace, patch });
+                values.set(namespace, { ...(values.get(namespace) ?? {}), ...patch });
+            },
+        };
+        const ctx = {
+            ...credential.ctx,
+            tools: { register: () => {} },
+            inject: (services: string[], callback: (scope: Record<string, unknown>) => void) => {
+                if (services.includes('settings')) callback({ settings });
+            },
+        };
+        const response = async () => ({
+            status: 200,
+            json: async () => ({
+                data: API_MODELS.map((model) => ({
+                    id: model.id,
+                    name: model.name,
+                    owned_by: model.ownedBy,
+                    supported_endpoint_types: model.endpointTypes,
+                    ...(model.id === 'deepseek-v4-flash' ? { context_length: 1048576 } : {}),
+                })),
+            }),
+        });
+
+        apply(ctx, { settingsCard: false, pasteToPath: false });
+        await expect(__modelManager.modelManagerStatus(ctx, response)).resolves.toMatchObject({
+            mainModel: 'deepseek-v4-flash',
+        });
+        expect(
+            [...updates]
+                .reverse()
+                .find((entry) => entry.namespace === TOKENSAPI.llmSettingsNamespace)?.patch,
+        ).toMatchObject({
+            providers: {
+                tokensapi: {
+                    defaultContextWindow: 1048576,
+                    models: expect.arrayContaining([
+                        expect.objectContaining({
+                            id: 'deepseek-v4-flash',
+                            contextWindow: 1048576,
+                            maxTokens: 32768,
+                        }),
+                        expect.objectContaining({
+                            id: 'deepseek-v4-flash-vision-exp',
+                            contextWindow: 262144,
+                        }),
+                    ]),
+                },
+            },
+        });
+        expect(
+            __modelManager.managedConversationModels(
+                { visionModeByModel: {} },
+                [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', context_length: 1048576 }],
+                'openai-completions',
+            ),
+        ).toEqual([expect.objectContaining({ id: 'deepseek-v4-flash', contextWindow: 1048576 })]);
+    });
+
     it('uses the bridge only for supported text-only model families', () => {
         expect(
             __modelManager.modelUsesVisionBridge({
@@ -3086,6 +3169,51 @@ describe('TokensAPI model discovery and selection', () => {
             },
             { id: 'qwen3.6-35b-a3b', name: 'qwen3.6-35b-a3b' },
         ]);
+    });
+
+    // Production GET /v1/models publishes `context_length` (262144 for the
+    // DeepSeek V4 family today). The catalogue value outranks the built-in
+    // table, and an unknown model takes it as is.
+    it('takes the catalog context_length over the built-in capacity', async () => {
+        const models = await __modelManager.parseManagedModels({
+            json: async () => ({
+                data: [
+                    { id: 'deepseek-v4-flash', context_length: 1048576 },
+                    { id: 'deepseek-v4-pro', context_length: 262144 },
+                    { id: 'future-long-context-model', context_length: 524288 },
+                ],
+            }),
+        });
+        const byId = new Map(models.map((model) => [model.id, model]));
+        expect(byId.get('deepseek-v4-flash')).toMatchObject({
+            contextWindow: 1048576,
+            maxTokens: 32768,
+        });
+        expect(byId.get('deepseek-v4-pro')).toMatchObject({ contextWindow: 262144 });
+        expect(byId.get('future-long-context-model')).toMatchObject({ contextWindow: 524288 });
+        expect(byId.get('future-long-context-model')).not.toHaveProperty('maxTokens');
+        expect(
+            __modelManager.managedModelContextWindow({
+                id: 'deepseek-v4-flash',
+                context_length: 1048576,
+            }),
+        ).toBe(1048576);
+    });
+
+    it('falls back to the built-in capacity when context_length is invalid', async () => {
+        for (const contextLength of [0, -1, '1048576', 16_000_001, 1.5, null]) {
+            const models = await __modelManager.parseManagedModels({
+                json: async () => ({
+                    data: [
+                        { id: 'deepseek-v4-flash', context_length: contextLength },
+                        { id: 'future-long-context-model', context_length: contextLength },
+                    ],
+                }),
+            });
+            const byId = new Map(models.map((model) => [model.id, model]));
+            expect(byId.get('deepseek-v4-flash')?.contextWindow).toBe(262144);
+            expect(byId.get('future-long-context-model')).not.toHaveProperty('contextWindow');
+        }
     });
 
     it('filters pure image and video models from managed and fallback catalogs', async () => {
