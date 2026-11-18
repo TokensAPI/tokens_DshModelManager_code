@@ -56,7 +56,9 @@ const ANTHROPIC_ONLY_MODEL_ID = /(?:^|\/)claude(?:-|$)/i
  * rule for `vl` and `glm-5.3-flashx` never matches `flux`. A rule is one of:
  * - `first`: the first segment equals one of these words;
  * - `firstPrefix`: the first segment starts with one of these words;
- * - `segment`: any run of segments, first included, equals one of these (`dall-e` is two).
+ * - `segment`: any run of segments, first included, equals one of these (`dall-e` is two);
+ * - `segmentEnd`: any segment, trailing digits dropped, ends with one of these
+ *   (`ocr` catches `deepseek-ocr`, `got-ocr2.0`, `PaddleOCR-VL` and `olmocr-7b`).
  *
  * `gpt` is the only rule a setting can lift (`allowGptModels`); the others
  * name kinds of model a conversation can never use.
@@ -71,6 +73,7 @@ const EXCLUDED_MODEL_RULES = Object.freeze([
     segment: ['dall-e', 'image-gen', 'flux', 'sora', 'seedream', 'seedance', 'wanx', 'kling', 't2i', 't2v'],
   },
   { kind: 'moderation', segment: ['moderation'] },
+  { kind: 'ocr', segmentEnd: ['ocr'] },
   { kind: 'decision', firstPrefix: ['startlux'] },
 ])
 
@@ -109,6 +112,9 @@ function excludedModelKind(id, options = {}) {
     if (rule.first?.includes(segments[0])) return rule.kind
     if (rule.firstPrefix?.some((word) => segments[0].startsWith(word))) return rule.kind
     if (rule.segment?.some((word) => hasRun(word, 0))) return rule.kind
+    if (rule.segmentEnd?.some((word) => segments.some((segment) => segment.replace(/\d+$/, '').endsWith(word)))) {
+      return rule.kind
+    }
   }
   return ''
 }

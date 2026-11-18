@@ -793,8 +793,9 @@ test(
 );
 
 /**
- * The catalogue the user's account listed on 2026-11-03, trimmed: TokensAPI
- * offers every one of these, and only the last three are conversation models.
+ * The catalogue the user's account listed on 2026-11-03, trimmed, plus the OCR
+ * models TokensAPI started listing by 2026-11-10: TokensAPI offers every one
+ * of these, and only the last three are conversation models.
  */
 const USER_CATALOG = [
     'gpt-5.5',
@@ -803,11 +804,20 @@ const USER_CATALOG = [
     'qwen3-embedding',
     'qwen3-asr',
     'startlux-27b',
+    'deepseek-ocr',
+    'PaddleOCR-VL-0.9B',
     MAIN_MODEL,
     'deepseek-v4-flash',
     'qwen3.8-flash-next',
 ];
-const NOT_CONVERSATION = ['codex-auto-review', 'qwen3-embedding', 'qwen3-asr', 'startlux-27b'];
+const NOT_CONVERSATION = [
+    'codex-auto-review',
+    'qwen3-embedding',
+    'qwen3-asr',
+    'startlux-27b',
+    'deepseek-ocr',
+    'PaddleOCR-VL-0.9B',
+];
 
 /**
  * Boot the Host on `defaultModel`, serve {@link USER_CATALOG}, and make the
