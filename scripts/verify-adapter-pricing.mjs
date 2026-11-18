@@ -153,7 +153,7 @@ async function dsh02LocaleHost(require, load, z, settingsModule) {
     };
 }
 
-test('real DSH settings localize cached image failures after language changes', {
+test('real DSH settings localize image failures after language changes', {
     skip: withoutHost(),
 }, async () => {
     const require = createRequire(resolve(hostRoot(), 'package.json'));
@@ -172,6 +172,9 @@ test('real DSH settings localize cached image failures after language changes', 
             content: [{ type: 'image', attachment: { id: 'settings-language-contract' } }],
         },
     ];
+    // Retries without real waits; restored below.
+    const previousDelays = process.env.MODLENS_DSH_RETRY_DELAYS_MS;
+    process.env.MODLENS_DSH_RETRY_DELAYS_MS = '0,0';
     const originalError = console.error;
     console.error = () => {};
     try {
@@ -213,9 +216,12 @@ test('real DSH settings localize cached image failures after language changes', 
                 },
             );
         }
-        assert.equal(reads, 1);
+        // Failures are not cached (T0087): each send reads again, three attempts each.
+        assert.equal(reads, 9);
     } finally {
         console.error = originalError;
+        if (previousDelays === undefined) delete process.env.MODLENS_DSH_RETRY_DELAYS_MS;
+        else process.env.MODLENS_DSH_RETRY_DELAYS_MS = previousDelays;
         await host.close();
     }
 });
