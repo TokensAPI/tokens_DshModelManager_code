@@ -15,7 +15,7 @@ describe('model-manager error localization', () => {
         vi.restoreAllMocks();
     });
 
-    it('uses the saved host language for failed image reads and cached retries', async () => {
+    it('uses the saved host language for failed image reads on every send', async () => {
         // @ts-expect-error dependency-free runtime JS
         const plugin = await import('../dsh/index.js');
         let preference = 'en';
@@ -54,7 +54,8 @@ describe('model-manager error localization', () => {
                 message,
             });
         }
-        expect(readImage).toHaveBeenCalledOnce();
+        // Failures are not cached (T0087): each send reads again, three attempts each.
+        expect(readImage).toHaveBeenCalledTimes(15);
         expect(messages[0].content[0].type).toBe('image');
     });
 
@@ -139,7 +140,7 @@ describe('model-manager error localization', () => {
             message: CHINESE,
         });
         expect(stream).not.toHaveBeenCalled();
-        expect(readImage).toHaveBeenCalledOnce();
+        expect(readImage).toHaveBeenCalledTimes(6);
     });
 
     function client(language: string, fetchMock: unknown = () => {}) {

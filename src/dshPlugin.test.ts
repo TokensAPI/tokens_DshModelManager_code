@@ -1530,44 +1530,62 @@ describe('dsh plugin request-time image conversion (v2)', () => {
             (error: unknown) => error as { code?: string; message?: string },
         );
 
-    it('a failing read stops before upstream and keeps its cooldown (#68)', async () => {
-        // A broken engine is probed once per cooldown, but its placeholder
-        // never reaches the text model where it could trigger tool calls.
-        vi.useFakeTimers({ toFake: ['performance'] });
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-cool-'));
+    it('retries a failed read and sends the recovered evidence (T0087)', async () => {
+        // Two failures, then success: the user sees evidence, not an error,
+        // and the success is cached for good.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-retry-'));
         const { cli, marker } = flakyCli(dir, 2);
+        const logs: string[] = [];
+        const spy = vi.spyOn(console, 'error').mockImplementation((...values: unknown[]) => {
+            logs.push(values.map(String).join(' '));
+        });
         try {
             const { adapter, seen } = await adapterCapturing(cli);
-            const first = await rejectedDrain(adapter, 'att-cool');
-            const second = await rejectedDrain(adapter, 'att-cool');
-
-            // Within the cooldown: no second engine run and no upstream call.
-            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
-            expect(first).toMatchObject({ code: 'MODLENS_VISION_READ_FAILED' });
-            expect(second).toMatchObject({
-                code: 'MODLENS_VISION_READ_FAILED',
-                message: first?.message,
-            });
-            expect(seen).toHaveLength(0);
-
-            // Cooldown over: exactly one re-probe; a second failure still does
-            // not enter the text model.
-            vi.advanceTimersByTime(61_000);
-            await rejectedDrain(adapter, 'att-cool');
-            expect(fs.readFileSync(marker, 'utf-8')).toBe('xx');
-            expect(seen).toHaveLength(0);
-
-            // Second cooldown over: the engine has recovered, so evidence is
-            // sent upstream and then stays cached.
-            vi.advanceTimersByTime(61_000);
-            await drain(adapter, 'att-cool');
+            await drain(adapter, 'att-retry');
             expect(fs.readFileSync(marker, 'utf-8')).toBe('xxx');
             expect(wireText(seen, 0)).toContain('RECOVERED');
-            await drain(adapter, 'att-cool');
+            expect(logs.join('\n')).toContain('image read attempt 1 failed (engine)');
+            expect(logs.join('\n')).toContain('image read attempt 2 failed (engine)');
+            await drain(adapter, 'att-retry');
             expect(fs.readFileSync(marker, 'utf-8')).toBe('xxx');
             expect(wireText(seen, 1)).toBe(wireText(seen, 0));
         } finally {
-            vi.useRealTimers();
+            spy.mockRestore();
+            delete process.env.MODLENS_DSH_CLI;
+        }
+    });
+
+    it('a read failing every retry stops before upstream and is not cached (T0087)', async () => {
+        // The placeholder never reaches the text model, and the next send
+        // really reads again instead of meeting a held failure.
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'modlens-dsh-gone-'));
+        const marker = path.join(dir, 'runs');
+        const cli = path.join(dir, 'cli.js');
+        fs.writeFileSync(
+            cli,
+            `require('fs').appendFileSync(${JSON.stringify(marker)},'x');console.error('engine down key sk-live-secretvalue123');process.exit(1)`,
+        );
+        const logs: string[] = [];
+        const spy = vi.spyOn(console, 'error').mockImplementation((...values: unknown[]) => {
+            logs.push(values.map(String).join(' '));
+        });
+        try {
+            const { adapter, seen } = await adapterCapturing(cli);
+            const first = await rejectedDrain(adapter, 'att-gone');
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('xxx');
+            expect(first).toMatchObject({
+                code: 'MODLENS_VISION_READ_FAILED',
+                message:
+                    'Image recognition failed. Please retry or switch the vision model in TokensAPI model settings.',
+            });
+            expect(seen).toHaveLength(0);
+            expect(logs.join('\n')).toContain('image read attempt 3 failed (engine)');
+            expect(logs.join('\n')).not.toContain('sk-live-secretvalue123');
+            await rejectedDrain(adapter, 'att-gone');
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('xxxxxx');
+            expect(seen).toHaveLength(0);
+        } finally {
+            spy.mockRestore();
             delete process.env.MODLENS_DSH_CLI;
         }
     });
@@ -1806,7 +1824,7 @@ describe('dsh plugin request-time image conversion (v2)', () => {
                 rejectedDrain(adapter, 'att-j'),
                 rejectedDrain(adapter, 'att-j'),
             ]);
-            expect(fs.readFileSync(marker, 'utf-8')).toBe('x');
+            expect(fs.readFileSync(marker, 'utf-8')).toBe('xxx'); // one shared read, its three attempts
             expect(failures).toEqual([
                 expect.objectContaining({ code: 'MODLENS_VISION_READ_FAILED' }),
                 expect.objectContaining({ code: 'MODLENS_VISION_READ_FAILED' }),
@@ -2197,7 +2215,7 @@ describe('dsh paste-to-path host route', () => {
         expect((await post(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]))).code).toBe(400);
         // "GIF" alone is not a GIF signature; the full GIF89a is.
         expect((await post(Buffer.from('GIFfake'))).code).toBe(400);
-        const okGif = await post(Buffer.from('GIF89a '));
+        const okGif = await post(Buffer.from('GIF89a��'));
         expect(okGif.code).toBe(200);
         const gifPath = (JSON.parse(okGif.body) as { path: string }).path;
         fs.rmSync(path.dirname(gifPath), { recursive: true, force: true });

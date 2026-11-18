@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.31 - 2026-11-18
+
+- 视觉识别失败时自动重试 2 次，失败结果不再缓存。
+
 ## 0.2.30 - 2026-11-10
 
 - Keep OCR models out of every list. TokensAPI now lists OCR models as well (`deepseek-ocr` and the like); they transcribe text from an image and cannot hold a conversation, nor answer the structured reading the vision bridge asks for, so they join the exclusion table (`EXCLUDED_MODEL_RULES` in `dsh/index.js`) as an eighth kind, `ocr`, and stay out of the settings pickers, the composer, the `llm-pi-ai` route and the vision candidates. A saved main, vision or fallback model that is an OCR model is replaced and reported like any other filtered model. `allowGptModels` does not lift it.

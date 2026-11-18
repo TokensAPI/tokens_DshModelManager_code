@@ -1914,19 +1914,12 @@ function registerVisionProvider(ctx, config, ownProviders, evidenceCache) {
 // engine bill but the BYTES of the rewritten history: a message whose text
 // changes between steps busts the provider's context cache for everything
 // after it (issue #68). So it stores promises (concurrent readers join the
-// first run), keeps successes for good, and holds failures for a cooldown
-// instead of evicting them on settle: a broken engine is probed once per
-// cooldown per attachment rather than once per step, the placeholder text is
-// byte-stable while the outcome is unchanged, and the first step after the
-// cooldown retries, so a fixed engine is picked up without a restart. It
-// caps itself LRU-style so a long-lived Web profile cannot hoard evidence
-// text forever.
+// first run) and keeps successes for good. Failures are evicted on settle
+// (T0087): readImageBlock has already retried them, and a failed read never
+// reaches the wire (evidenceBlockOrThrow stops the turn), so the user's next
+// send really reads again. It caps itself LRU-style so a long-lived Web
+// profile cannot hoard evidence text forever.
 const EVIDENCE_CACHE_LIMIT = 256
-const EVIDENCE_FAILURE_COOLDOWN_MS = 60_000
-// Monotonic, so an NTP step backwards cannot freeze a cooling failure for
-// the size of the jump: a recovered engine is re-probed one cooldown after
-// the failure, whatever the wall clock did in between.
-const monotonicNow = () => performance.now()
 
 /**
  * A cache key that survives replay: the same attachment serialized with a
@@ -1947,27 +1940,20 @@ function cachedEvidence(ctx, adapter, block, walk) {
   walk?.pin(key)
   const hit = adapter.evidenceCache.get(key)
   if (hit !== undefined) {
-    const cooling = typeof hit === 'object' && hit !== null && 'retryAfter' in hit
-    if (!cooling || monotonicNow() < hit.retryAfter) {
-      // Refresh recency: Map iteration order is insertion order.
-      adapter.evidenceCache.delete(key)
-      adapter.evidenceCache.set(key, hit)
-      return cooling ? Promise.resolve(hit.evidence) : hit
-    }
-    // Cooldown over: fall through into one fresh probe.
+    // Refresh recency: Map iteration order is insertion order.
+    adapter.evidenceCache.delete(key)
+    adapter.evidenceCache.set(key, hit)
+    return hit
   }
   // Deliberately no caller signal: a shared entry must not die with its first
   // caller (their abort used to cancel every concurrent joiner). A cancelled
   // caller simply stops awaiting; the read finishes and the cache keeps it.
   const pending = readImageBlock(ctx, block, undefined).then(
     (evidence) => {
-      // Only replace our own entry: this promise may have been LRU-evicted
+      // Only evict our own entry: this promise may have been LRU-evicted
       // and the key re-populated by a newer read meanwhile.
       if (!evidence.ok && adapter.evidenceCache.get(key) === pending) {
-        adapter.evidenceCache.set(key, {
-          retryAfter: monotonicNow() + EVIDENCE_FAILURE_COOLDOWN_MS,
-          evidence,
-        })
+        adapter.evidenceCache.delete(key)
       }
       return evidence
     },
@@ -1984,10 +1970,7 @@ function cachedEvidence(ctx, adapter, block, walk) {
         }),
       }
       if (adapter.evidenceCache.get(key) === pending) {
-        adapter.evidenceCache.set(key, {
-          retryAfter: monotonicNow() + EVIDENCE_FAILURE_COOLDOWN_MS,
-          evidence,
-        })
+        adapter.evidenceCache.delete(key)
       }
       return evidence
     },
@@ -2020,8 +2003,7 @@ function hostLanguage(ctx) {
 /**
  * Failed visual evidence is never safe input for a text-only model. Sending a
  * placeholder downstream lets the model improvise recovery commands and scan
- * the workspace for the pasted file. Stop before the upstream request while
- * keeping the cached failure result available for the cooldown.
+ * the workspace for the pasted file. Stop before the upstream request.
  */
 function evidenceBlockOrThrow(evidence, ctx) {
   if (!evidence.ok) {
@@ -2261,13 +2243,39 @@ const FAILURE_TEXTS = {
   engine: '[A pasted image could not be read: the vision engine failed.]',
 }
 
+// A failed read is tried again, up to twice, about 1 s then 3 s later
+// (T0087). The whole read keeps the 180 s budget a single attempt had: each
+// attempt gets what is left, and no retry starts with under 10 s to go.
+// MODLENS_DSH_RETRY_DELAYS_MS (comma-separated ms) is a test hook alongside
+// MODLENS_DSH_CLI, so suites need not sleep for real.
+const VISION_RETRY_DELAYS_MS = [1_000, 3_000]
+const VISION_MIN_ATTEMPT_MS = 10_000
+
+function visionRetryDelays(env = process.env) {
+  const parsed = (env.MODLENS_DSH_RETRY_DELAYS_MS ?? '').split(',').map((part) => Number(part.trim()))
+  return env.MODLENS_DSH_RETRY_DELAYS_MS && parsed.every((n) => Number.isFinite(n) && n >= 0)
+    ? parsed
+    : VISION_RETRY_DELAYS_MS
+}
+
 /**
- * Read one image block into an evidence text block. Never throws: failures
- * degrade to an explanatory block with `ok: false`, so callers can decide
- * what a failure means (the pre-step keeps the step going, the cache holds
- * it only for a cooldown).
+ * Read one image block into an evidence text block, retrying a failed read.
+ * Never throws: failures degrade to an explanatory block with `ok: false`,
+ * so callers can decide what a failure means.
  */
 async function readImageBlock(ctx, block, signal) {
+  const delays = visionRetryDelays()
+  const deadline = Date.now() + CLI_TIMEOUT_MS
+  for (let attempt = 1; ; attempt += 1) {
+    const evidence = await readImageBlockOnce(ctx, block, signal, attempt, deadline - Date.now())
+    const delay = delays[attempt - 1]
+    if (evidence.ok || signal?.aborted || delay === undefined) return evidence
+    if (deadline - Date.now() - delay < VISION_MIN_ATTEMPT_MS) return evidence
+    await new Promise((resolve) => setTimeout(resolve, delay))
+  }
+}
+
+async function readImageBlockOnce(ctx, block, signal, attempt, budgetMs) {
   const { mkdtemp, rm, writeFile } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
@@ -2311,7 +2319,7 @@ async function readImageBlock(ctx, block, signal) {
         '--model',
         selectedVisionModel(ctx),
         '--timeout',
-        String(CLI_TIMEOUT_MS),
+        String(Math.max(Math.round(budgetMs), VISION_MIN_ATTEMPT_MS)),
       ],
       signal,
     )
@@ -2331,15 +2339,12 @@ async function readImageBlock(ctx, block, signal) {
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message.slice(0, 300) : String(error)
-    lastVisionFailure = {
-      stage,
-      // Operational diagnostics must never echo a bearer credential. The
-      // managed key is not interpolated by this code; the conservative token
-      // scrub also covers a provider or subprocess that includes one anyway.
-      message: detail.replace(/(?:sk|tk|key)-[A-Za-z0-9._-]{8,}/gi, '<redacted>'),
-      at: new Date().toISOString(),
-    }
-    console.error(`[modlens] image read failed (${stage}): ${detail}`)
+    // Operational diagnostics must never echo a bearer credential. The
+    // managed key is not interpolated by this code; the conservative token
+    // scrub also covers a provider or subprocess that includes one anyway.
+    const message = detail.replace(/(?:sk|tk|key)-[A-Za-z0-9._-]{8,}/gi, '<redacted>')
+    lastVisionFailure = { stage, attempts: attempt, message, at: new Date().toISOString() }
+    console.error(`[modlens] image read attempt ${attempt} failed (${stage}): ${message}`)
     return {
       ok: false,
       block: Object.freeze({
