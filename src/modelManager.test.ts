@@ -3184,7 +3184,10 @@ describe('TokensAPI model discovery and selection', () => {
                 ],
             }),
         });
-        const byId = new Map(models.map((model) => [model.id, model]));
+        type ParsedModel = { id: string; contextWindow?: number; maxTokens?: number };
+        const byId = new Map<string, ParsedModel>(
+            models.map((model: ParsedModel) => [model.id, model]),
+        );
         expect(byId.get('deepseek-v4-flash')).toMatchObject({
             contextWindow: 1048576,
             maxTokens: 32768,
@@ -3210,7 +3213,10 @@ describe('TokensAPI model discovery and selection', () => {
                     ],
                 }),
             });
-            const byId = new Map(models.map((model) => [model.id, model]));
+            type ParsedModel = { id: string; contextWindow?: number; maxTokens?: number };
+            const byId = new Map<string, ParsedModel>(
+                models.map((model: ParsedModel) => [model.id, model]),
+            );
             expect(byId.get('deepseek-v4-flash')?.contextWindow).toBe(262144);
             expect(byId.get('future-long-context-model')).not.toHaveProperty('contextWindow');
         }
